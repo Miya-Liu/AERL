@@ -1,4 +1,4 @@
-experiment_name: tpfc-grpo
+experiment_name: on-policy-distill
 trial_name: trial0
 
 seed: 1
@@ -6,29 +6,29 @@ enable_offload: false
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
-# TPFC Agent workflow
-workflow: customized_areal.tpfc_agent.TPFCAgent
+# Workflow configuration
+workflow: customized_areal.on_policy_distill.agent.OnPolicyDistillAgent
 eval_workflow: ${workflow}
 
 cluster:
   n_nodes: 1
-  n_gpus_per_node: 8
-  fileroot: /tmp/areal/experiments
+  n_gpus_per_node: 2
+  fileroot: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/experiments
   name_resolve:
     type: nfs
-    nfs_record_root: /tmp/areal/name_resolve
+    nfs_record_root: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/name_resolve
 
-allocation_mode: sglang:d4p1t1+d4p1t1
+allocation_mode: sglang:d1+d1
 
 scheduler:
-  type: null
+  type: local
 
 rollout:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   tokenizer_path: ${tokenizer_path}
-  max_concurrent_rollouts: 256
+  max_concurrent_rollouts: 8
   queue_size: null
   consumer_batch_size: ${train_dataset.batch_size}
   max_head_offpolicyness: 2
@@ -53,7 +53,8 @@ gconfig:
 actor:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  path: Qwen/Qwen2.5-1.5B-Instruct
+  attn_impl: eager
+  path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
@@ -92,19 +93,8 @@ actor:
       cmd: python3 -m areal.infra.rpc.rpc_server
       env_vars:
         NCCL_DEBUG: "WARN"
-        NCCL_IB_DISABLE: "0"
-        NCCL_SOCKET_IFNAME: "bond0"
-        NCCL_NET: "IB"
-        NCCL_NET_PLUGIN: ""
-        NCCL_IB_GID_INDEX: "3"
-        NCCL_IB_TIMEOUT: "22"
-        NCCL_IB_RETRY_CNT: "7"
-        NCCL_IB_SL: "5"
-        NCCL_IB_TC: "136"
-        NCCL_IB_HCA: "mlx5_bond"
-        NCCL_IB_QPS_PER_CONNECTION: "8"
-        NCCL_SET_THREAD_NAME: "1"
-        PYTORCH_NPU_ALLOC_CONF: "expandable_segments:True"
+        NCCL_IB_DISABLE: "1"
+        NCCL_SOCKET_IFNAME: "eth0"
 
 ref:
   experiment_name: ${experiment_name}
@@ -121,40 +111,45 @@ ref:
     target: actor
   scheduling_spec: ${actor.scheduling_spec}
 
-# SGLang
+# SGLang configuration
 sglang:
   model_path: ${actor.path}
   random_seed: ${seed}
   skip_tokenizer_init: true
   dtype: ${actor.dtype}
   max_running_requests: null
-  context_length: 32768
+  context_length: 40960
   mem_fraction_static: 0.8
 
-vllm:
-  model: ${actor.path}
-  seed: ${seed}
-  skip_tokenizer_init: false
-  dtype: ${actor.dtype}
-  max_model_len: 32768
-  gpu_memory_utilization: 0.8
+# On-Policy Distillation specific settings
+cache_size: 1000
+proxy_base_url: http://localhost:8000
+proxy_api_key: ""
+proxy_model: qwen/qwen3-1.7b
+proxy_temperature: 1.0
+proxy_max_tokens: 1024
+proxy_top_p: 1.0
+turn_discount: 1.0
+export_style: individual
+use_reward_scaling: true
+reward_scaling_factor: 10.0
+reward_bias: -0.5
 
-# datasets
-# NOTE: You should replace with your TPFC dataset
+# Datasets
 train_dataset:
-  batch_size: 256
+  batch_size: 2
   shuffle: true
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k  # Replace with your TPFC dataset
+  path: openai/gsm8k
   type: rl
   max_length: 1024
 
 valid_dataset:
-  batch_size: 256
+  batch_size: 2
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k  # Replace with your TPFC dataset
+  path: openai/gsm8k
   type: rl
 
 # Utilities

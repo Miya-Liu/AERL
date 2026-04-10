@@ -5,49 +5,71 @@ This module provides a class-based agent interface consistent with AReaL's
 agentic RL training pattern, wrapping the existing run_backend functionality.
 """
 
-import os
+import asyncio
 from typing import Any
-
-import httpx
 
 from areal.api import AsyncRewardWrapper
 from areal.utils import logging
 
-from customized_areal.backend_run import run_backend
+from customized_areal.tpfc.backend_run import run_backend
+from customized_areal.tpfc.gaia_final_reward import compute_reward
 
 logger = logging.getLogger("TPFCAgent")
 
 
-def tpfc_reward_fn(completions: list[dict[str, Any]], gt: str = "") -> float:
+def tpfc_reward_fn(
+    completions: list[dict[str, Any]],
+    gt: str = "",
+    user_query: str = "",
+    judge_model_name: str | None = None,
+    judge_base_url: str | None = None,
+    judge_api_key: str | None = None,
+) -> float:
     """
-    Reward function for TPFC tasks.
-    
-    This is a placeholder reward function that evaluates the agent's output.
-    You should customize this based on your specific task requirements.
-    
+    Compute reward using GAIA final reward logic with LLM-as-judge.
+
     Args:
-        completions: List of message dictionaries from the agent run.
-        gt: Ground truth for evaluation (if available).
-        
+        completions: List of completion messages from the agent.
+        gt: Ground truth answer.
+        user_query: The original user question/task.
+        judge_model_name: Model name for the judge LLM.
+        judge_base_url: Base URL for the judge LLM API.
+        judge_api_key: API key for the judge LLM.
+
     Returns:
-        A float reward value between 0.0 and 1.0.
+        Float reward value (0.0 or 1.0).
     """
-    # Simple reward: check if completion is not empty
     if not completions:
         return 0.0
-    
-    # Extract the last message content if available
-    last_message = completions[-1] if completions else {}
-    content = last_message.get("content", "")
-    
-    # If ground truth is provided, you can implement custom logic here
-    # For now, we return 1.0 if there's content, 0.0 otherwise
-    if gt and content:
-        # TODO: Implement task-specific reward logic
-        # Example: check if gt appears in content
-        return 1.0 if gt.lower() in content.lower() else 0.0
-    
-    return 1.0 if content else 0.0
+
+    # Extract response text from the last assistant message
+    response_text = ""
+    for msg in reversed(completions):
+        if msg.get("role") == "assistant":
+            response_text = msg.get("content", "")
+            break
+
+    if not response_text:
+        return 0.0
+
+    # Use default judge model if not specified
+    model_name = judge_model_name or "gpt-4o"
+    base_url = judge_base_url or "https://api.openai.com/v1"
+    api_key = judge_api_key or ""
+
+    try:
+        result = compute_reward(
+            response_text=response_text,
+            ground_truth=gt,
+            user_query=user_query,
+            model_name=model_name,
+            base_url=base_url,
+            api_key=api_key,
+        )
+        return float(result.get("answer_reward", 0))
+    except Exception as exc:
+        logger.warning("GAIA reward computation failed: %s", exc)
+        return 0.0 
 
 
 class TPFCAgent:
@@ -65,27 +87,36 @@ class TPFCAgent:
         default_agent_id: Default agent ID for TPFC agent runs.
     """
     
-    default_agent_id: str = '89395eb4-dd1a-4a13-932d-4f7d3a17bca6'
+    default_agent_id: str = '8bba75cb-0d87-4efe-b566-87de77335b76'
     
     def __init__(
         self,
         agent_id: str | None = None,
         user_id: str | None = None,
         model_name: str | None = None,
+        judge_model_name: str | None = None,
+        judge_base_url: str | None = None,
+        judge_api_key: str | None = None,
         **kwargs,
     ):
         """
         Initialize TPFC Agent.
-        
+
         Args:
             agent_id: Optional agent ID to use. Falls back to default_agent_id.
             user_id: Optional user ID for authentication.
             model_name: Optional model name for LLM calls.
+            judge_model_name: Model name for the judge LLM (default: gpt-4o).
+            judge_base_url: Base URL for the judge LLM API.
+            judge_api_key: API key for the judge LLM.
             **kwargs: Additional configuration options (ignored but accepted for compatibility).
         """
         self.agent_id = agent_id or self.default_agent_id
         self.user_id = user_id
         self.model_name = model_name
+        self.judge_model_name = judge_model_name
+        self.judge_base_url = judge_base_url
+        self.judge_api_key = judge_api_key
     
     async def run(
         self,
@@ -131,15 +162,15 @@ class TPFCAgent:
         api_key = extra_kwargs.get("api_key")
         
         logger.info(
-            "TPFCAgent starting run",
-            task_description=task_description[:100] if task_description else None,
-            agent_id=self.agent_id,
-            has_ground_truth=bool(gt),
-            base_url=base_url,
+            "TPFCAgent starting run: task=%s, agent_id=%s, has_ground_truth=%s, base_url=%s",
+            task_description[:100] if task_description else None,
+            self.agent_id,
+            bool(gt),
+            base_url,
         )
         
         # Execute the backend run
-        completion_messages = await run_backend(
+        completion_messages, _final_answer, _log_path, _trace = await run_backend(
             task_description=task_description,
             task_file_path=[],
             log_path="./log.json",
@@ -150,19 +181,24 @@ class TPFCAgent:
             model_name=self.model_name,
             agent_id=self.agent_id,
             base_url=base_url,
-            http_client=http_client,
             api_key=api_key,
-            rebuild_llm_client=True,
         )
         
         # Calculate reward using reward function
         reward_fn = AsyncRewardWrapper(tpfc_reward_fn)
-        reward = await reward_fn(completions=completion_messages, gt=gt)
+        reward = await reward_fn(
+            completions=completion_messages,
+            gt=gt,
+            user_query=task_description,
+            judge_model_name=self.judge_model_name,
+            judge_base_url=self.judge_base_url,
+            judge_api_key=self.judge_api_key,
+        )
         
         logger.info(
-            "TPFCAgent run completed",
-            message_count=len(completion_messages),
-            reward=reward,
+            "TPFCAgent run completed: message_count=%d, reward=%.4f",
+            len(completion_messages),
+            reward,
         )
         
         return reward

@@ -204,3 +204,5 @@ wandb/
 outputs/
 sympy/
 !/docs/figures/*
+customized_areal/dataset/*
+*.whl
