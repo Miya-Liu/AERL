@@ -36,6 +36,7 @@ __all__ = [
     "InteractionWithTokenLevelReward",
     # Engine
     "MultiCandidateFSDPEngine",
+    "MultiCandidateFSDPPPOActor",
     # Reward utilities
     "compute_token_level_rewards",
     "apply_token_reward_mask",
@@ -96,6 +97,10 @@ def __getattr__(name):
         from .engine import MultiCandidateFSDPEngine
 
         return MultiCandidateFSDPEngine
+    if name == "MultiCandidateFSDPPPOActor":
+        from .engine import MultiCandidateFSDPPPOActor
+
+        return MultiCandidateFSDPPPOActor
 
     # Workflow
     if name == "OpenAIProxyWorkflow":

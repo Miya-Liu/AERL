@@ -10,6 +10,7 @@ import functools
 from typing import Any
 
 from areal.api.cli_args import MicroBatchSpec
+from areal.api import AllocationMode
 from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging, stats_tracker
 from areal.utils.data import split_padded_tensor_dict_into_mb_list

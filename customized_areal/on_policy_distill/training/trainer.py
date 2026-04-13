@@ -17,7 +17,7 @@ if str(_project_root) not in sys.path:
 
 from areal import PPOTrainer
 from areal.api.cli_args import PPOActorConfig
-from areal.infra import AllocationMode
+from areal.api import AllocationMode
 from areal.utils import logging
 from areal.utils.environ import is_single_controller
 
@@ -90,3 +90,30 @@ class OnPolicyDistillationTrainer(PPOTrainer):
         )
 
         logger.info("Components initialized successfully")
+
+    def _create_actor(self, actor_config: PPOActorConfig):
+        """Create actor using MultiCandidateFSDPPPOActor for multi-candidate support.
+
+        This overrides the base PPOTrainer._create_actor to use
+        MultiCandidateFSDPPPOActor instead of standard FSDPPPOActor,
+        enabling multi-candidate logprob gathering for position-level rewards.
+        """
+        from ..engine import MultiCandidateFSDPPPOActor
+
+        if self.allocation_mode.train_backend != "fsdp":
+            raise ValueError(
+                f"OnPolicyDistillationTrainer only supports FSDP backend, "
+                f"got: {self.allocation_mode.train_backend}"
+            )
+
+        actor_cls = MultiCandidateFSDPPPOActor
+
+        if is_single_controller():
+            from areal.infra.scheduler import Scheduler
+            actor = actor_cls.as_controller(actor_config, self.scheduler)
+        else:
+            actor = actor_cls(config=actor_config)
+
+        actor.create_process_group(parallel_strategy=self.allocation_mode.train)
+        logger.info("Created MultiCandidateFSDPPPOActor for on-policy distillation")
+        return actor

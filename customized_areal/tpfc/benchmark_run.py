@@ -242,6 +242,7 @@ class BenchmarkEvaluator(ABC):
                                 attempt_result["log_file_path"],
                                 evaluation_result,
                                 task.ground_truth,
+                                attempt_result["is_correct"],
                             )
 
                         if attempt_result["is_correct"]:
@@ -441,7 +442,7 @@ class BenchmarkEvaluator(ABC):
         return pass_at_k_accuracy
 
     async def _update_log_file_with_evaluation(
-        self, log_file_path: Path, evaluation_result: str, ground_truth: str
+        self, log_file_path: Path, evaluation_result: str, ground_truth: str, is_correct: bool
     ):
         """Helper method to update log file with evaluation result"""
         try:
@@ -452,6 +453,7 @@ class BenchmarkEvaluator(ABC):
 
             # Update with evaluation result
             log_data["llm_as_judge_result"] = evaluation_result
+            log_data["is_correct"] = is_correct
             log_data["ground_truth"] = ground_truth
             # Write to a temporary file and then atomically replace
             temp_log_file = log_file.with_suffix(f"{log_file.suffix}.tmp")
@@ -660,10 +662,10 @@ def main():
             "user_id": "62ec5137-d121-4c8c-b175-ee165bdf38e4",
             "agent_id": os.environ.get("main_agent_id", ""),
             "backend_mode": True,
-            # "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
-            # "api_key": "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",   # Set your API key here or via CLI
-            "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
+            "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
+            "api_key": "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",   # Set your API key here or via CLI
+            # "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
+            # "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
         }
     )
 
@@ -671,7 +673,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "0410",
+        "base_retry_reasoning",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

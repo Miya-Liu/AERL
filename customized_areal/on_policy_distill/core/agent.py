@@ -15,7 +15,7 @@ from areal.api import AsyncRewardWrapper
 from areal.utils import logging
 
 from customized_areal.tpfc.backend_run import run_backend
-from .cache import PositionRewardInfo
+from ..proxy.cache import PositionRewardInfo
 
 logger = logging.getLogger("OnPolicyDistillAgent")
 
