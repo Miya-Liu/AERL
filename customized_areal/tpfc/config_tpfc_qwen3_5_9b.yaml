@@ -133,14 +133,14 @@ vllm:
   gpu_memory_utilization: 0.85
 
 # datasets
-# TPFC dataset configuration - uses generated_training_final.parquet
+# TPFC dataset configuration - uses generated_training_final_update.parquet
 # NOTE: All samples have ~1034-1366 tokens due to long system prompts
 train_dataset:
   batch_size: 1
   shuffle: true
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k
+  path: /dfs/share-groups/letrain/zhoujie/AReaL-main/customized_areal/tpfc/generated_training_final_update.parquet
   type: rl
   max_length: 2048
 
@@ -148,7 +148,7 @@ valid_dataset:
   batch_size: 1
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k
+  path: /dfs/share-groups/letrain/zhoujie/AReaL-main/customized_areal/tpfc/generated_training_final_update.parquet
   type: rl
   max_length: 2048
 

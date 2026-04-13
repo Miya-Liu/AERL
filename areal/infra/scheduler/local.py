@@ -45,7 +45,12 @@ from areal.infra.utils.launcher import (
 from areal.infra.utils.proc import kill_process_tree, run_with_streaming_logs
 from areal.utils import logging, name_resolve, names
 from areal.utils.fs import validate_shared_path
-from areal.utils.network import find_free_ports, gethostip
+from areal.utils.network import (
+    find_free_ports,
+    format_hostport,
+    gethostip,
+)
+from areal.utils.offload import get_tms_env_vars
 
 logger = logging.getLogger("LocalScheduler")
 
@@ -98,6 +103,7 @@ class LocalScheduler(Scheduler):
         experiment_name: str | None = None,
         trial_name: str | None = None,
         fileroot: str | None = None,
+        enable_tms_offload: bool | None = None,
         name_resolve_type: str = "nfs",
         nfs_record_root: str = "/tmp/areal/name_resolve",
         etcd3_addr: str = "localhost:2379",
@@ -109,10 +115,12 @@ class LocalScheduler(Scheduler):
         self.experiment_name = experiment_name
         self.trial_name = trial_name
         self.fileroot = fileroot
+        self.enable_tms_offload = bool(enable_tms_offload)
         if exp_config is not None:
             self.experiment_name = exp_config.experiment_name
             self.trial_name = exp_config.trial_name
             self.fileroot = exp_config.cluster.fileroot
+            self.enable_tms_offload = exp_config.enable_offload
 
         # name_resolve config (exp_config overwrites direct params)
         self.name_resolve_config = NameResolveConfig(
@@ -250,6 +258,27 @@ class LocalScheduler(Scheduler):
             f"schedulings length ({len(schedulings)}) must be 1 or equal to replicas ({num_workers})",
         )
 
+    @staticmethod
+    async def _wait_for_fork_ready(
+        session: aiohttp.ClientSession,
+        host: str,
+        port: int,
+        timeout: float = 60,
+    ) -> bool:
+        url = f"http://{format_hostport(host, port)}/health"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=2)
+                ) as resp:
+                    if resp.status == 200:
+                        return True
+            except (TimeoutError, aiohttp.ClientError):
+                pass
+            await asyncio.sleep(0.5)
+        return False
+
     async def _fork_single_worker(
         self,
         session: aiohttp.ClientSession,
@@ -265,19 +294,65 @@ class LocalScheduler(Scheduler):
         ----------
         command : str, optional
             Custom module path to run instead of the default rpc_server.
-            If specified, the forked process runs this module.
         """
         worker_id = f"{role}/{idx}"
-        target_url = (
-            f"http://{target_wi.worker.ip}:{target_wi.worker.worker_ports[0]}/fork"
-        )
+        guard_url = f"http://{format_hostport(target_wi.worker.ip, int(target_wi.worker.worker_ports[0]))}"
 
         try:
-            payload = {"role": role, "worker_index": idx}
-            if command is not None:
-                payload["command"] = command
+            # 1. Allocate a port on the target guard
             async with session.post(
-                target_url,
+                f"{guard_url}/alloc_ports",
+                json={"count": 1},
+            ) as alloc_resp:
+                if alloc_resp.status != 200:
+                    error_text = await alloc_resp.text()
+                    raise WorkerCreationError(
+                        role,
+                        f"Port allocation failed for worker {idx}",
+                        f"HTTP {alloc_resp.status}: {error_text}",
+                    )
+                alloc_data = await alloc_resp.json()
+                forked_host = alloc_data["host"]
+                forked_port = alloc_data["ports"][0]
+
+            # 2. Build the full raw command
+            module_path = command or "areal.infra.rpc.rpc_server"
+            raw_cmd = [
+                sys.executable,
+                "-m",
+                module_path,
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(forked_port),
+                "--experiment-name",
+                str(self.experiment_name),
+                "--trial-name",
+                str(self.trial_name),
+                "--role",
+                role,
+                "--worker-index",
+                str(idx),
+            ]
+            if self.name_resolve_config.type:
+                raw_cmd.extend(["--name-resolve-type", self.name_resolve_config.type])
+            if self.name_resolve_config.nfs_record_root:
+                raw_cmd.extend(
+                    ["--nfs-record-root", self.name_resolve_config.nfs_record_root]
+                )
+            if self.name_resolve_config.etcd3_addr:
+                raw_cmd.extend(["--etcd3-addr", self.name_resolve_config.etcd3_addr])
+            if self.fileroot:
+                raw_cmd.extend(["--fileroot", str(self.fileroot)])
+
+            # 3. Fork via raw_cmd
+            payload = {
+                "role": role,
+                "worker_index": idx,
+                "raw_cmd": raw_cmd,
+            }
+            async with session.post(
+                f"{guard_url}/fork",
                 json=payload,
             ) as response:
                 if response.status != 200:
@@ -297,14 +372,29 @@ class LocalScheduler(Scheduler):
                         result.get("error", "Unknown error"),
                     )
 
-                forked_host = result["host"]
-                forked_port = result["port"]
                 forked_pid = result.get("pid")
 
-                logger.info(
-                    f"Forked worker {worker_id} created at {forked_host}:{forked_port} "
-                    f"(pid={forked_pid}) from {target_role}/{idx}"
+            # 4. Wait for the forked worker to become ready
+            if not await self._wait_for_fork_ready(session, forked_host, forked_port):
+                # Clean up the forked worker on the guard
+                try:
+                    async with session.post(
+                        f"{guard_url}/kill_forked_worker",
+                        json={"role": role, "worker_index": idx},
+                    ):
+                        pass
+                except Exception:
+                    pass
+                raise WorkerCreationError(
+                    role,
+                    f"Forked worker {idx} failed to become ready",
+                    f"Readiness timeout at {forked_host}:{forked_port}",
                 )
+
+            logger.info(
+                f"Forked worker {worker_id} created at {forked_host}:{forked_port} "
+                f"(pid={forked_pid}) from {target_role}/{idx}"
+            )
 
         except aiohttp.ClientError as e:
             raise WorkerCreationError(
@@ -341,7 +431,7 @@ class LocalScheduler(Scheduler):
         target_wi: WorkerInfo,
     ) -> None:
         """Kill a single forked worker via its parent's RPC server."""
-        target_url = f"http://{target_wi.worker.ip}:{target_wi.worker.worker_ports[0]}/kill_forked_worker"
+        target_url = f"http://{format_hostport(target_wi.worker.ip, int(target_wi.worker.worker_ports[0]))}/kill_forked_worker"
 
         try:
             payload = {"role": role, "worker_index": idx}
@@ -641,6 +731,9 @@ class LocalScheduler(Scheduler):
                 )
                 env.update(thread_env)
 
+                if self.enable_tms_offload:
+                    env.update(get_tms_env_vars())
+
                 if scheduling.env_vars:
                     env.update(scheduling.env_vars)
 
@@ -830,7 +923,7 @@ class LocalScheduler(Scheduler):
 
     def _is_worker_ready(self, worker_info: WorkerInfo) -> bool:
         port = int(worker_info.worker.worker_ports[0])
-        url = f"http://{worker_info.worker.ip}:{port}/health"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/health"
 
         try:
             response = requests.get(url, timeout=2.0)
@@ -844,7 +937,7 @@ class LocalScheduler(Scheduler):
 
         worker_id = worker_info.worker.id
         port = int(worker_info.worker.worker_ports[0])
-        url = f"http://{worker_info.worker.ip}:{port}/configure"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/configure"
 
         try:
             response = requests.post(
@@ -1000,7 +1093,7 @@ class LocalScheduler(Scheduler):
 
         payload = {"env": env}
         port = int(worker_info.worker.worker_ports[0])
-        url = f"http://{worker_info.worker.ip}:{port}/set_env"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/set_env"
 
         try:
             timeout = aiohttp.ClientTimeout(total=30.0)
@@ -1091,7 +1184,7 @@ class LocalScheduler(Scheduler):
 
         # Send HTTP request to create engine
         port = int(worker_info.worker.worker_ports[0])
-        url = f"http://{worker_info.worker.ip}:{port}/create_engine"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/create_engine"
 
         try:
             logger.debug(
@@ -1165,6 +1258,7 @@ class LocalScheduler(Scheduler):
         method: str,
         engine_name: str | None = None,
         *args,
+        rpc_meta: dict[str, Any] | None = None,
         http_timeout: float = 7200.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
@@ -1222,11 +1316,12 @@ class LocalScheduler(Scheduler):
             "engine_name": engine_name,
             "args": serialized_args,
             "kwargs": serialized_kwargs,
+            "rpc_meta": rpc_meta,
         }
 
         # Retry logic with exponential backoff
         port = int(worker_info.worker.worker_ports[0])
-        url = f"http://{worker_info.worker.ip}:{port}/call"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/call"
         last_error = None
 
         for attempt in range(1, max_retries + 1):
@@ -1292,6 +1387,7 @@ class LocalScheduler(Scheduler):
         method: str,
         engine_name: str | None = None,
         *args,
+        rpc_meta: dict[str, Any] | None = None,
         http_timeout: float = 7200.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
@@ -1342,7 +1438,7 @@ class LocalScheduler(Scheduler):
         # Route to different endpoint based on method
         port = int(worker_info.worker.worker_ports[0])
         # Standard engine method call
-        url = f"http://{worker_info.worker.ip}:{port}/call"
+        url = f"http://{format_hostport(worker_info.worker.ip, port)}/call"
         # Serialize args and kwargs
         serialized_args = serialize_value(list(args))
         serialized_kwargs = serialize_value(kwargs)
@@ -1351,6 +1447,7 @@ class LocalScheduler(Scheduler):
             "engine_name": engine_name,
             "args": serialized_args,
             "kwargs": serialized_kwargs,
+            "rpc_meta": rpc_meta,
         }
 
         last_error = None

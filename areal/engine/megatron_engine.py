@@ -7,13 +7,15 @@ import math
 import os
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import mbridge
 import torch
 import torch.distributed as dist
+from megatron.bridge import AutoBridge as MegatronBridgeAutoBridge
+from megatron.bridge.peft.lora import LoRA as MegatronBridgeLoRA
 from megatron.core import parallel_state as mpu
 from megatron.core import tensor_parallel
 from megatron.core.distributed import DistributedDataParallel as DDP
@@ -28,8 +30,8 @@ from torch import nn
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PretrainedConfig
 
+import areal.models.mcore.bailing_moe_bridge  # noqa: F401  # register bridge
 from areal.api import (
-    AllocationMode,
     FinetuneSpec,
     InferenceEngine,
     MegatronParallelStrategy,
@@ -58,6 +60,7 @@ from areal.engine.megatron_utils.megatron import (
     get_named_parameters,
     remove_padding,
 )
+from areal.engine.megatron_utils.megatron_lora import get_vllm_lora_target_modules
 from areal.engine.megatron_utils.packed_context_parallel import (
     packed_context_parallel_forward,
 )
@@ -90,15 +93,17 @@ from areal.utils.data import (
     MicroBatchList,
     amend_position_ids,
     broadcast_tensor,
+    concat_batch,
     pack_tensor_dict,
     pad_mb_list,
+    split_batch,
     split_padded_tensor_dict_into_mb_list,
     unpad_logits,
 )
 from areal.utils.functional import gather_logprobs, gather_logprobs_entropy
 from areal.utils.hf_utils import load_hf_tokenizer
 from areal.utils.lock import DistributedLock
-from areal.utils.network import find_free_ports, gethostip
+from areal.utils.network import find_free_ports, format_host_for_url, gethostip
 from areal.utils.offload import is_tms_enabled, torch_memory_saver
 from areal.utils.perf_tracer import trace_perf, trace_scope
 from areal.utils.seeding import get_seed
@@ -167,6 +172,8 @@ class MegatronEngine(TrainEngine):
             self.fp8_config.direct_convert if self.enable_fp8 else False
         )
         self.quantization_config: dict[str, int | str | list[str]] | None = None
+        self.bridge_cls: str = getattr(self.mcore_config, "bridge_type", "mbridge")
+        self.bridge_lora: MegatronBridgeLoRA | None = None
 
     def create_process_group(self, parallel_strategy: ParallelStrategy | None = None):
         if parallel_strategy is None:
@@ -208,6 +215,42 @@ class MegatronEngine(TrainEngine):
         )
         self.process_group_initialized = True
 
+    def _apply_megatron_bridge_lora(self) -> None:
+        assert self.model is not None, "Model must be initialized before applying LoRA."
+        assert self.bridge_cls == "megatron-bridge"
+
+        target_modules = list(self.config.target_modules or [])
+        if not target_modules or "all-linear" in target_modules:
+            # Expand all-linear to explicit Megatron-Bridge linear module targets.
+            target_modules = [
+                "linear_qkv",
+                "linear_proj",
+                "linear_fc1",
+                "linear_fc2",
+            ]
+        self.bridge_lora = MegatronBridgeLoRA(
+            target_modules=target_modules,
+            dim=self.config.lora_rank,
+            alpha=self.config.lora_alpha,
+            dropout=0.0,
+        )
+        self.model = _MegatronModelList(self.bridge_lora(self.model, training=True))
+        self.bridge_lora.set_params_to_save(self.model)
+
+        total_params = sum(param.numel() for param in self.model.parameters())
+        trainable_params = sum(
+            param.numel() for param in self.model.parameters() if param.requires_grad
+        )
+        self.logger.info(
+            "Applied Megatron Bridge LoRA: target_modules=%s, rank=%s, alpha=%s, trainable=%s/%s (%.4f%%)",
+            target_modules,
+            self.config.lora_rank,
+            self.config.lora_alpha,
+            trainable_params,
+            total_params,
+            100.0 * trainable_params / max(total_params, 1),
+        )
+
     def initialize(self, addr: str | None, ft_spec: FinetuneSpec, *args, **kwargs):
         try:
             self.seed = get_seed()
@@ -223,6 +266,7 @@ class MegatronEngine(TrainEngine):
             torch_memory_saver.hook_mode = "preload"
 
         current_platform.set_device(int(os.environ["LOCAL_RANK"]))
+        current_platform.set_numa_affinity(int(os.environ["LOCAL_RANK"]))
         self.device = torch.device(int(os.environ["LOCAL_RANK"]))
         self.rank = int(os.environ["RANK"])
         self.world_size = int(os.environ["WORLD_SIZE"])
@@ -234,35 +278,30 @@ class MegatronEngine(TrainEngine):
             f"update_weight_group_{mpu.get_pipeline_model_parallel_rank()}"
         )
         self.engine_lock = DistributedLock("train_engine_lock")
-        self.alloc_mode: AllocationMode | None = kwargs.get("alloc_mode", None)
+
+        if self.config.use_lora and self.bridge_cls != "megatron-bridge":
+            raise NotImplementedError(
+                "MegatronEngine LoRA POC currently only supports bridge_type='megatron-bridge'. "
+                "mbridge does not support LoRA in this path."
+            )
 
         self.tokenizer = load_hf_tokenizer(self.config.path)
 
-        with patch_bridge_for_tree_training(self.enable_tree_training):
-            self.bridge = mbridge.AutoBridge.from_pretrained(self.config.path)
-            self.bridge.dtype = self.dtype
-            # Set gradient checkpointing options
-            if self.config.gradient_checkpointing:
-                self.bridge.set_extra_args(
-                    recompute_granularity=self.mcore_config.recompute_granularity,
-                    recompute_method=self.mcore_config.recompute_method,
-                    recompute_num_layers=self.mcore_config.recompute_num_layers,
-                    distribute_saved_activations=self.mcore_config.distribute_saved_activations,
-                    recompute_modules=self.mcore_config.recompute_modules,
-                )
-
-            self.logger.info(
-                "Using mbridge to create models and hf model save/load in MegatronEngine."
-            )
+        with patch_bridge_for_tree_training(
+            self.enable_tree_training and self.bridge_cls == "mbridge"
+        ):
+            self.bridge = self._build_hf_mcore_bridge()
 
             self.hf_config, self.tf_config = make_hf_and_mcore_config(
-                self.config.path, dtype=self.dtype, bridge=self.bridge
+                self.config.path,
+                dtype=self.dtype,
+                bridge=self.bridge,
+                bridge_type=self.bridge_cls,
             )
             self.tf_config = configure_pipeline_layer_splits(
                 self.parallel_strategy, self.hf_config, self.tf_config
             )
 
-            # Get quantization_config from hf_config if available (for FP8 weight updates)
             self.quantization_config = getattr(
                 self.hf_config, "quantization_config", None
             )
@@ -270,17 +309,21 @@ class MegatronEngine(TrainEngine):
             self._check_and_apply_fp8_config()
             self._validate_fp8_consistency()
 
-            # initialize mcore (DDP Wrapped) GPTModel
             with self.device:
                 models = make_mcore_model(
                     hf_config=self.hf_config,
                     tf_config=self.tf_config,
                     mcore_config=self.mcore_config,
                     bridge=self.bridge,
+                    bridge_type=self.bridge_cls,
                     is_critic=self.config.is_critic,
+                    use_lora=self.config.use_lora,
                 )
 
         self.model = _MegatronModelList(models)
+
+        if self.config.use_lora:
+            self._apply_megatron_bridge_lora()
 
         with self.device:
             self._load_model_from_hf(self.config.path)
@@ -324,6 +367,7 @@ class MegatronEngine(TrainEngine):
 
         primary_model = self.model[0]
         model_config = get_model_config(primary_model)
+
         # NOTE: It is recommended to set this option to True for RL training on MoE models for stability.
         if self.mcore_config.use_deterministic_algorithms:
             set_deterministic_algorithms(model_config)
@@ -357,6 +401,45 @@ class MegatronEngine(TrainEngine):
         model_config.finalize_model_grads_func = finalize_model_grads
         self._create_optimizer(ft_spec)
         self._initialized = True
+
+    def _build_hf_mcore_bridge(self):
+        if self.bridge_cls == "mbridge":
+            self.bridge = mbridge.AutoBridge.from_pretrained(
+                self.config.path, trust_remote_code=True
+            )
+            self.bridge.dtype = self.dtype
+            if self.config.gradient_checkpointing:
+                self.bridge.set_extra_args(
+                    recompute_granularity=self.mcore_config.recompute_granularity,
+                    recompute_method=self.mcore_config.recompute_method,
+                    recompute_num_layers=self.mcore_config.recompute_num_layers,
+                    distribute_saved_activations=self.mcore_config.distribute_saved_activations,
+                    recompute_modules=self.mcore_config.recompute_modules,
+                )
+            self.logger.info(
+                "Using mbridge to create models and hf model save/load in MegatronEngine."
+            )
+
+        elif self.bridge_cls == "megatron-bridge":
+            if self.enable_tree_training:
+                raise NotImplementedError(
+                    "Tree training is not supported with bridge_type='megatron-bridge'."
+                )
+            self.bridge = MegatronBridgeAutoBridge.from_hf_pretrained(
+                self.config.path,
+                trust_remote_code=True,
+                dtype=self.config.dtype,
+            )
+            self.logger.info(
+                "Using megatron-bridge to create models and hf model save/load in MegatronEngine."
+            )
+
+        else:
+            self.logger.info(
+                "Not using bridge to create models and hf model save/load in MegatronEngine."
+            )
+            self.bridge = None
+        return self.bridge
 
     @property
     def initialized(self) -> bool:
@@ -486,20 +569,14 @@ class MegatronEngine(TrainEngine):
 
     def update_weights(self, meta: WeightUpdateMeta):
         self._check_rollout_engine_connected()
-        if meta.type == "xccl":
-            assert self.weight_update_group_initialized
-            # In offload mode, wakes up parameters as needed to perform the update.
-            tms_context = (
-                torch_memory_saver.disable()
-                if self.is_offload and not torch.version.hip
-                else nullcontext()
-            )
-            with tms_context:
+        with self._offload_aware_context():
+            if meta.type == "xccl":
+                assert self.weight_update_group_initialized
                 self._update_weights_from_distributed(meta)
-        elif meta.type == "disk":
-            self._update_weights_from_disk(meta)
-        else:
-            raise ValueError(f"Unknown weight update type {meta.type}")
+            elif meta.type == "disk":
+                self._update_weights_from_disk(meta)
+            else:
+                raise ValueError(f"Unknown weight update type {meta.type}")
 
     def set_version(self, version: int):
         self._version = version
@@ -508,33 +585,65 @@ class MegatronEngine(TrainEngine):
         return self._version
 
     def save(self, meta: SaveLoadMeta):
-        if meta.weight_format == "hf":
-            if meta.with_optim:
-                raise ValueError(
-                    "HF format does not support optimizer state saving, please use DCP format instead."
+        with self._offload_aware_context():
+            if meta.weight_format == "hf":
+                if meta.with_optim:
+                    raise ValueError(
+                        "HF format does not support optimizer state saving, please use DCP format instead."
+                    )
+                self._save_model_to_hf(
+                    meta.path,
+                    tokenizer=meta.tokenizer,
+                    processor=meta.processor,
+                    base_model_path=meta.base_model_path,
                 )
-            self._save_model_to_hf(
-                meta.path,
-                tokenizer=meta.tokenizer,
-                processor=meta.processor,
-                base_model_path=meta.base_model_path,
-            )
-        elif meta.weight_format == "dcp":
-            self.checkpointer.save_checkpoint(meta.path, with_optimizer=meta.with_optim)
-        else:
-            raise ValueError(f"Unknown weight format {meta.weight_format}. ")
+            elif meta.weight_format == "dcp":
+                if self.checkpointer is None:
+                    raise NotImplementedError(
+                        "DCP checkpoint save is not available for this Megatron configuration "
+                        "(e.g., LoRA path without distributed optimizer support). "
+                        "Please use weight_format='hf' for adapter/full-model export."
+                    )
+                self.checkpointer.save_checkpoint(
+                    meta.path, with_optimizer=meta.with_optim
+                )
+            else:
+                raise ValueError(f"Unknown weight format {meta.weight_format}. ")
 
     def load(self, meta: SaveLoadMeta):
-        if meta.weight_format == "hf":
-            if meta.with_optim:
-                raise ValueError(
-                    "HF format does not support optimizer state loading, please use DCP format instead."
+        with self._offload_aware_context():
+            if meta.weight_format == "hf":
+                if meta.with_optim:
+                    raise ValueError(
+                        "HF format does not support optimizer state loading, please use DCP format instead."
+                    )
+                self._load_model_from_hf(meta.path)
+            elif meta.weight_format == "dcp":
+                if self.checkpointer is None:
+                    raise NotImplementedError(
+                        "DCP checkpoint load is not available for this Megatron configuration "
+                        "(e.g., LoRA path without distributed optimizer support). "
+                        "Please use weight_format='hf' for adapter/full-model load."
+                    )
+                self.checkpointer.load_checkpoint(
+                    meta.path, with_optimizer=meta.with_optim
                 )
-            self._load_model_from_hf(meta.path)
-        elif meta.weight_format == "dcp":
-            self.checkpointer.load_checkpoint(meta.path, with_optimizer=meta.with_optim)
-        else:
-            raise ValueError(f"Unknown weight format {meta.weight_format}. ")
+            else:
+                raise ValueError(f"Unknown weight format {meta.weight_format}. ")
+
+    @contextmanager
+    def _offload_aware_context(self):
+        """Temporarily onload parameters for offload-unsafe operations."""
+        if not self.is_offload:
+            with nullcontext():
+                yield
+            return
+
+        self.onload()
+        try:
+            yield
+        finally:
+            self.offload()
 
     def optimizer_zero_grad(self):
         assert self.optimizer is not None, "Optimizer is not initialized."
@@ -636,15 +745,17 @@ class MegatronEngine(TrainEngine):
 
     def train_batch(
         self,
-        input_: dict[str, Any],
+        input_: list[dict[str, Any]] | dict[str, Any],
         loss_fn: Callable[..., torch.Tensor],
         loss_weight_fn: Callable[[dict[str, Any]], torch.Tensor],
     ) -> dict[str, float]:
         self._ensure_ready()
         self.optimizer_zero_grad()
 
+        input_batched, _ = self._normalize_batch_input(input_)
+
         # Step 1: Prepare micro-batches
-        mb_list = self._prepare_mb_list(input_).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched).to(self.device)
 
         # Step 2: Compute total loss weight
         total_loss_weight = compute_total_loss_weight(
@@ -676,14 +787,16 @@ class MegatronEngine(TrainEngine):
     @torch.no_grad()
     def eval_batch(
         self,
-        input_: dict[str, Any],
+        input_: list[dict[str, Any]] | dict[str, Any],
         loss_fn: Callable[..., torch.Tensor],
         loss_weight_fn: Callable[[dict[str, Any]], torch.Tensor],
     ) -> torch.Tensor | None:
         self._ensure_ready()
 
+        input_batched, _ = self._normalize_batch_input(input_)
+
         # Step 1: Prepare micro-batches
-        mb_list = self._prepare_mb_list(input_).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched).to(self.device)
 
         # Step 2: Compute total loss weight
         total_loss_weight = compute_total_loss_weight(
@@ -712,21 +825,33 @@ class MegatronEngine(TrainEngine):
     @torch.no_grad()
     def forward_batch(
         self,
-        input_: dict[str, Any],
+        input_: list[dict[str, Any]] | dict[str, Any],
         output_seqlens: list[int] | None = None,
-        aggregate_fn: Callable[[list[Any]], Any] = torch.cat,
-    ) -> torch.Tensor:
+        aggregate_fn: Callable[[list[torch.Tensor]], torch.Tensor] = torch.cat,
+    ) -> torch.Tensor | list[torch.Tensor]:
         self._ensure_ready()
 
+        input_batched, meta = self._normalize_batch_input(input_)
+
         # Step 1: Prepare sequence lengths
-        cu_seqlens = pack_tensor_dict(input_)["cu_seqlens"]
+        if meta is not None:
+            assert isinstance(input_, list)
+            inferred_seqlens = [d["attention_mask"].shape[-1] for d in input_]
+            if output_seqlens is not None and output_seqlens != inferred_seqlens:
+                raise ValueError(
+                    f"output_seqlens mismatch for list input: "
+                    f"given {output_seqlens}, "
+                    f"inferred {inferred_seqlens} from attention_mask shapes."
+                )
+            output_seqlens = inferred_seqlens
+        cu_seqlens = pack_tensor_dict(input_batched)["cu_seqlens"]
         if output_seqlens is None:
             output_seqlens = (cu_seqlens[1:] - cu_seqlens[:-1]).cpu().numpy().tolist()
         assert output_seqlens is not None
         batch_size = len(output_seqlens)
 
         # Step 2: Prepare micro-batches
-        mb_list = self._prepare_mb_list(input_).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched).to(self.device)
 
         # Step 3: Forward using Megatron's pipeline function, collecting results
         outputs: list[torch.Tensor] = []
@@ -752,10 +877,15 @@ class MegatronEngine(TrainEngine):
             src_rank=mpu.get_pipeline_model_parallel_last_rank(),
             group=mpu.get_pipeline_model_parallel_group(),
         )
-        return res
+        if meta is None:
+            return res
+        return split_batch(res, meta)
 
     def export_stats(self) -> dict[str, float]:
-        data = stats_tracker.export_all(reduce_group=self.data_parallel_group)
+        with self._offload_aware_context():
+            data = stats_tracker.export_all(
+                reduce_group=self.data_parallel_group,
+            )
         if mpu.get_pipeline_model_parallel_world_size() > 1:
             # Some log info only exist in last pipeline rank
             data_list = [data]
@@ -772,6 +902,10 @@ class MegatronEngine(TrainEngine):
 
         Ref: https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/actor.py
         """
+        if not is_tms_enabled():
+            raise RuntimeError(
+                "torch_memory_saver requires `enable_offload=True` in yaml config."
+            )
 
         self.get_device_stats().log("before offload model")
         current_platform.clear_memory()
@@ -935,6 +1069,12 @@ class MegatronEngine(TrainEngine):
             return
         assert self.model is not None and len(self.model) > 0
 
+        use_distributed_optimizer = (
+            False
+            if self.config.use_lora
+            else self.mcore_config.ddp.use_distributed_optimizer
+        )
+
         assert self.optimizer_config.type in [
             "adam",
             "sgd",
@@ -955,7 +1095,7 @@ class MegatronEngine(TrainEngine):
             adam_beta1=self.optimizer_config.beta1,
             adam_beta2=self.optimizer_config.beta2,
             adam_eps=self.optimizer_config.eps,
-            use_distributed_optimizer=self.mcore_config.ddp.use_distributed_optimizer,
+            use_distributed_optimizer=use_distributed_optimizer,
             params_dtype=self.dtype,
             clip_grad=self.optimizer_config.gradient_clipping,
             fp8_recipe=(self.fp8_config.recipe if self.enable_fp8 else None),
@@ -996,14 +1136,16 @@ class MegatronEngine(TrainEngine):
         )
         self.lr_scheduler = lr_scheduler
 
-        self.checkpointer = MegatronCheckpointManager(
-            model=self.model,
-            optimizer=self.optimizer,
-            lr_scheduler=self.lr_scheduler,
-            use_distributed_optimizer=self.mcore_config.ddp.use_distributed_optimizer,
-            use_checkpoint_opt_param_scheduler=self.mcore_config.use_checkpoint_opt_param_scheduler,
-            async_save=self.mcore_config.async_save,
-        )
+        # MegatronCheckpointManager now only support distributed optimizer which lora does not support
+        if not self.config.use_lora:
+            self.checkpointer = MegatronCheckpointManager(
+                model=self.model,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                use_distributed_optimizer=use_distributed_optimizer,
+                use_checkpoint_opt_param_scheduler=self.mcore_config.use_checkpoint_opt_param_scheduler,
+                async_save=self.mcore_config.async_save,
+            )
 
     def _check_rollout_engine_connected(self) -> None:
         """Validate that rollout engine has been connected via connect_engine()."""
@@ -1012,6 +1154,14 @@ class MegatronEngine(TrainEngine):
                 "Rollout engine not connected. Call connect_engine()"
                 " before using rollout/update_weight methods."
             )
+
+    @staticmethod
+    def _normalize_batch_input(
+        input_: list[dict[str, Any]] | dict[str, Any],
+    ) -> tuple[dict[str, Any], Any | None]:
+        if isinstance(input_, list):
+            return concat_batch(input_)
+        return input_, None
 
     def _ensure_ready(self) -> None:
         if self.is_offload:
@@ -1040,6 +1190,16 @@ class MegatronEngine(TrainEngine):
             for name, tensor in converted_named_tensors
         ]
 
+        if self.config.use_lora:
+            meta.peft_config = {
+                "r": self.config.lora_rank,
+                "lora_alpha": self.config.lora_alpha,
+                "target_modules": get_vllm_lora_target_modules(
+                    list(self.config.target_modules or [])
+                ),
+                "bias": "none",
+            }
+
         fut = self.rollout_engine.update_weights_from_distributed(meta, param_specs)
 
         handles = []
@@ -1057,6 +1217,25 @@ class MegatronEngine(TrainEngine):
         converted_named_tensors.clear()
 
         self.engine_lock.release()
+
+    @property
+    def _duplicated_param_names(self) -> set[str]:
+        """Parameter names whose parent module has parallel_mode='duplicated'.
+
+        These params are replicated (not TP-sharded) but TE incorrectly marks
+        them with tensor_model_parallel=True. Cached after first computation.
+        """
+        if not hasattr(self, "_cached_duplicated_param_names"):
+            duplicated = set()
+            if self.model is not None:
+                for model in self.model:
+                    for mod_name, module in model.named_modules():
+                        if getattr(module, "parallel_mode", None) == "duplicated":
+                            for p_name, _ in module.named_parameters(recurse=False):
+                                full = f"{mod_name}.{p_name}" if mod_name else p_name
+                                duplicated.add(full)
+            self._cached_duplicated_param_names = duplicated
+        return self._cached_duplicated_param_names
 
     def _collect_param(
         self,
@@ -1079,6 +1258,7 @@ class MegatronEngine(TrainEngine):
             param,
             self.fp8_direct_convert,
             quantization_config=self.quantization_config,
+            duplicated_param_names=self._duplicated_param_names,
         )
         param = remove_padding(name, param, self.hf_config.vocab_size)
 
@@ -1108,10 +1288,14 @@ class MegatronEngine(TrainEngine):
             self._update_bucket_weights_from_distributed(meta, converted_named_tensors)
             buffer_size = 0
 
+        model_name = self.hf_config.model_type
+        if self.config.use_lora:
+            model_name = f"{model_name}_lora"
+
         converted_named_tensors.extend(
             convert_to_hf(
                 self.tf_config,
-                self.hf_config.model_type,
+                model_name,
                 name,
                 param,
                 quantization_config=self.quantization_config,
@@ -1225,21 +1409,23 @@ class MegatronEngine(TrainEngine):
         # which blocks creating another TCP store for weight update.
         os.environ["TORCHELASTIC_USE_AGENT_STORE"] = str(False)
         if self.is_pipeline_parallel_head():
-            assert meta.alloc_mode is not None
+            assert meta.gen_allocation is not None
 
             self.engine_lock.acquire()
 
             fut = self.rollout_engine.init_weights_update_group(meta)
 
+            gen_world_size = meta.gen_allocation.parallel.world_size
+            init_method = f"tcp://{format_host_for_url(meta.nccl_master_address)}:{meta.nccl_master_port}"
             self.logger.info(
                 f"Initializing weight update group: type={meta.type} "
-                f"init_method=tcp://{meta.nccl_master_address}:{meta.nccl_master_port} "
+                f"init_method={init_method} "
                 f"group={self.weight_update_group_name}"
             )
             self.weight_update_group = init_custom_process_group(
                 backend=current_platform.communication_backend,
-                world_size=meta.alloc_mode.gen.world_size + 1,
-                init_method=f"tcp://{meta.nccl_master_address}:{meta.nccl_master_port}",
+                world_size=gen_world_size + 1,
+                init_method=init_method,
                 rank=0,
                 group_name=self.weight_update_group_name,
                 timeout=DIST_GROUP_DEFAULT_TIMEOUT,
@@ -1270,6 +1456,10 @@ class MegatronEngine(TrainEngine):
         for name, param in get_named_parameters(self.model, num_moe_experts):
             if ".experts." in name:
                 continue
+            if self.config.use_lora and (
+                ".adapter." not in name or not getattr(param, "requires_grad", False)
+            ):
+                continue
             buffer_size = self._impl_update_weight_from_distributed(
                 meta,
                 name,
@@ -1282,6 +1472,11 @@ class MegatronEngine(TrainEngine):
         # Only pipeline parallel heads CAN contain named tensors here
         if converted_named_tensors:
             self._update_bucket_weights_from_distributed(meta, converted_named_tensors)
+        elif self.is_pipeline_parallel_head() and not self.config.use_lora:
+            self.logger.warning(
+                "No tensors were collected for distributed update at version %s.",
+                meta.version,
+            )
 
         dist.barrier(group=self.cpu_group)
 
@@ -1289,7 +1484,7 @@ class MegatronEngine(TrainEngine):
         named_tensors = []
 
         for name, param in get_named_parameters(self.model, num_moe_experts):
-            if ".experts." not in name:
+            if ".experts." not in name or self.config.use_lora:
                 continue
             buffer_size = self._impl_update_expert_weight_from_distributed(
                 meta,
@@ -1347,16 +1542,35 @@ class MegatronEngine(TrainEngine):
         assert self.model is not None, "Model is not initialized."
         os.makedirs(path, exist_ok=True)
 
-        save_weights_to_hf_with_mbridge_fast(
-            bridge=self.bridge,
-            models=self.model,
-            weights_path=path,
-            base_model_path=base_model_path,
-            max_shard_size_byte=int(3e9),
-            max_workers=None,
-            is_critic=self.config.is_critic,
-            fp8_direct_convert=self.fp8_direct_convert,
-        )
+        if self.bridge_cls == "megatron-bridge":
+            if self.config.is_critic:
+                raise ValueError(
+                    "Saving critic model is not supported with megatron-bridge."
+                )
+            if self.config.use_lora:
+                self.bridge.save_hf_adapter(
+                    self.model,
+                    path=path,
+                    peft_config=self.bridge_lora,
+                    base_model_name_or_path=base_model_path or self.config.path,
+                )
+            else:
+                self.bridge.save_hf_pretrained(
+                    self.model,
+                    path,
+                    source_path=base_model_path,
+                )
+        else:
+            save_weights_to_hf_with_mbridge_fast(
+                bridge=self.bridge,
+                models=self.model,
+                weights_path=path,
+                base_model_path=base_model_path,
+                max_shard_size_byte=int(3e9),
+                max_workers=None,
+                is_critic=self.config.is_critic,
+                fp8_direct_convert=self.fp8_direct_convert,
+            )
 
         if dist.get_rank() == 0:
             if tokenizer is not None:
@@ -1369,14 +1583,22 @@ class MegatronEngine(TrainEngine):
 
     def _load_model_from_hf(self, path: str) -> None:
         assert self.model is not None, "Model is not initialized."
-        load_weights_from_hf_with_mbridge_fast(
-            bridge=self.bridge,
-            models=self.model,
-            weights_path=path,
-            max_workers=None,
-            is_critic=self.config.is_critic,
-            fp8_direct_convert=self.fp8_direct_convert,
-        )
+
+        if self.bridge_cls == "megatron-bridge":
+            if self.config.is_critic:
+                raise ValueError(
+                    "Loading critic model is not supported with megatron-bridge."
+                )
+            self.bridge.load_hf_weights(self.model, hf_path=path)
+        else:
+            load_weights_from_hf_with_mbridge_fast(
+                bridge=self.bridge,
+                models=self.model,
+                weights_path=path,
+                max_workers=None,
+                is_critic=self.config.is_critic,
+                fp8_direct_convert=self.fp8_direct_convert,
+            )
 
     def _prepare_mb_list(self, input_: dict[str, Any]) -> MicroBatchList:
         assert "attention_mask" in input_ and "input_ids" in input_
@@ -1473,6 +1695,10 @@ class MegatronEngine(TrainEngine):
         total_loss_weight: torch.Tensor,
         loss_multiplier: float = 1.0,
     ) -> torch.Tensor:
+        local_weight = loss_weight_fn(inputs)
+        if local_weight == 0:
+            return output.mean() * 0.0
+
         if self.config.is_critic and self.enable_tree_training:
             raise NotImplementedError(
                 "Tree training with critic model is not supported yet."
@@ -1485,7 +1711,7 @@ class MegatronEngine(TrainEngine):
                 if trie_node is None or not trie_node.all_sequence_ids:
                     # Return zero loss that maintains gradient connection to output
                     # This ensures backward() works correctly for distributed synchronization
-                    return output.sum() * 0.0
+                    return output.mean() * 0.0
 
                 # For tree training, use gather_packed_tree_vocab_stats to properly
                 # unpack vocab stats from tree structure back to per-sequence format.
@@ -1526,7 +1752,7 @@ class MegatronEngine(TrainEngine):
             values = output.squeeze(-1)
             loss = loss_fn(values, inputs)
 
-        loss_scale = loss_weight_fn(inputs) / total_loss_weight * loss_multiplier
+        loss_scale = local_weight / total_loss_weight * loss_multiplier
         return loss * loss_scale
 
     def _compute_forward_result(
@@ -1653,7 +1879,7 @@ class MegatronRWEngine(MegatronEngine):
         super().__init__(config)
         self.rw_engine = RWEngine(self)
         if self.config.mb_spec.granularity != 2:
-            rw_logger = logging.getLogger("RW engine")
+            rw_logger = logging.getLogger("RWEngine")
             rw_logger.warning("mb_spec.granularity must be 2 for reward modeling")
             self.config = deepcopy(self.config)
             self.config.mb_spec.granularity = 2

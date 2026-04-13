@@ -5,7 +5,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import aiohttp
 import orjson
@@ -13,6 +13,10 @@ import ray
 import torch
 
 from areal.infra.utils.concurrent import run_async_task
+from areal.infra.utils.http import DEFAULT_REQUEST_TIMEOUT, get_default_connector
+from areal.utils import logging
+
+logger = logging.getLogger("HttpRTensor")
 
 
 class RTensorBackend(Protocol):
@@ -79,19 +83,125 @@ class TensorShardInfo:
 
 
 class HttpRTensorBackend:
+    def __init__(self, max_shards_per_request: int = 32) -> None:
+        if max_shards_per_request <= 0:
+            raise ValueError("max_shards_per_request must be positive")
+        self.max_shards_per_request = max_shards_per_request
+
+    def _create_session(self) -> aiohttp.ClientSession:
+        """Create a properly configured aiohttp session for large tensor transfers."""
+        timeout = aiohttp.ClientTimeout(
+            total=DEFAULT_REQUEST_TIMEOUT,
+            sock_connect=DEFAULT_REQUEST_TIMEOUT,
+            connect=DEFAULT_REQUEST_TIMEOUT,
+        )
+        return aiohttp.ClientSession(
+            timeout=timeout,
+            read_bufsize=10 * 1024 * 1024,  # 10MB buffer
+            connector=get_default_connector(),
+        )
+
     async def _fetch_tensor(
-        self, session: aiohttp.ClientSession, shard_id: str, node_addr: str
+        self,
+        session: aiohttp.ClientSession,
+        shard_id: str,
+        node_addr: str,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
     ) -> torch.Tensor:
         # Avoid circular import
         from areal.infra.rpc.serialization import deserialize_value
+        from areal.utils.network import format_hostport, split_hostport
 
-        url = f"http://{node_addr}/data/{shard_id}"
-        async with session.get(url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"Failed to fetch shard from {url}: {resp.status}")
-            data_bytes = await resp.read()
-            serialized_data = orjson.loads(data_bytes)
-            return deserialize_value(serialized_data)
+        try:
+            host, port = split_hostport(node_addr)
+            base = format_hostport(host, port)
+        except ValueError:
+            base = node_addr
+        url = f"http://{base}/data/{shard_id}"
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        error_body = (await resp.text()).strip()
+                        detail = f" body={error_body}" if error_body else ""
+                        raise RuntimeError(
+                            f"Failed to fetch shard from {url}: {resp.status}{detail}"
+                        )
+                    data_bytes = await resp.read()
+                    serialized_data = orjson.loads(data_bytes)
+                    return deserialize_value(serialized_data)
+            except (TimeoutError, aiohttp.ClientError) as e:
+                last_exception = e
+                logger.warning(
+                    "RTensor fetch from %s failed: %s: %s (attempt %d/%d)",
+                    url,
+                    e.__class__.__name__,
+                    str(e),
+                    attempt + 1,
+                    max_retries,
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+
+        raise RuntimeError(
+            f"Failed to fetch shard from {url} after {max_retries} attempts. "
+            f"Last error: {repr(last_exception)}"
+        )
+
+    async def _fetch_shard_group(
+        self,
+        session: aiohttp.ClientSession,
+        node_addr: str,
+        grouped: list[tuple[int, TensorShardInfo]],
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+    ) -> list[torch.Tensor]:
+        from areal.infra.rpc.serialization import deserialize_value
+
+        shard_ids = [shard.shard_id for _, shard in grouped]
+        url = f"http://{node_addr}/data/batch"
+        last_exception = None
+
+        for attempt in range(max_retries):
+            try:
+                async with session.post(url, json={"shard_ids": shard_ids}) as resp:
+                    if resp.status != 200:
+                        error_body = (await resp.text()).strip()
+                        detail = f" body={error_body}" if error_body else ""
+                        raise RuntimeError(
+                            f"Failed to fetch shard batch from {url}: {resp.status}{detail}"
+                        )
+
+                    data_bytes = await resp.read()
+                    serialized_data = orjson.loads(data_bytes)
+                    tensors = cast(
+                        list[torch.Tensor], deserialize_value(serialized_data)
+                    )
+                    if len(tensors) != len(grouped):
+                        raise RuntimeError(
+                            f"Batch fetch from {url} returned {len(tensors)} shards for {len(grouped)} requested"
+                        )
+                    return tensors
+            except (TimeoutError, aiohttp.ClientError) as e:
+                last_exception = e
+                logger.warning(
+                    "RTensor batch fetch from %s failed: %s: %s (attempt %d/%d)",
+                    url,
+                    e.__class__.__name__,
+                    str(e),
+                    attempt + 1,
+                    max_retries,
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+
+        raise RuntimeError(
+            f"Failed to fetch shard batch from {url} after {max_retries} attempts. "
+            f"Last error: {repr(last_exception)}"
+        )
 
     def fetch(self, shards: list[TensorShardInfo]) -> list[torch.Tensor]:
         """Fetch multiple shards concurrently via HTTP using a single session."""
@@ -99,11 +209,38 @@ class HttpRTensorBackend:
             return []
 
         async def _fetch():
-            async with aiohttp.ClientSession() as session:
-                tasks = [
-                    self._fetch_tensor(session, s.shard_id, s.node_addr) for s in shards
-                ]
-                return await asyncio.gather(*tasks)
+            indexed_shards = list(enumerate(shards))
+            shards_by_node: dict[str, list[tuple[int, TensorShardInfo]]] = defaultdict(
+                list
+            )
+            for index, shard in indexed_shards:
+                shards_by_node[shard.node_addr].append((index, shard))
+
+            results: list[torch.Tensor | None] = [None] * len(shards)
+
+            async with self._create_session() as session:
+
+                async def _fetch_node(
+                    node_addr: str, grouped: list[tuple[int, TensorShardInfo]]
+                ) -> None:
+                    for start in range(0, len(grouped), self.max_shards_per_request):
+                        chunk = grouped[start : start + self.max_shards_per_request]
+                        tensors = await self._fetch_shard_group(
+                            session, node_addr, chunk
+                        )
+                        for (original_index, _), tensor in zip(
+                            chunk, tensors, strict=True
+                        ):
+                            results[original_index] = tensor
+
+                await asyncio.gather(
+                    *[
+                        _fetch_node(node_addr, grouped)
+                        for node_addr, grouped in shards_by_node.items()
+                    ]
+                )
+
+            return cast(list[torch.Tensor], results)
 
         return run_async_task(_fetch)
 
@@ -115,9 +252,16 @@ class HttpRTensorBackend:
 
     async def delete(self, node_addr: str, shard_ids: list[str]) -> None:
         """Delete shards via HTTP DELETE request."""
-        async with aiohttp.ClientSession() as session:
+        from areal.utils.network import format_hostport, split_hostport
+
+        try:
+            host, port = split_hostport(node_addr)
+            base = format_hostport(host, port)
+        except ValueError:
+            base = node_addr
+        async with self._create_session() as session:
             async with session.delete(
-                f"http://{node_addr}/data/clear", json={"shard_ids": shard_ids}
+                f"http://{base}/data/clear", json={"shard_ids": shard_ids}
             ) as resp:
                 if resp.status == 200:
                     await resp.json()
@@ -157,6 +301,19 @@ def set_backend(backend: RTensorBackend | None) -> None:
     _backend = backend
 
 
+# =============================================================================
+# Client-side Fetch Buffer
+# =============================================================================
+# Caches fetched tensors by shard_id so that repeated fetch() calls for the
+# same shard (e.g. when the same rollout_batch is sent to multiple engine
+# calls across RPC boundaries) avoid redundant network transfers.
+# Entries are evicted by clear_node() when clear_batches() runs at the end
+# of each train step.
+
+_fetch_buffer: dict[Any, torch.Tensor] = {}
+_fetch_buffer_lock = Lock()
+
+
 @dataclass
 class RTensor:
     shard: TensorShardInfo
@@ -165,7 +322,16 @@ class RTensor:
     def to_local(self) -> torch.Tensor:
         if not self.data.is_meta:
             return self.data
+        # Check client-side fetch buffer before making a network request.
+        with _fetch_buffer_lock:
+            cached = _fetch_buffer.get(self.shard.shard_id)
+            if cached is not None:
+                self.data = cached
+                return self.data
+        # Buffer miss: fetch from backend and populate buffer.
         self.data = get_backend().fetch([self.shard])[0]
+        with _fetch_buffer_lock:
+            _fetch_buffer[self.shard.shard_id] = self.data
         return self.data
 
     @staticmethod
@@ -245,12 +411,26 @@ class RTensor:
         RTensor._collect_all(obj, rtensors)
         meta_rtensors = [rt for rt in rtensors if rt.data.is_meta]
         if meta_rtensors:
-            shards = [rt.shard for rt in meta_rtensors]
-            results = get_backend().fetch(shards)
-            for rt, tensor in zip(meta_rtensors, results):
-                rt.data = tensor
+            # Resolve as many as possible from the client-side fetch buffer.
+            to_fetch: list[RTensor] = []
+            with _fetch_buffer_lock:
+                for rt in meta_rtensors:
+                    cached = _fetch_buffer.get(rt.shard.shard_id)
+                    if cached is not None:
+                        rt.data = cached
+                    else:
+                        to_fetch.append(rt)
 
-        # Recursively replace RTensors with local tensors (all cache hits now)
+            # Batch-fetch only the misses from the backend.
+            if to_fetch:
+                shards = [rt.shard for rt in to_fetch]
+                results = get_backend().fetch(shards)
+                with _fetch_buffer_lock:
+                    for rt, tensor in zip(to_fetch, results, strict=True):
+                        rt.data = tensor
+                        _fetch_buffer[rt.shard.shard_id] = tensor
+
+        # Recursively replace RTensors with local tensors (all buffer hits now)
         return RTensor._localize_recursive(obj)
 
     @staticmethod
@@ -315,7 +495,7 @@ class RTensor:
 
     @staticmethod
     async def clear_node(node_addr: str, shard_ids: list[Any]) -> None:
-        """Clear shards from a node.
+        """Clear shards from a node and evict them from the fetch buffer.
 
         Parameters
         ----------
@@ -324,6 +504,9 @@ class RTensor:
         shard_ids : list[Any]
             List of shard IDs to delete
         """
+        with _fetch_buffer_lock:
+            for sid in shard_ids:
+                _fetch_buffer.pop(sid, None)
         await get_backend().delete(node_addr, shard_ids)
 
     @property

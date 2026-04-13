@@ -438,6 +438,79 @@ class FSDPEngineConfig:
 
 
 @dataclass
+class ArchonFP8Config:
+    """Archon FP8 training configuration."""
+
+    mode: str = field(
+        default="disabled",
+        metadata={
+            "help": "FP8 precision mode. "
+            "'disabled': FP8 training off (default). "
+            "'blockwise': blockwise 128x128 FP8 e4m3fn matmuls (requires Hopper GPU).",
+            "choices": ["disabled", "blockwise"],
+        },
+    )
+
+    exclude_modules: list[str] = field(
+        default_factory=lambda: ["output", "router", "score"],
+        metadata={
+            "help": (
+                "FQN substrings of nn.Linear modules to keep in BF16 (not converted to FP8). "
+                "Any module whose fully-qualified name contains one of these strings is skipped. "
+                "Meaningful values for Archon models: "
+                "'output' (LM head, logit precision sensitive), "
+                "'router' (MoE router gate, routing stability sensitive), "
+                "'score' (critic head, value precision sensitive). "
+                "Note: nn.Embedding modules (e.g. tok_embeddings) are never converted "
+                "regardless of this list. "
+                "WARNING: Setting this in YAML replaces the entire default list "
+                "(does not extend it). Include ALL modules you want to keep in BF16."
+            )
+        },
+    )
+
+    include_experts: bool = field(
+        default=False,
+        metadata={
+            "help": "Apply FP8 to MoE expert computation. "
+            "Uses per-expert blockwise FP8 matmuls via torchao."
+        },
+    )
+
+    use_triton: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Use Triton GEMM kernel for FP8 blockwise matmuls instead of cuBLAS. "
+                "Currently must be True: torchao's blockwise FP8 is a prototype that uses "
+                "mixed per-operand scaling (1x128 activations + 128x128 weights), which "
+                "torch._scaled_mm does not support. The Triton kernel "
+                "(triton_fp8_gemm_1x128_128x128) handles this natively. "
+                "Revisit when torchao stabilizes mixed-mode cuBLAS dispatch."
+            ),
+        },
+    )
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "disabled"
+
+    def __post_init__(self):
+        valid_modes = {"disabled", "blockwise"}
+        if self.mode not in valid_modes:
+            raise ValueError(
+                f"fp8_config.mode must be one of {valid_modes}, got {self.mode!r}"
+            )
+        if self.enabled and not self.use_triton:
+            raise ValueError(
+                "fp8_config.use_triton must be True when FP8 is enabled. "
+                "torchao blockwise FP8 uses mixed per-operand scaling "
+                "(1x128 activations + 128x128 weights) which "
+                "torch._scaled_mm does not support."
+            )
+
+
+@dataclass
 class ArchonEngineConfig:
     """Configuration for Archon Engine training backend."""
 
@@ -549,6 +622,14 @@ class ArchonEngineConfig:
             "'always': always reshard after forward (saves memory). "
             "'never': never reshard after forward.",
             "choices": ["default", "always", "never"],
+        },
+    )
+
+    # FP8 Training
+    fp8_config: ArchonFP8Config = field(
+        default_factory=ArchonFP8Config,
+        metadata={
+            "help": "FP8 training configuration. Set mode='blockwise' to enable."
         },
     )
 
@@ -808,6 +889,15 @@ class MegatronEngineConfig:
     # FP8 Training Configuration
     fp8_config: FP8EngineConfig | None = None
 
+    # Bridge backend used for HF<->Megatron conversion/model creation.
+    bridge_type: str = field(
+        default="mbridge",
+        metadata={
+            "help": "Bridge backend for MegatronEngine. Choices: 'mbridge' or 'megatron-bridge'.",
+            "choices": ["mbridge", "megatron-bridge"],
+        },
+    )
+
 
 class SchedulingStrategyType(str, Enum):
     separation = "separation"
@@ -991,6 +1081,14 @@ class TrainEngineConfig:
     archon: ArchonEngineConfig = field(default_factory=ArchonEngineConfig)
     megatron: MegatronEngineConfig = field(default_factory=MegatronEngineConfig)
 
+    # offload
+    offload: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to offload model parameters and optimizer states to CPU. "
+        },
+    )
+
     # Lora
     use_lora: bool = field(
         default=False,
@@ -1025,6 +1123,14 @@ class TrainEngineConfig:
             "if 1 spec provided, it's used for both worker and engine, engine is embedded in the worker; "
             "if 2 specs provided, first one is for worker, second one is for engine. "
             "Currently only used by the TrainController."
+        },
+    )
+    # Backend and parallelism (new per-engine config)
+    backend: str = field(
+        default=MISSING,
+        metadata={
+            "help": "Backend and parallelism strategy. Must include an explicit backend prefix, "
+            "e.g. 'fsdp:d4', 'megatron:d4t2p2', 'archon:d2'. Required."
         },
     )
     scheduling_strategy: SchedulingStrategy = field(
@@ -1728,10 +1834,18 @@ class InferenceEngineConfig:
             "Currently only used by the RolloutController."
         },
     )
+    # Backend and parallelism (new per-engine config)
+    backend: str = field(
+        default=MISSING,
+        metadata={
+            "help": "Backend and parallelism strategy. Must include an explicit backend prefix, "
+            "e.g. 'sglang:d4', 'vllm:d2t4'. Required."
+        },
+    )
     scheduling_strategy: SchedulingStrategy = field(
         default_factory=SchedulingStrategy,
         metadata={
-            "help": "The scheduling strategy of this TrainEngine, either separation or colocation. "
+            "help": "The scheduling strategy of this InferenceEngine, either separation or colocation. "
             "Currently only used by the RolloutController."
         },
     )
@@ -1833,6 +1947,20 @@ class RecoverConfig(_Timer):
         default=3,
         metadata={"help": "Number of recovery retries when recovery is enabled."},
     )
+    no_save_optim: bool = field(
+        default=False,
+        metadata={
+            "help": "Do not save optimizer state in recovery checkpoints. "
+            "Required when using use_distributed_optimizer with Megatron "
+            "(flattened_range incompatibility)."
+        },
+    )
+    no_load_optim: bool = field(
+        default=False,
+        metadata={
+            "help": "Do not load optimizer state when recovering from checkpoint."
+        },
+    )
 
     def __post_init__(self):
         valid_modes = {"on", "off", "auto", "disabled"}
@@ -1848,7 +1976,13 @@ class RecoverConfig(_Timer):
 class WandBConfig:
     """Configuration for Weights & Biases experiment tracking."""
 
-    mode: str = "disabled"
+    mode: str = field(
+        default="disabled",
+        metadata={
+            "help": "Tracking mode. One of 'online', 'offline', 'disabled', or 'shared'.",
+            "choices": ["online", "offline", "disabled", "shared"],
+        },
+    )
     wandb_base_url: str = ""
     wandb_api_key: str = ""
     entity: str | None = None
@@ -1861,6 +1995,14 @@ class WandBConfig:
     config: dict | None = None
     id_suffix: str | None = "train"
 
+    def __post_init__(self):
+        """Validate WandB configuration."""
+        valid_modes = ("online", "offline", "disabled", "shared")
+        if self.mode not in valid_modes:
+            raise ValueError(
+                f"Invalid wandb mode: '{self.mode}'. Must be one of: {', '.join(valid_modes)}."
+            )
+
 
 @dataclass
 class SwanlabConfig:
@@ -1870,11 +2012,23 @@ class SwanlabConfig:
     name: str | None = None
     config: dict | None = None
     logdir: str | None = None
-    mode: str | None = "disabled"
+    mode: str = field(
+        default="disabled",
+        metadata={
+            "help": "Tracking mode. One of 'cloud', 'local', 'disabled', or 'offline'.",
+            "choices": ["cloud", "local", "disabled", "offline"],
+        },
+    )
     # set None to prevent info-leak in docs
     api_key: str | None = None
 
     def __post_init__(self):
+        """Validate SwanLab configuration."""
+        valid_modes = ("cloud", "local", "disabled", "offline")
+        if self.mode not in valid_modes:
+            raise ValueError(
+                f"Invalid swanlab mode: '{self.mode}'. Must be one of: {', '.join(valid_modes)}."
+            )
         if self.api_key is None:
             self.api_key = os.getenv("SWANLAB_API_KEY")
 
@@ -1884,6 +2038,36 @@ class TensorBoardConfig:
     """Configuration for TensorBoard logging and visualization."""
 
     path: str | None = None
+
+
+@dataclass
+class TrackioConfig:
+    """Configuration for Trackio experiment tracking (Hugging Face).
+
+    Trackio is a lightweight, local-first experiment tracking library
+    with a wandb-compatible API. Dashboards can be viewed locally or
+    deployed to Hugging Face Spaces.
+
+    See: https://github.com/gradio-app/trackio
+    """
+
+    mode: str = "disabled"
+    """Tracking mode. One of "disabled", "online", or "local"."""
+    project: str | None = None
+    """Project name. Defaults to experiment_name if not set."""
+    name: str | None = None
+    """Run name. Defaults to trial_name if not set."""
+    space_id: str | None = None
+    """HF Space ID for remote dashboard deployment (e.g. "user/my-space").
+    When set, metrics are also pushed to the specified Hugging Face Space."""
+
+    def __post_init__(self):
+        """Validate Trackio configuration."""
+        valid_modes = {"disabled", "online", "local"}
+        if self.mode not in valid_modes:
+            raise ValueError(
+                f"Invalid trackio mode: '{self.mode}'. Must be one of {valid_modes}."
+            )
 
 
 @dataclass
@@ -1904,6 +2088,10 @@ class StatsLoggerConfig:
     tensorboard: TensorBoardConfig = field(
         default_factory=TensorBoardConfig,
         metadata={"help": "TensorBoard configuration. Only 'path' field required."},
+    )
+    trackio: TrackioConfig = field(
+        default_factory=TrackioConfig,
+        metadata={"help": "Trackio configuration (Hugging Face experiment tracking)."},
     )
 
 
@@ -2043,6 +2231,10 @@ class SchedulerConfig:
 class _DatasetConfig:
     """Configuration for dataset loading and preprocessing."""
 
+    split: str = field(
+        default="train",
+        metadata={"help": "Dataset split to use, e.g., 'train', 'test'."},
+    )
     path: str = field(
         default=MISSING,
         metadata={
@@ -2068,6 +2260,12 @@ class _DatasetConfig:
     num_workers: int = field(
         default=0, metadata={"help": "Number of worker processes for data loading"}
     )
+    num_dataset_workers: int = field(
+        default=1,
+        metadata={
+            "help": "Number of remote data-service worker processes to launch when using scheduling_spec."
+        },
+    )
     drop_last: bool = field(
         default=True, metadata={"help": "Drop the last incomplete batch"}
     )
@@ -2075,6 +2273,22 @@ class _DatasetConfig:
         default=None,
         metadata={
             "help": "Maximum token length of sequences in dataset. Longer sequences are filtered out."
+        },
+    )
+    dataset_kwargs: dict[str, Any] = field(
+        default_factory=dict,
+        metadata={
+            "help": "Additional keyword arguments for dataset loading. "
+            "These are passed to the dataset loading function `get_custom_dataset`."
+        },
+    )
+    scheduling_spec: SchedulingSpec | None = field(
+        default_factory=lambda: SchedulingSpec(
+            cpu=1, gpu=0, mem=10, cmd="python3 -m areal.infra.rpc.guard"
+        ),
+        metadata={
+            "help": "Scheduling spec for remote data loading workers. "
+            "If set, dataset loading will be offloaded to a data service with remote workers."
         },
     )
 
@@ -2092,6 +2306,10 @@ class ValidDatasetConfig(_DatasetConfig):
     `shuffle` and `drop_last` default to False.
     """
 
+    split: str = field(
+        default="test",
+        metadata={"help": "Dataset split to use, e.g., 'train', 'test'."},
+    )
     shuffle: bool = field(
         default=False, metadata={"help": "Whether to shuffle the dataset"}
     )
@@ -2121,7 +2339,11 @@ class BaseExperimentConfig:
     )
     allocation_mode: str = field(
         default="",
-        metadata={"help": "Pattern-based GPU parallel strategy allocation mode. "},
+        metadata={
+            "help": "DEPRECATED: Use per-engine 'backend' fields instead (e.g., actor.backend, rollout.backend). "
+            "Legacy pattern-based GPU parallel strategy allocation mode. "
+            "Only used by SPMD launchers (local/ray/slurm). Manual migration to per-engine 'backend' fields is required.",
+        },
     )
     seed: int = field(default=1, metadata={"help": "Random seed for reproducibility."})
     enable_offload: bool = field(
@@ -2191,13 +2413,17 @@ class RWConfig(BaseExperimentConfig):
 
     actor: TrainEngineConfig = field(default_factory=TrainEngineConfig)
 
+    def __post_init__(self):
+        super().__post_init__()
+        if not getattr(self.actor, "is_critic", False):
+            raise ValueError(
+                "RWConfig requires actor.is_critic=True for reward modeling. "
+                "Set 'actor.is_critic: true' in your YAML config."
+            )
+
 
 @dataclass
 class TeacherConfig(PPOActorConfig):
-    allocation_mode: str = field(
-        default="",
-        metadata={"help": "Pattern-based GPU parallel strategy allocation mode. "},
-    )
     rl_loss_weight: float = field(
         default=1.0,
         metadata={"help": "RL loss weight"},

@@ -2,10 +2,9 @@ import dataclasses
 import json
 import os
 import pickle
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch.distributed as dist
-from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoProcessor, PreTrainedTokenizerFast
 
 from areal.api import (
@@ -177,7 +176,7 @@ class RecoverHandler:
         saver: Saver,
         evaluator: Evaluator,
         stats_logger: "StatsLogger",
-        dataloader: StatefulDataLoader,
+        dataloader: Any,
         tokenizer: PreTrainedTokenizerFast | None = None,
         processor: AutoProcessor | None = None,
         base_model_path: str | None = None,
@@ -224,7 +223,7 @@ class RecoverHandler:
         saver: Saver,
         evaluator: Evaluator,
         stats_logger: "StatsLogger",
-        dataloader: StatefulDataLoader,
+        dataloader: Any,
         inference_engine: InferenceEngine | None = None,
         weight_update_meta: WeightUpdateMeta | None = None,
         inference_engine_update_from: str = "default",
@@ -289,7 +288,7 @@ class RecoverHandler:
             name=name,
         )
         weight_format = "dcp"
-        with_optim = True
+        with_optim = not self.config.no_save_optim
         meta = SaveLoadMeta(
             path=path,
             weight_format=weight_format,
@@ -299,7 +298,7 @@ class RecoverHandler:
             base_model_path=base_model_path,
         )
         engine.save(meta)
-        logger.info(f"Saved recover checkpoint to {path}")
+        logger.info(f"Saved recover checkpoint to {path} (with_optim={with_optim})")
 
     def _load_checkpoint(
         self,
@@ -317,7 +316,7 @@ class RecoverHandler:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Checkpoint path {path} does not exist.")
         weight_format = "dcp"
-        with_optim = True
+        with_optim = not self.config.no_load_optim
         meta = SaveLoadMeta(
             path=path,
             weight_format=weight_format,
