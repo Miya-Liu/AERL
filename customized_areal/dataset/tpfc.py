@@ -15,7 +15,7 @@ def get_tpfc_rl_dataset(
     The dataset is expected to be a parquet file with the following columns:
     - prompt: Array of message objects with 'content' and 'role'
     - reward_model: Dict with 'ground_truth' and 'style'
-    - images: Optional array of image objects
+    - images: Optional array of image objects with 'image' key containing file path
     - extra_info: Additional metadata
 
     Args:
@@ -26,7 +26,7 @@ def get_tpfc_rl_dataset(
         **kwargs: Additional arguments
 
     Returns:
-        Dataset with 'messages', 'ground_truth', and optional 'images' columns
+        Dataset with 'messages', 'ground_truth', and optional 'files_path' columns
     """
     # Load the parquet file
     dataset = load_dataset("parquet", data_files=path, split="train")
@@ -49,10 +49,13 @@ def get_tpfc_rl_dataset(
             "style": style,
         }
 
-        # Include images if present
+        # Include files_path if present
         images = sample.get("images")
         if images is not None and len(images) > 0:
-            result["images"] = list(images)
+            result["files_path"] = [
+                img["image"][7:] if isinstance(img, dict) and img.get("image", "").startswith("file://") else img.get("image", "") if isinstance(img, dict) else img
+                for img in images
+            ]
 
         # Include extra_info if needed for debugging
         extra_info = sample.get("extra_info")
@@ -65,7 +68,7 @@ def get_tpfc_rl_dataset(
 
     # Remove original columns
     columns_to_remove = [col for col in dataset.column_names if col not in [
-        "messages", "answer", "style", "images", "extra_info"
+        "messages", "answer", "style", "files_path", "extra_info"
     ]]
     if columns_to_remove:
         dataset = dataset.remove_columns(columns_to_remove)

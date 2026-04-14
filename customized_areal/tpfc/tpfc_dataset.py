@@ -6,7 +6,7 @@ with Function Calling) generated training data stored in parquet format.
 The dataset format matches openai/gsm8k RL format:
 - messages: List of dicts with 'role' and 'content' keys
 - answer: Ground truth answer string
-- images (optional): List of processed image bytes for multimodal models
+- files_path (optional): List of image file paths for multimodal models
 """
 
 from pathlib import Path
@@ -76,7 +76,7 @@ def get_tpfc_rl_dataset(
     Returns dataset with same format as gsm8k RL:
     - messages: List of dicts with 'role' and 'content'
     - answer: Ground truth string
-    - images (optional): List of image bytes for multimodal
+    - files_path (optional): List of image file paths for multimodal
 
     Args:
         path: Path to the parquet file.
@@ -85,7 +85,7 @@ def get_tpfc_rl_dataset(
         max_length: Optional maximum sequence length for filtering.
 
     Returns:
-        HuggingFace Dataset with 'messages', 'answer', and optionally 'images'.
+        HuggingFace Dataset with 'messages', 'answer', and optionally 'files_path'.
     """
     from datasets import Dataset
 
@@ -126,19 +126,19 @@ def get_tpfc_rl_dataset(
 
         # Process images if present
         images_array = sample.get("images", [])
-        processed_images = []
+        files_path = []
         if isinstance(images_array, (list, np.ndarray)) and len(images_array) > 0:
             for img_data in images_array:
-                try:
-                    processed_images.append(convert_image_to_bytes(img_data, 448, 448))
-                except Exception as e:
-                    # Skip images that fail to process
-                    print(f"Warning: Failed to process image {img_data}: {e}")
+                if isinstance(img_data, dict) and "image" in img_data:
+                    image_path = img_data["image"]
+                    if image_path.startswith("file://"):
+                        image_path = image_path[7:]
+                    files_path.append(image_path)
 
         result = {
             "messages": messages,
             "answer": answer,
-            "images": processed_images if processed_images else [],
+            "files_path": files_path,
         }
 
         return result

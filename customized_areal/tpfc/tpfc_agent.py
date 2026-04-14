@@ -53,9 +53,9 @@ def tpfc_reward_fn(
         return 0.0
 
     # Use default judge model if not specified
-    model_name = judge_model_name or "gpt-4o"
-    base_url = judge_base_url or "https://api.openai.com/v1"
-    api_key = judge_api_key or ""
+    model_name = "z-ai/glm-5.1"
+    base_url = "https://openrouter.ai/api/v1"
+    api_key = "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"
 
     try:
         result = compute_reward(
@@ -155,24 +155,30 @@ class TPFCAgent:
         
         # Extract ground truth for reward calculation
         gt = data.get("answer", "")
-        
+
+        # Extract image paths from dataset (new files_path column)
+        task_file_path = data.get("files_path", [])
+        if task_file_path is None:
+            task_file_path = []
+
         # Get OpenAI proxy parameters (passed by OpenAIProxyWorkflow._run_agent)
         base_url = extra_kwargs.get("base_url")
         http_client = extra_kwargs.get("http_client")
         api_key = extra_kwargs.get("api_key")
-        
+
         logger.info(
-            "TPFCAgent starting run: task=%s, agent_id=%s, has_ground_truth=%s, base_url=%s",
+            "TPFCAgent starting run: task=%s, agent_id=%s, has_ground_truth=%s, base_url=%s, n_images=%d",
             task_description[:100] if task_description else None,
             self.agent_id,
             bool(gt),
             base_url,
+            len(task_file_path),
         )
-        
+
         # Execute the backend run
         completion_messages, _final_answer, _log_path, _trace = await run_backend(
             task_description=task_description,
-            task_file_path=[],
+            task_file_path=task_file_path,
             log_path="./log.json",
             task_id="",
             gt=gt,
