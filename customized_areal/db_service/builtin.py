@@ -21,6 +21,8 @@ TPFC_CONFIG = {
                     "sb_shell_tool",
                     "sb_upload_file_tool",
                     "searching_tool",
+                    "sb_document_parser",
+                    "sb_files_tool",
                 ]
             ],
             "mcp": [],

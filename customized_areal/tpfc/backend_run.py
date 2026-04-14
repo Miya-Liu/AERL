@@ -5,6 +5,7 @@ import json
 import base64
 import os
 import time
+import fcntl
 from pathlib import Path
 
 # Add parent of 'customized_areal' to Python path for direct execution
@@ -39,8 +40,76 @@ except ImportError:
     import logging
     logger = logging.getLogger("BackendRun")
 
-DEFAULT_BACKEND_AUTH_TOKEN = "eyJhbGciOiJFUzI1NiIsImtpZCI6ImM2YWFjMzE0LTczMzctNDBlYS04ZmU3LTBjMDMxODA3OTJlZiIsInR5cCI6IkpXVCJ9.eyJhYWwiOiJhYWwxIiwiYW1yIjpbeyJtZXRob2QiOiJwYXNzd29yZCIsInRpbWVzdGFtcCI6MTc3NTIxMDczN31dLCJhcHBfbWV0YWRhdGEiOnsicHJvdmlkZXIiOiJlbWFpbCIsInByb3ZpZGVycyI6WyJlbWFpbCJdfSwiYXVkIjoiYXV0aGVudGljYXRlZCIsImVtYWlsIjoiemhvdWppZTIyQGxlbm92by5jb20iLCJleHAiOjE3NzUyMTQzMzcsImlhdCI6MTc3NTIxMDczNywiaXNfYW5vbnltb3VzIjpmYWxzZSwiaXNzIjoiaHR0cHM6Ly93bGxpa3hpZmNrZXRhdm9pZ2lmYS5zdXBhYmFzZS5jby9hdXRoL3YxIiwicGhvbmUiOiIiLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsInNlc3Npb25faWQiOiIyNWRmNzE5MC02YWI4LTQ1MjgtYmIzNi1lODY5NDA4ZDhhNTQiLCJzdWIiOiIxMzE4M2M5MC1hYzk0LTQwM2UtODkzZS1jNTM1NTJhZDQyOWQiLCJ1c2VyX21ldGFkYXRhIjp7ImVtYWlsX3ZlcmlmaWVkIjp0cnVlfX0.MiHqWwj6mR3WwzaArSo_UlSv6KFAZOf7HMcrHhLRGjuf-yZ1O3_-kgDX2Ou-Ra8tQ1WSZwjecqlTg2UylMhjgw"
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
+
+# Shared token file path for multi-process token sharing
+_SHARED_TOKEN_FILE = Path(__file__).parent / ".shared_auth_token.json"
+
+
+class SharedTokenManager:
+    """File-based auth token manager for multi-process sharing.
+
+    Stores the access_token in a JSON file so multiple processors can
+    read the same token. When a processor detects the token is expired,
+    it refreshes the token via _refresh_access_token and writes the new
+    token back to the file.
+
+    Uses fcntl file locking to prevent race conditions between processes.
+    """
+
+    def __init__(self, token_file: Path = _SHARED_TOKEN_FILE, refresh_token: str = DEFAULT_REFRESH_TOKEN):
+        self.token_file = token_file
+        self.refresh_token = refresh_token
+
+    def read_token(self) -> str | None:
+        """Read the shared access token from file."""
+        try:
+            with open(self.token_file, "r") as f:
+                fcntl.flock(f, fcntl.LOCK_SH)
+                try:
+                    data = json.load(f)
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
+            return data.get("access_token")
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return None
+
+    def write_token(self, access_token: str) -> None:
+        """Write the access token to the shared file."""
+        self.token_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.token_file, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                json.dump({"access_token": access_token, "updated_at": time.time()}, f)
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+        logger.info("Shared auth token updated in file: %s", self.token_file)
+
+    async def get_valid_token(self) -> str:
+        """Get a valid access token, refreshing if necessary.
+
+        Reads the shared token file. If the token is expired or missing,
+        refreshes it via _refresh_access_token and writes the new token
+        back to the file.
+        """
+        auth_token = self.read_token()
+        if auth_token:
+            payload = _decode_jwt_payload(auth_token)
+            exp = payload.get("exp")
+            if exp and exp >= time.time() + 300:
+                # Token is still valid for at least 5 minutes
+                return auth_token
+            # Token is expired or about to expire, need to refresh
+            logger.info("Shared auth token expired or about to expire, refreshing...")
+
+        # Refresh the token
+        try:
+            new_token = await _refresh_access_token(self.refresh_token)
+            self.write_token(new_token)
+            return new_token
+        except Exception as e:
+            logger.error(f"Failed to refresh shared access token: {e}")
+            raise RuntimeError(f"Failed to refresh shared access token: {e}")
 
 async def get_all_accounts():
     """Load all rows from the `accounts` table."""
@@ -110,7 +179,6 @@ async def run_backend(
     # agent_id='89395eb4-dd1a-4a13-932d-4f7d3a17bca6',
     base_url: str | None = None,
     api_key: str | None = None,
-    backend_auth_token: str | None = DEFAULT_BACKEND_AUTH_TOKEN,
     refresh_token: str | None = DEFAULT_REFRESH_TOKEN,
 ):
 
@@ -172,37 +240,13 @@ async def run_backend(
     api_base_url = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
 
     # Backend API authentication
-    # The new backend (le-agent-dev2) validates JWT via Supabase JWKS using ES256.
-    # Forging a local HS256 token no longer works. You must supply a real Supabase
-    # access token via backend_auth_token, or obtain one via Supabase auth.
-    auth_token = backend_auth_token
-    if auth_token:
-        payload = _decode_jwt_payload(auth_token)
-        exp = payload.get("exp")
-        if exp and exp < time.time() + 300:  # expires within 5 minutes
-            if refresh_token:
-                try:
-                    auth_token = await _refresh_access_token(refresh_token)
-                except Exception as e:
-                    logger.error(f"Failed to refresh access token: {e}")
-                    raise RuntimeError(f"Access token expired and refresh failed: {e}")
-            else:
-                logger.error("Access token is expired or about to expire, but no refresh_token provided")
-                raise RuntimeError("Access token expired and no refresh_token available")
+    # Use SharedTokenManager to get a valid token from the shared file.
+    # Multiple processors share the same token file; when a processor finds
+    # the token expired, it refreshes and writes the new token back.
+    token_manager = SharedTokenManager(refresh_token=refresh_token or DEFAULT_REFRESH_TOKEN)
+    auth_token = await token_manager.get_valid_token()
 
-    if not auth_token:
-        logger.warning(
-            "No backend_auth_token provided. Falling back to locally-generated HS256 token. "
-            "This will fail against backends that use Supabase JWKS (ES256) validation."
-        )
-        import jwt
-        jwt_secret = os.environ.get("SUPABASE_JWT_SECRET", "internal")
-        auth_token = jwt.encode(
-            {"sub": user_id, "exp": time.time() + 3600, "aud": "authenticated"},
-            jwt_secret,
-            algorithm="HS256"
-        )
-    
+
     # Prepare multipart form data (common for both branches)
     # proxy_base_url and proxy_api_key are passed to the agent for LLM routing through AReaL proxy
     form_data = {
@@ -321,6 +365,7 @@ if __name__ == "__main__":
             # model_name="qwen/qwen3.5-397b-a17b",
             api_key='',
             base_url='',
+            refresh_token=DEFAULT_REFRESH_TOKEN,
         )
     )
     print("Messages:", messages)

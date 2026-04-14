@@ -43,10 +43,20 @@ def tpfc_reward_fn(
         return 0.0
 
     # Extract response text from the last assistant message
+    # Content can be a str, dict (e.g. {"type": "text", "text": "..."}), or list of parts
     response_text = ""
     for msg in reversed(completions):
         if msg.get("role") == "assistant":
-            response_text = msg.get("content", "")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                response_text = "".join(
+                    p.get("text", p.get("content", "")) if isinstance(p, dict) else str(p)
+                    for p in content
+                )
+            elif isinstance(content, dict):
+                response_text = content.get("text", content.get("content", ""))
+            else:
+                response_text = content
             break
 
     if not response_text:
@@ -207,4 +217,4 @@ class TPFCAgent:
             reward,
         )
         
-        return reward
+        return float(reward)

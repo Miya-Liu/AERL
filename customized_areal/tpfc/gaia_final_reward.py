@@ -12,7 +12,27 @@ import urllib.error
 import urllib.request
 
 
+def _flatten_content(content):
+    """Convert OpenAI-style content (str, dict, or list of parts) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(part.get("text", part.get("content", "")))
+            else:
+                parts.append(str(part))
+        return "".join(parts)
+    if isinstance(content, dict):
+        return content.get("text", content.get("content", str(content)))
+    return str(content)
+
+
 def extract_answer(response_text):
+    response_text = _flatten_content(response_text)
     start_tag = "<answer>"
     end_tag = "</answer>"
     start_positions = [i for i in range(len(response_text)) if response_text.startswith(start_tag, i)]
@@ -106,14 +126,14 @@ def parse_judge_score(judge_response_text):
     start_pos = stripped.rfind("<score>")
     end_pos = stripped.rfind("</score>")
     if start_pos < 0 or end_pos < 0 or start_pos >= end_pos:
-        return 0
+        return 0.0
 
     content = stripped[start_pos + 7:end_pos].strip()
     try:
         score = float(content)
-        return 1 if score >= 0.9 else 0
+        return 1.0 if score >= 0.9 else 0.0
     except (TypeError, ValueError):
-        return 0
+        return 0.0
 
 
 def evaluate_final_answer(

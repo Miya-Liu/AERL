@@ -13,10 +13,10 @@ from pathlib import Path
 # Add the project to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from customized_areal.tpfc.backend_run import run_backend, DEFAULT_BACKEND_AUTH_TOKEN, DEFAULT_REFRESH_TOKEN
+from customized_areal.tpfc.backend_run import run_backend
 
 
-async def process_single_task(task_data, base_image_path, user_id=None, model_name=None, base_url=None, api_key=None, backend_auth_token=None, refresh_token=None):
+async def process_single_task(task_data, base_image_path, user_id=None, model_name=None, base_url=None, api_key=None, refresh_token=None):
     """Process a single image QA task."""
 
     question = task_data.get("question", "")
@@ -154,9 +154,9 @@ if __name__ == "__main__":
                         help="Base URL for proxy")
     parser.add_argument("--api-key", default="RlkgHzgBa2zbPcQrw96rdn68dr7kXk8Mv84Nhs5Trrk6gfq8Cqw5CcDQ787p6d6bPrAWDrw8b97gq8N7jWWxhasnVP76FD76r8tJ2688mdPnSP7N6V7gl1VLKD9LasJq",
                         help="API key for proxy")
-    parser.add_argument("--backend-auth-token", default=DEFAULT_BACKEND_AUTH_TOKEN,
+    parser.add_argument("--backend-auth-token", default=None,
                         help="Real Supabase JWT access token for backend API authentication (required for le-agent-dev2)")
-    parser.add_argument("--refresh-token", default=DEFAULT_REFRESH_TOKEN,
+    parser.add_argument("--refresh-token", default=None,
                         help="Supabase refresh token to automatically renew access token when expired")
 
     # parser.add_argument("--base-url", default="https://modelfactory.lenovo.com/service-large-544-1773728352034/llm/v1",

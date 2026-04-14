@@ -14,8 +14,28 @@ from areal.utils import logging
 logger = logging.getLogger("TPFCReward")
 
 
+def _flatten_content(content):
+    """Convert OpenAI-style content (str, dict, or list of parts) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(part.get("text", part.get("content", "")))
+            else:
+                parts.append(str(part))
+        return "".join(parts)
+    if isinstance(content, dict):
+        return content.get("text", content.get("content", str(content)))
+    return str(content)
+
+
 def _extract_answer_tag(response_text: str) -> str | None:
     """Extract content between <answer> tags."""
+    response_text = _flatten_content(response_text)
     start_tag = "<answer>"
     end_tag = "</answer>"
     start_positions = [i for i in range(len(response_text)) if response_text.startswith(start_tag, i)]

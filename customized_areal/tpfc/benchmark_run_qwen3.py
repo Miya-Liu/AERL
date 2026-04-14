@@ -645,7 +645,7 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 4, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 25, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
@@ -673,7 +673,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_retry_reasoning",
+        "base_retry_reasoning_fixtool",
         # "compression_1w",
         f"level_{cfg.level}",
     ]
