@@ -204,3 +204,5 @@ outputs/
 sympy/
 !/docs/figures/*
 *.whl
+tmp/*
+

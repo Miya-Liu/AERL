@@ -24,6 +24,7 @@ scheduler:
   type: local
 
 rollout:
+  backend: sglang:d1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
@@ -53,9 +54,9 @@ gconfig:
   temperature: 1.0
 
 actor:
+  backend: archon:d1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  attn_impl: eager
   # Qwen3.5-9B model checkpoint
   path: /dfs/share-groups/letrain/ckpt/Qwen3.5-9B
   init_from_scratch: false
@@ -100,6 +101,7 @@ actor:
         NCCL_SOCKET_IFNAME: "eth0"
 
 ref:
+  backend: ${actor.backend}
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${actor.path}

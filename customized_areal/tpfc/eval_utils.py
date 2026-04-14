@@ -103,7 +103,9 @@ async def verify_answer_llm_simpleqa(
     messages = [
         {
             "role": "user",
-            "content": EVALUATION_PROMPT_SIMPLEQA.format(question, target, predicted_answer),
+            "content": EVALUATION_PROMPT_SIMPLEQA.format(
+                question, target, predicted_answer
+            ),
         }
     ]
     CHOICE_MAP = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}
@@ -322,6 +324,7 @@ async def verify_answer_gaia(target: str, predicted_answer: str) -> str:
 
 
 async def verify_answer_for_datasets(
+    openai_client: AsyncOpenAI,
     question: str,
     target: str,
     predicted_answer: str,
@@ -341,7 +344,11 @@ async def verify_answer_for_datasets(
         return gaia_scorer_answer
 
     elif benchmark_name == "simpleqa":
-        return await verify_answer_llm_simpleqa(question, target, predicted_answer)
+        return await verify_answer_llm_simpleqa(
+            openai_client, question, target, predicted_answer
+        )
 
     else:
-        return await verify_answer_llm_hle(question, target, predicted_answer)
+        return await verify_answer_llm_hle(
+            openai_client, question, target, predicted_answer
+        )
