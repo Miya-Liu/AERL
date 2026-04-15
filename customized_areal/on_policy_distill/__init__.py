@@ -34,6 +34,9 @@ __all__ = [
     "OpenAIProxyWorkflow",
     "PositionRewardInfo",
     "InteractionWithTokenLevelReward",
+    # Teacher distillation
+    "TeacherClient",
+    "TeacherConfig",
     # Engine
     "MultiCandidateFSDPEngine",
     "MultiCandidateFSDPPPOActor",
@@ -91,6 +94,16 @@ def __getattr__(name):
         from .proxy.client import OpenAIProxyClient
 
         return OpenAIProxyClient
+
+    # Teacher distillation
+    if name == "TeacherClient":
+        from .core.teacher_client import TeacherClient
+
+        return TeacherClient
+    if name == "TeacherConfig":
+        from .core.teacher_client import TeacherConfig
+
+        return TeacherConfig
 
     # Engine
     if name == "MultiCandidateFSDPEngine":

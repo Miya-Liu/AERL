@@ -15,6 +15,8 @@ from areal.api import AsyncRewardWrapper
 from areal.utils import logging
 
 from customized_areal.tpfc.backend_run import run_backend
+from customized_areal.on_policy_distill.core.teacher_client import TeacherClient, TeacherConfig
+from customized_areal.on_policy_distill.core.reward_compute import _compute_token_rewards
 from ..proxy.cache import PositionRewardInfo
 
 logger = logging.getLogger("OnPolicyDistillAgent")
@@ -89,6 +91,7 @@ class OnPolicyDistillAgent:
         agent_id: str | None = None,
         user_id: str | None = None,
         model_name: str | None = None,
+        teacher_config: TeacherConfig | None = None,
         **kwargs,
     ):
         """Initialize OnPolicyDistillAgent.
@@ -97,16 +100,19 @@ class OnPolicyDistillAgent:
             agent_id: Optional agent ID to use. Falls back to default_agent_id.
             user_id: Optional user ID for authentication.
             model_name: Optional model name for LLM calls.
+            teacher_config: Optional TeacherConfig for teacher distillation.
             **kwargs: Additional configuration options (ignored but accepted).
         """
         self.agent_id = agent_id or self.default_agent_id
         self.user_id = user_id
         self.model_name = model_name
+        self.teacher_client = TeacherClient(teacher_config) if teacher_config else None
 
         logger.info(
-            "OnPolicyDistillAgent initialized: agent_id=%s, model_name=%s",
+            "OnPolicyDistillAgent initialized: agent_id=%s, model_name=%s, teacher=%s",
             self.agent_id,
             self.model_name,
+            "enabled" if self.teacher_client else "disabled",
         )
 
     async def run(
@@ -173,24 +179,40 @@ class OnPolicyDistillAgent:
                 rebuild_llm_client=True,
             )
 
-            # Extract token_rewards from message metadata
+            # Compute position-level rewards using teacher model
             position_rewards: list[PositionRewardInfo] = []
             completion_id: str | None = None
-            if completion_messages:
-                for msg in completion_messages:
-                    if isinstance(msg, dict) and "metadata" in msg:
-                        metadata = msg["metadata"]
-                        if "token_rewards" in metadata:
-                            position_rewards = self._convert_to_position_rewards(
-                                metadata["token_rewards"]
+
+            if completion_messages and self.teacher_client is not None:
+                proxy_client = extra_kwargs.get("proxy_client")
+
+                if proxy_client is not None:
+                    try:
+                        interaction = await proxy_client.get_last_interaction()
+                        if interaction and hasattr(interaction, 'model_response') and interaction.model_response is not None:
+                            student_output_ids = interaction.model_response.output_tokens
+                            student_input_ids = interaction.model_response.input_tokens
+                            student_top_k_logprobs = getattr(
+                                interaction.model_response, "output_top_logprobs", None
                             )
-                            completion_id = msg.get("id") or hashlib.md5(str(metadata).encode()).hexdigest()[:16]
-                            logger.info(
-                                "Extracted position rewards for completion %s: %d positions",
-                                completion_id,
-                                len(position_rewards),
-                            )
-                            break
+
+                            if student_top_k_logprobs is not None:
+                                position_rewards = await _compute_token_rewards(
+                                    student_output_ids=student_output_ids,
+                                    student_input_ids=student_input_ids,
+                                    student_top_k_logprobs=student_top_k_logprobs,
+                                    teacher_client=self.teacher_client,
+                                    top_k=self.teacher_client.config.teacher_top_k,
+                                )
+                                completion_id = hashlib.md5(
+                                    str(completion_messages).encode()
+                                ).hexdigest()[:16]
+                                logger.info(
+                                    "Computed position rewards via teacher: %d positions",
+                                    len(position_rewards),
+                                )
+                    except Exception as e:
+                        logger.warning("Failed to compute position rewards via teacher: %s", e)
 
             # Calculate reward using reward function
             reward_fn = AsyncRewardWrapper(on_policy_distill_reward_fn)

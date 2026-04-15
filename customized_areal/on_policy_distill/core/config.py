@@ -96,3 +96,29 @@ class OnPolicyDistillConfig(PPOConfig):
         default=-0.5,
         metadata={"help": "Bias to add to rewards."},
     )
+
+    # Teacher model configuration
+    teacher_base_url: str = field(
+        default="http://localhost:8001",
+        metadata={"help": "Base URL for the teacher model inference API."},
+    )
+    teacher_model_name: str = field(
+        default="",
+        metadata={"help": "Teacher model name for the inference API. Required for teacher distillation."},
+    )
+    teacher_top_k: int = field(
+        default=10,
+        metadata={"help": "Number of top candidate tokens to evaluate per position."},
+    )
+    teacher_max_retries: int = field(
+        default=3,
+        metadata={"help": "Maximum number of retries for teacher API calls."},
+    )
+    teacher_timeout: float = field(
+        default=60.0,
+        metadata={"help": "Request timeout in seconds for teacher API calls."},
+    )
+    teacher_missing_logprob: float = field(
+        default=-23.0,
+        metadata={"help": "Default logprob for tokens not in teacher's top-k (log(1e-10) ≈ -23.0)."},
+    )
