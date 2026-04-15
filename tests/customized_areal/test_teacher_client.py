@@ -1,0 +1,451 @@
+"""Tests for TeacherClient and TeacherConfig."""
+
+import math
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from customized_areal.on_policy_distill.core.teacher_client import (
+    TeacherClient,
+    TeacherConfig,
+    _DEFAULT_MISSING_LOGPROB,
+)
+
+
+# ---------------------------------------------------------------------------
+# TeacherConfig tests
+# ---------------------------------------------------------------------------
+
+
+class TestTeacherConfig:
+    """Test TeacherConfig defaults and custom values."""
+
+    def test_defaults(self):
+        """Test that default values are set correctly."""
+        config = TeacherConfig()
+        assert config.teacher_base_url == "http://localhost:8001"
+        assert config.teacher_model_name == ""
+        assert config.teacher_top_k == 10
+        assert config.teacher_max_retries == 3
+        assert config.teacher_timeout == 60.0
+        assert config.teacher_missing_logprob == pytest.approx(
+            math.log(1e-10), abs=0.01
+        )
+
+    def test_custom_values(self):
+        """Test that custom values override defaults."""
+        config = TeacherConfig(
+            teacher_base_url="http://teacher:9000",
+            teacher_model_name="big-model",
+            teacher_top_k=20,
+            teacher_max_retries=5,
+            teacher_timeout=120.0,
+            teacher_missing_logprob=-50.0,
+        )
+        assert config.teacher_base_url == "http://teacher:9000"
+        assert config.teacher_model_name == "big-model"
+        assert config.teacher_top_k == 20
+        assert config.teacher_max_retries == 5
+        assert config.teacher_timeout == 120.0
+        assert config.teacher_missing_logprob == -50.0
+
+    def test_missing_logprob_default_approx_minus_23(self):
+        """Test the default missing logprob is approximately -23.025."""
+        config = TeacherConfig()
+        assert config.teacher_missing_logprob == pytest.approx(-23.025, abs=0.001)
+
+
+# ---------------------------------------------------------------------------
+# TeacherClient tests
+# ---------------------------------------------------------------------------
+
+
+def _make_teacher_api_response(
+    prompt_len: int,
+    output_logprobs: list[list[dict]],
+) -> dict:
+    """Build a mock vLLM/SGLang completions API response.
+
+    Parameters
+    ----------
+    prompt_len : int
+        Number of prompt positions (logprobs echoed for these).
+    output_logprobs : list[list[dict]]
+        For each output position, a list of dicts like
+        ``{"token_id": int, "logprob": float}``.
+
+    Returns
+    -------
+    dict
+        A response dict mimicking the vLLM/SGLang completions API format.
+    """
+    # Prompt positions get empty logprob entries (echo=True includes them).
+    prompt_top_logprobs: list[None] = [None] * prompt_len
+    output_top_logprobs: list[list[dict] | None] = output_logprobs
+
+    return {
+        "choices": [
+            {
+                "logprobs": {
+                    "top_logprobs": prompt_top_logprobs + output_top_logprobs,
+                },
+                "text": "generated",
+            }
+        ]
+    }
+
+
+class TestTeacherClient:
+    """Test TeacherClient class."""
+
+    @pytest.fixture
+    def config(self):
+        """Create a TeacherConfig for testing."""
+        return TeacherConfig(
+            teacher_base_url="http://localhost:8001",
+            teacher_model_name="test-teacher",
+            teacher_top_k=5,
+            teacher_max_retries=2,
+            teacher_timeout=10.0,
+            teacher_missing_logprob=-23.0,
+        )
+
+    @pytest.fixture
+    def client(self, config):
+        """Create a TeacherClient for testing."""
+        return TeacherClient(config)
+
+    @pytest.mark.asyncio
+    async def test_context_manager(self, client):
+        """Test async context manager opens and closes the httpx client."""
+        assert client._client is None
+        async with client:
+            assert client._client is not None
+            assert isinstance(client._client, httpx.AsyncClient)
+        assert client._client is None
+
+    @pytest.mark.asyncio
+    async def test_ensure_client_raises_when_not_open(self, client):
+        """Test that calling methods without opening client raises RuntimeError."""
+        with pytest.raises(RuntimeError, match="not open"):
+            client._ensure_client()
+
+    @pytest.mark.asyncio
+    async def test_get_logprobs_for_candidates_success(self, client):
+        """Test successful get_logprobs_for_candidates with mocked HTTP."""
+        # Setup: 3 prompt tokens, 2 output tokens
+        input_ids = [100, 101, 102]
+        output_ids = [200, 201]
+        candidate_token_ids = [
+            [200, 300, 400],  # position 0 candidates
+            [201, 500, 600],  # position 1 candidates
+        ]
+
+        # Teacher returns top-2 logprobs per position
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=3,
+            output_logprobs=[
+                # Position 0: teacher knows token 200 and 300
+                [
+                    {"token_id": 200, "logprob": -0.5},
+                    {"token_id": 300, "logprob": -1.2},
+                ],
+                # Position 1: teacher knows token 201 and 500
+                [
+                    {"token_id": 201, "logprob": -0.3},
+                    {"token_id": 500, "logprob": -0.8},
+                ],
+            ],
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value=mock_response_data)
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        async with client:
+            client._client = mock_http_client
+            result = await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        # Position 0: 200 and 300 found, 400 missing
+        assert result[0][200] == pytest.approx(-0.5)
+        assert result[0][300] == pytest.approx(-1.2)
+        assert result[0][400] == pytest.approx(-23.0)  # missing_logprob
+
+        # Position 1: 201 and 500 found, 600 missing
+        assert result[1][201] == pytest.approx(-0.3)
+        assert result[1][500] == pytest.approx(-0.8)
+        assert result[1][600] == pytest.approx(-23.0)  # missing_logprob
+
+    @pytest.mark.asyncio
+    async def test_get_logprobs_missing_candidates(self, client):
+        """Test that candidate tokens not in teacher's top-k get missing_logprob."""
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [
+            [20, 30, 40, 50],  # Only token 20 is in teacher top-k
+        ]
+
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=1,
+            output_logprobs=[
+                [
+                    {"token_id": 20, "logprob": -0.1},
+                    {"token_id": 99, "logprob": -2.0},  # not a candidate
+                ],
+            ],
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value=mock_response_data)
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        async with client:
+            client._client = mock_http_client
+            result = await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        # Token 20 is found, tokens 30, 40, 50 get missing_logprob
+        assert result[0][20] == pytest.approx(-0.1)
+        assert result[0][30] == pytest.approx(-23.0)
+        assert result[0][40] == pytest.approx(-23.0)
+        assert result[0][50] == pytest.approx(-23.0)
+
+    @pytest.mark.asyncio
+    async def test_get_logprobs_candidate_token_ids_length_mismatch(self, client):
+        """Test that mismatched candidate_token_ids length raises ValueError."""
+        input_ids = [10]
+        output_ids = [20, 21]
+        candidate_token_ids = [[20]]  # only 1 position, but 2 output tokens
+
+        async with client:
+            with pytest.raises(ValueError, match="must match output_ids length"):
+                await client.get_logprobs_for_candidates(
+                    input_ids=input_ids,
+                    output_ids=output_ids,
+                    candidate_token_ids=candidate_token_ids,
+                )
+
+    @pytest.mark.asyncio
+    async def test_retry_on_transient_failure(self, client):
+        """Test retry logic on transient HTTP failures."""
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [[20]]
+
+        # First call fails, second succeeds
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=1,
+            output_logprobs=[
+                [{"token_id": 20, "logprob": -0.1}],
+            ],
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json = MagicMock(return_value=mock_response_data)
+
+        fail_response = MagicMock()
+        fail_response.status_code = 500
+        fail_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Server Error",
+                request=MagicMock(),
+                response=fail_response,
+            )
+        )
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(
+            side_effect=[fail_response, success_response]
+        )
+
+        async with client:
+            client._client = mock_http_client
+            result = await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        assert result[0][20] == pytest.approx(-0.1)
+        assert mock_http_client.post.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_all_retries_exhausted(self, client):
+        """Test RuntimeError when all retries are exhausted."""
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [[20]]
+
+        # All calls fail
+        fail_response = MagicMock()
+        fail_response.status_code = 500
+        fail_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Server Error",
+                request=MagicMock(),
+                response=fail_response,
+            )
+        )
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=fail_response)
+
+        async with client:
+            client._client = mock_http_client
+            with pytest.raises(RuntimeError, match="failed after 2 retries"):
+                await client.get_logprobs_for_candidates(
+                    input_ids=input_ids,
+                    output_ids=output_ids,
+                    candidate_token_ids=candidate_token_ids,
+                )
+
+    @pytest.mark.asyncio
+    async def test_request_payload_format(self, client):
+        """Test that the API request payload is constructed correctly."""
+        input_ids = [100, 101]
+        output_ids = [200]
+        candidate_token_ids = [[200]]
+
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=2,
+            output_logprobs=[[{"token_id": 200, "logprob": -0.1}]],
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value=mock_response_data)
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        async with client:
+            client._client = mock_http_client
+            await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        # Verify the POST call was made with the correct payload
+        call_args = mock_http_client.post.call_args
+        assert call_args[0][0] == "/v1/completions"
+        payload = call_args[1]["json"]
+        assert payload["prompt"] == [100, 101]
+        assert payload["max_tokens"] == 1
+        assert payload["temperature"] == 0.0
+        assert payload["logprobs"] == 5  # matches config.teacher_top_k
+        assert payload["echo"] is True
+        assert payload["model"] == "test-teacher"
+
+    @pytest.mark.asyncio
+    async def test_request_payload_no_model_name(self):
+        """Test that model is omitted when teacher_model_name is empty."""
+        config = TeacherConfig(teacher_model_name="")
+        client = TeacherClient(config)
+
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [[20]]
+
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=1,
+            output_logprobs=[[{"token_id": 20, "logprob": -0.1}]],
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value=mock_response_data)
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        async with client:
+            client._client = mock_http_client
+            await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        payload = mock_http_client.post.call_args[1]["json"]
+        assert "model" not in payload
+
+    @pytest.mark.asyncio
+    async def test_no_choices_raises(self, client):
+        """Test that an API response with no choices raises RuntimeError."""
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [[20]]
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json = MagicMock(return_value={"choices": []})
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=mock_response)
+
+        async with client:
+            client._client = mock_http_client
+            with pytest.raises(RuntimeError, match="no choices"):
+                await client.get_logprobs_for_candidates(
+                    input_ids=input_ids,
+                    output_ids=output_ids,
+                    candidate_token_ids=candidate_token_ids,
+                )
+
+    @pytest.mark.asyncio
+    async def test_retry_on_timeout_exception(self, client):
+        """Test retry logic on httpx.TimeoutException."""
+        input_ids = [10]
+        output_ids = [20]
+        candidate_token_ids = [[20]]
+
+        mock_response_data = _make_teacher_api_response(
+            prompt_len=1,
+            output_logprobs=[[{"token_id": 20, "logprob": -0.1}]],
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        success_response.raise_for_status = MagicMock()
+        success_response.json = MagicMock(return_value=mock_response_data)
+
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(
+            side_effect=[
+                httpx.TimeoutException("timed out"),
+                success_response,
+            ]
+        )
+
+        async with client:
+            client._client = mock_http_client
+            result = await client.get_logprobs_for_candidates(
+                input_ids=input_ids,
+                output_ids=output_ids,
+                candidate_token_ids=candidate_token_ids,
+            )
+
+        assert result[0][20] == pytest.approx(-0.1)
+        assert mock_http_client.post.call_count == 2
