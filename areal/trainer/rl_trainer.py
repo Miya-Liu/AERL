@@ -6,6 +6,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
+import torch
 import torch.distributed as dist
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -45,6 +46,11 @@ from areal.infra.data_service.controller.config import DataServiceConfig
 from areal.infra.data_service.rdataset import RDataset
 from areal.infra.utils.concurrent import call_maybe_async
 from areal.utils import logging, perf_tracer, seeding, stats_tracker
+from customized_areal.tree_search.config import TreeBackupConfig, TreeBackupMode
+from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+from customized_areal.tree_search.advantage import TreeAdvantageComputer
+from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+from customized_areal.tree_search.turn_splitter import make_turn_splitter
 from areal.utils.dataloader import create_dataloader
 from areal.utils.environ import is_single_controller
 from areal.utils.evaluator import Evaluator
@@ -103,6 +109,7 @@ class PPOTrainer:
         config: PPOConfig,
         train_dataset: Dataset | None = None,
         valid_dataset: Dataset | None = None,
+        tree_backup_config: TreeBackupConfig | None = None,
     ):
         rank = int(os.getenv("RANK", "0"))
         if is_single_controller():
@@ -113,6 +120,22 @@ class PPOTrainer:
         self.processor, self.tokenizer = load_hf_processor_and_tokenizer(
             config.tokenizer_path
         )
+
+        # Tree backup setup
+        self.tree_backup_config = tree_backup_config or TreeBackupConfig()
+        if self.tree_backup_config.mode != TreeBackupMode.OFF:
+            turn_splitter = make_turn_splitter(
+                self.tokenizer, self.tree_backup_config.assistant_marker
+            )
+            self.tree_store = MCTSTreeStore(turn_splitter)
+            self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
+            self.tree_checkpoint_manager = TreeCheckpointManager(
+                self.tree_backup_config.checkpoint_dir
+            )
+            if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+                if self.tree_checkpoint_manager.exists():
+                    self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
+
         self.scheduler = None
         if is_single_controller():
             self.scheduler = self._init_scheduler()
@@ -562,10 +585,64 @@ class PPOTrainer:
                     group_size=config.gconfig.n_samples,
                     dynamic_bs=self.config.dynamic_bs,
                 )
+
+                # Verify tensor length consistency within each trajectory
+                for traj_idx, traj in enumerate(rollout_batch):
+                    if not isinstance(traj, dict) or "input_ids" not in traj:
+                        continue
+                    ref_shape = traj["input_ids"].shape
+                    seq_len = ref_shape[-1]
+                    batch_size = ref_shape[0]
+                    mismatches = []
+                    for key in [
+                        "attention_mask",
+                        "loss_mask",
+                        "logprobs",
+                        "ref_logp",
+                        "values",
+                        "position_ids",
+                        "advantages",
+                        "returns",
+                    ]:
+                        if key not in traj:
+                            continue
+                        val = traj[key]
+                        if not isinstance(val, torch.Tensor):
+                            continue
+                        val_shape = val.shape
+                        # position_ids for Qwen-VL models has shape (3, batch, seq_len)
+                        if key == "position_ids" and val.dim() == 3:
+                            traj_seq_len = val.shape[-1]
+                            traj_batch_size = val.shape[-2]
+                        else:
+                            traj_seq_len = val_shape[-1]
+                            traj_batch_size = val_shape[0] if val.dim() >= 2 else 1
+                        if traj_seq_len != seq_len:
+                            mismatches.append(
+                                f"{key}: seq_len={traj_seq_len} (expected {seq_len})"
+                            )
+                        if traj_batch_size != batch_size:
+                            mismatches.append(
+                                f"{key}: batch_size={traj_batch_size} (expected {batch_size})"
+                            )
+                    if mismatches:
+                        logger.error(
+                            "Trajectory %d length mismatch: input_ids shape=%s, mismatches=%s",
+                            traj_idx,
+                            ref_shape,
+                            mismatches,
+                        )
+                    else:
+                        logger.info(
+                            "Trajectory %d length check passed: input_ids shape=%s",
+                            traj_idx,
+                            ref_shape,
+                        )
+
             if self._should_offload_rollout:
                 self._offload_rollout()
 
-            if self.critic is not None:
+            if self.critic is not None and self.tree_backup_config.mode == TreeBackupMode.OFF:
                 if self._should_offload_critic:
                     self._onload_model(self.critic, role="critic")
                 with (
@@ -647,8 +724,13 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                adv_batch = self.actor.compute_advantages(rollout_batch)
-                self.actor.get_device_stats().log("compute advantages")
+                if self.tree_backup_config.mode != TreeBackupMode.OFF:
+                    self.tree_store.insert_batch(rollout_batch)
+                    self.tree_advantage_computer.compute(rollout_batch)
+                    adv_batch = rollout_batch
+                else:
+                    adv_batch = self.actor.compute_advantages(rollout_batch)
+                    self.actor.get_device_stats().log("compute advantages")
 
             # Wait for async checkpoint staging to complete before modifying parameters
             self.saver.maybe_wait_for_staging()
@@ -1075,6 +1157,9 @@ class PPOTrainer:
             tokenizer=self.tokenizer,
             processor=self.processor,
         )
+
+        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+            self.tree_checkpoint_manager.save(self.tree_store)
 
         dist.barrier(group=self.actor.cpu_group)
         current_platform.synchronize()
