@@ -24,7 +24,7 @@ dataloader → rollout → enrich (critic/ref/logp) → GAE advantages → PPO u
 ### New Flow (tree mode on)
 
 ```
-dataloader → rollout → insert paths into MCTS tree → MCTS backup → tree advantages → PPO update
+dataloader → rollout → add turns one-by-one to MCTS tree → finish_sequence (backup) → tree advantages → PPO update
 ```
 
 When tree mode is off, the existing GAE path runs unchanged.
@@ -112,7 +112,7 @@ class TrieNode:
 
 | Method | Description |
 |---|---|
-| `insert_path(turns: list[Turn], seq_id: int)` | Walk/create child nodes along the turn sequence, tag each with `seq_id` |
+| `add_turn(turn: Turn, seq_id: int) -> TrieNode` | Add a single turn as a child, keyed by first response token. Returns the child node (cursor for next turn). Tags node with `seq_id`. |
 | `get_path_nodes(seq_id: int) -> list[TrieNode]` | Return the non-root nodes on the path for `seq_id`, root-to-leaf order |
 | `get_turn_boundaries(seq_id: int) -> list[int]` | Return cumulative token positions where turns start/end |
 
@@ -140,6 +140,9 @@ class MCTSTreeStore:
         self.turn_splitter = turn_splitter
         self._next_seq_id: int = 0
 
+        # Cursor state — tracks current position per (query_id, seq_id)
+        self._cursors: dict[tuple[str, int], TrieNode] = {}
+
         # MCTS statistics — keyed by (query_id, node_id) -> per-node stats
         self._visit_counts: dict[tuple[str, int], int] = {}    # (query_id, node_id) -> count
         self._total_values: dict[tuple[str, int], float] = {}  # (query_id, node_id) -> total
@@ -152,6 +155,9 @@ class MCTSTreeStore:
   indexing and the backup logic as a separate concern. Stats are keyed by
   `(query_id, node_id)` where `node_id` is the node's position in the root's
   `nodes` list (pre-order index).
+- **Cursor-based insertion**: turns are added one at a time, matching the
+  sequential generation order of multi-turn rollouts. The cursor tracks the
+  current node position for each active sequence.
 - **Backup traverses the trie path**: backup walks the `ancestors` list from
   leaf to root, updating stats at each node on the path.
 
@@ -159,19 +165,47 @@ class MCTSTreeStore:
 
 | Method | Description |
 |---|---|
-| `insert_trajectory(query_id, input_ids, reward)` | Split `input_ids` into `Turn` objects, insert into the per-query trie, assign a `seq_id`, run backup |
-| `insert_batch(trajectories: list[dict])` | Batch version — group trajectories by query, insert each group |
+| `start_sequence(query_id) -> int` | Create root if needed, assign a `seq_id`, set cursor at root. Return `seq_id`. |
+| `add_turn(query_id, seq_id, turn: Turn)` | Add a single turn at the cursor position, advance cursor to the new child node. |
+| `finish_sequence(query_id, seq_id, reward: float)` | Run MCTS backup along the completed path, clear cursor. |
+| `insert_trajectory(query_id, input_ids, reward)` | Convenience: split → start_sequence → add_turn loop → finish_sequence. |
+| `insert_batch(trajectories: list[dict])` | Batch version — group trajectories by query, insert each group. |
 | `get_advantages(query_id, seq_id) -> torch.Tensor` | Get Q-values per turn, expand to per-token advantages aligned with the trajectory's `input_ids` |
-| `clear()` | Reset all trees and stats (used when `in_training` mode at start) |
+| `clear()` | Reset all trees, stats, and cursors (used when `in_training` mode at start) |
 
-**Insert trajectory flow:**
+**Turn-by-turn insertion flow:**
+
+```python
+seq_id = store.start_sequence("q1")
+for turn in turns:
+    store.add_turn("q1", seq_id, turn)
+store.finish_sequence("q1", seq_id, reward=1.0)
+```
+
+**What happens step by step:**
+
+1. `start_sequence("q1")`:
+   - `root = self.trees.setdefault("q1", TrieNode(tree_id=...))`
+   - `seq_id = self._next_seq_id; self._next_seq_id += 1`
+   - `self._cursors[("q1", seq_id)] = root`
+   - Return `seq_id`
+
+2. `add_turn("q1", seq_id, turn)`:
+   - `cursor = self._cursors[("q1", seq_id)]`
+   - `child = cursor.add_turn(turn, seq_id)` — creates/walks child keyed by `turn.response_tokens[0]`
+   - `self._cursors[("q1", seq_id)] = child` — advance cursor
+
+3. `finish_sequence("q1", seq_id, reward)`:
+   - `self._backup(query_id, seq_id, reward)` — walk ancestors from leaf to root
+   - `del self._cursors[("q1", seq_id)]` — clear cursor
+
+**Convenience `insert_trajectory` flow:**
 
 1. `turns: list[Turn] = self.turn_splitter(input_ids)`
-2. `seq_id = self._next_seq_id; self._next_seq_id += 1`
-3. `root = self.trees.setdefault(query_id, TrieNode(tree_id=...))`
-4. `root.insert_path(turns, seq_id)` — creates/walks child nodes
-5. `self._backup(query_id, seq_id, reward)` — update MCTS stats
-6. Return `seq_id`
+2. `seq_id = self.start_sequence(query_id)`
+3. For each turn: `self.add_turn(query_id, seq_id, turn)`
+4. `self.finish_sequence(query_id, seq_id, reward)`
+5. Return `seq_id`
 
 **Backup flow:**
 
