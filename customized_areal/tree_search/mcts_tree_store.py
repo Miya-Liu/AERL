@@ -1,0 +1,112 @@
+# customized_areal/tree_search/mcts_tree_store.py
+from __future__ import annotations
+
+import hashlib
+from typing import Any, Callable
+
+import torch
+
+from customized_areal.tree_search.trie_node import TrieNode
+from customized_areal.tree_search.turn_splitter import Turn
+
+
+def _get_query_id(traj: dict[str, Any]) -> str:
+    """Derive a query ID from the prompt tokens in a trajectory."""
+    loss_mask = traj["loss_mask"]
+    input_ids = traj["input_ids"]
+    prompt_tokens = input_ids[loss_mask == 0].tolist()
+    prompt_str = ",".join(str(t) for t in prompt_tokens)
+    return hashlib.md5(prompt_str.encode()).hexdigest()
+
+
+class MCTSTreeStore:
+    """Trie-backed MCTS tree store with cursor-based API.
+
+    Manages multiple search trees (one per query), tracks MCTS statistics
+    (visit counts, Q-values) per node, and provides a cursor-based API for
+    incrementally building trajectories through start/add/finish sequences.
+    """
+
+    def __init__(self, turn_splitter: Callable[[list[int]], list[Turn]]):
+        self.trees: dict[str, TrieNode] = {}
+        self.turn_splitter = turn_splitter
+        self._next_seq_id: int = 0
+
+        self._cursors: dict[tuple[str, int], TrieNode] = {}
+
+        self._visit_counts: dict[tuple[str, int], int] = {}
+        self._total_values: dict[tuple[str, int], float] = {}
+        self._q_values: dict[tuple[str, int], float] = {}
+
+    def start_sequence(self, query_id: str) -> int:
+        """Create root if needed, assign a seq_id, set cursor at root."""
+        tree_idx = len(self.trees)
+        root = self.trees.setdefault(query_id, TrieNode(tree_id=tree_idx))
+        seq_id = self._next_seq_id
+        self._next_seq_id += 1
+        root.sequence_ids.append(seq_id)
+        self._cursors[(query_id, seq_id)] = root
+        return seq_id
+
+    def add_turn(self, query_id: str, seq_id: int, turn: Turn) -> None:
+        """Add a single turn at the cursor position, advance cursor."""
+        cursor = self._cursors[(query_id, seq_id)]
+        child = cursor.add_turn(turn, seq_id)
+        self._cursors[(query_id, seq_id)] = child
+
+    def finish_sequence(self, query_id: str, seq_id: int, reward: float) -> None:
+        """Run MCTS backup along the completed path, clear cursor."""
+        self._backup(query_id, seq_id, reward)
+        del self._cursors[(query_id, seq_id)]
+
+    def _backup(self, query_id: str, seq_id: int, reward: float) -> None:
+        """Walk from leaf to root, updating MCTS stats at each node."""
+        root = self.trees[query_id]
+        path_nodes = root.get_path_nodes(seq_id)
+        all_nodes = [root] + path_nodes
+        for node in all_nodes:
+            key = (query_id, id(node))
+            self._visit_counts[key] = self._visit_counts.get(key, 0) + 1
+            self._total_values[key] = self._total_values.get(key, 0.0) + reward
+            self._q_values[key] = self._total_values[key] / self._visit_counts[key]
+
+    def insert_trajectory(self, query_id: str, input_ids: list[int], reward: float) -> int:
+        """Convenience: split -> start_sequence -> add_turn loop -> finish_sequence."""
+        turns = self.turn_splitter(input_ids)
+        seq_id = self.start_sequence(query_id)
+        for turn in turns:
+            self.add_turn(query_id, seq_id, turn)
+        self.finish_sequence(query_id, seq_id, reward)
+        return seq_id
+
+    def insert_batch(self, trajectories: list[dict[str, Any]]) -> None:
+        """Batch version -- group trajectories by query, insert each group."""
+        for traj in trajectories:
+            query_id = _get_query_id(traj)
+            input_ids = traj["input_ids"].tolist()
+            reward = traj["rewards"].item() if traj["rewards"].dim() > 0 else traj["rewards"].item()
+            seq_id = self.insert_trajectory(query_id, input_ids, reward)
+            traj["_mcts_seq_id"] = seq_id
+            traj["_mcts_query_id"] = query_id
+
+    def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
+        """Get Q-values per turn, expand to per-token advantages."""
+        root = self.trees[query_id]
+        path_nodes = root.get_path_nodes(seq_id)
+        boundaries = root.get_turn_boundaries(seq_id)
+        total_len = boundaries[-1]
+        advantages = torch.zeros(total_len)
+        for i, node in enumerate(path_nodes):
+            key = (query_id, id(node))
+            q_val = self._q_values.get(key, 0.0)
+            advantages[boundaries[i] : boundaries[i + 1]] = q_val
+        return advantages
+
+    def clear(self) -> None:
+        """Reset all trees, stats, and cursors."""
+        self.trees.clear()
+        self._next_seq_id = 0
+        self._cursors.clear()
+        self._visit_counts.clear()
+        self._total_values.clear()
+        self._q_values.clear()
