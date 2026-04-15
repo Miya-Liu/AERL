@@ -43,6 +43,7 @@ from .server import (
     RL_SET_TOKEN_REWARDS_PATHNAME,
     RL_SET_POSITION_REWARDS_PATHNAME,
     RL_COMPUTE_ENTROPY_PATHNAME,
+    EXPORT_TRAJECTORIES_PATHNAME,
     SetTokenRewardsRequest,
     SetPositionRewardsRequest,
     ComputeEntropyRequest,
@@ -109,7 +110,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
 
     async def set_rewards(
         self,
-        completion_id: str,
+        completion_id: str | None,
         token_rewards: list[float],
     ) -> None:
         """
@@ -117,8 +118,8 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
 
         Parameters
         ----------
-        completion_id : str
-            The completion/interaction ID
+        completion_id : str | None
+            The completion/interaction ID, or None for the last interaction
         token_rewards : list[float]
             Token-wise rewards, one per output token
 
@@ -153,7 +154,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
 
     async def set_position_rewards(
         self,
-        completion_id: str,
+        completion_id: str | None,
         position_rewards: list[PositionRewardInfo],
     ) -> None:
         """
@@ -161,8 +162,8 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
 
         Parameters
         ----------
-        completion_id : str
-            The completion/interaction ID
+        completion_id : str | None
+            The completion/interaction ID, or None for the last interaction
         position_rewards : list[PositionRewardInfo]
             Position-wise candidate rewards
 
@@ -224,7 +225,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
             If session is not started
         """
         await self.set_rewards(
-            completion_id="",  # Empty string means "last interaction"
+            completion_id=None,  # None means "last interaction"
             token_rewards=token_rewards,
         )
 
@@ -246,7 +247,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
             If session is not started
         """
         await self.set_position_rewards(
-            completion_id="",  # Empty string means "last interaction"
+            completion_id=None,  # None means "last interaction"
             position_rewards=position_rewards,
         )
 
@@ -305,6 +306,42 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
             return await self.compute_entropy(completion_id)
         except Exception:
             return None
+
+    async def get_last_interaction(self) -> Any:
+        """Get the most recent interaction from the proxy server.
+
+        Fetches all interactions from the server and returns the last one.
+        The interaction includes model_response with output_tokens, input_tokens,
+        and output_top_logprobs needed for teacher distillation.
+
+        Returns
+        -------
+        Any
+            The last interaction object, or None if no interactions exist.
+
+        Raises
+        ------
+        RuntimeError
+            If session is not started.
+        """
+        if self.session_id is None:
+            raise RuntimeError("Session not started")
+
+        url = f"{self.base_url}{EXPORT_TRAJECTORIES_PATHNAME}"
+        params = {"discount": "1.0", "style": "individual"}
+        headers = self._session_auth_headers()
+
+        async with self._session.get(url, params=params, headers=headers) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+
+        interactions = data.get("interactions", {})
+        if not interactions:
+            return None
+
+        # Return the last interaction by insertion order
+        last_id = list(interactions.keys())[-1]
+        return interactions[last_id]
 
 
 __all__ = ["OpenAIProxyClient"]
