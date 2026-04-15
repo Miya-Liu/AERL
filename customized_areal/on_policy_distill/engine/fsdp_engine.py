@@ -253,27 +253,8 @@ class MultiCandidateFSDPEngine(FSDPEngine):
 
         if not self.config.is_critic:
             if self.enable_tree_training:
-                # Handle dummy trie (empty tree for DP synchronization)
-                if ctx.trie_node is None or not ctx.trie_node.all_sequence_ids:
-                    return logits.sum() * 0.0
-
-                # Tree training path
-                from areal.models.tree_attn.functional import (
-                    gather_packed_tree_vocab_stats,
-                    gather_packed_tree_logprobs_entropy,
-                )
-
-                vocab_min_logits, vocab_max_logits = gather_packed_tree_vocab_stats(
-                    logits, ctx.trie_node
-                )
-                logprobs, entropy = gather_packed_tree_logprobs_entropy(
-                    logits,
-                    ctx.trie_node,
-                    ctx.mb_input["input_ids"],
-                    temperature=self.config.temperature,
-                    tp_group=self.parallel_helper.tp_group
-                    if self.parallel_helper.tp_size > 1
-                    else None,
+                return super()._compute_logprobs_and_loss(
+                    logits, ctx, loss_fn, loss_weight_fn, total_loss_weight, loss_multiplier,
                 )
             else:
                 # Check if we have multi-candidate data
@@ -304,15 +285,15 @@ class MultiCandidateFSDPEngine(FSDPEngine):
                         original_rolled = ctx.model_inputs.get("rolled_input_ids")
                         ctx.model_inputs["rolled_input_ids"] = multi_candidate_labels
 
-                        logprobs, entropy = self._compute_logprobs_entropy(
-                            logits, ctx.model_inputs, ctx.ulysses_pad_size
-                        )
-
-                        # Restore original
-                        if original_rolled is not None:
-                            ctx.model_inputs["rolled_input_ids"] = original_rolled
-                        else:
-                            del ctx.model_inputs["rolled_input_ids"]
+                        try:
+                            logprobs, entropy = self._compute_logprobs_entropy(
+                                logits, ctx.model_inputs, ctx.ulysses_pad_size
+                            )
+                        finally:
+                            if original_rolled is not None:
+                                ctx.model_inputs["rolled_input_ids"] = original_rolled
+                            else:
+                                ctx.model_inputs.pop("rolled_input_ids", None)
                     else:
                         # Fallback to standard single-candidate
                         logprobs, entropy = self._compute_logprobs_entropy(
