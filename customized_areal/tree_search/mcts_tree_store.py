@@ -102,6 +102,19 @@ class MCTSTreeStore:
             advantages[boundaries[i] : boundaries[i + 1]] = q_val
         return advantages
 
+    def get_prompt_mask(self, query_id: str, seq_id: int) -> torch.Tensor:
+        """Return a boolean tensor: True for response tokens, False for prompt tokens."""
+        root = self.trees[query_id]
+        path_nodes = root.get_path_nodes(seq_id)
+        boundaries = root.get_turn_boundaries(seq_id)
+        total_len = boundaries[-1]
+        mask = torch.zeros(total_len, dtype=torch.bool)
+        for i, node in enumerate(path_nodes):
+            start = boundaries[i]
+            response_start = start + node.prompt_len
+            mask[response_start : boundaries[i + 1]] = True
+        return mask
+
     def clear(self) -> None:
         """Reset all trees, stats, and cursors."""
         self.trees.clear()

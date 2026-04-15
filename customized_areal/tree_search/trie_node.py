@@ -19,6 +19,7 @@ class TrieNode:
     start_idx: int = -1
     end_idx: int = -1
     tokens: list[int] = field(default_factory=list)
+    prompt_len: int = 0
     sequence_ids: list[int] = field(default_factory=list)
     children: dict[int, TrieNode] = field(default_factory=dict)
     ancestors: list[TrieNode] = field(default_factory=list)
@@ -39,6 +40,7 @@ class TrieNode:
             child = TrieNode(
                 tree_id=self.tree_id,
                 tokens=combined_tokens,
+                prompt_len=len(turn.prompt_tokens),
                 ancestors=self.ancestors + [self],
             )
             self.children[key] = child
