@@ -763,6 +763,7 @@ class RemoteInfEngine(InferenceEngine):
         accumulated_output_logprobs = []
         accumulated_versions = []
         accumulated_routed_experts: list[np.ndarray] = []
+        accumulated_output_top_logprobs: list[list[tuple[int, float]]] = []
 
         # A single "rid" shares the same server to allow KV cache reuse
         if req.rid in self.rid_to_address:
@@ -839,6 +840,11 @@ class RemoteInfEngine(InferenceEngine):
             # Accumulate routed_experts for MoE models
             if gen_result.routed_experts is not None:
                 accumulated_routed_experts.append(gen_result.routed_experts)
+            # Accumulate top-k logprobs if available
+            if gen_result.output_top_logprobs is not None:
+                accumulated_output_top_logprobs.extend(
+                    gen_result.output_top_logprobs
+                )
 
             # Update request for next iteration
             req.input_ids += gen_result.output_tokens
@@ -872,6 +878,11 @@ class RemoteInfEngine(InferenceEngine):
             output_tokens=accumulated_output_tokens,
             output_logprobs=accumulated_output_logprobs,
             output_versions=accumulated_versions,
+            output_top_logprobs=(
+                accumulated_output_top_logprobs
+                if accumulated_output_top_logprobs
+                else None
+            ),
             stop_reason=stop_reason,
             latency=latency,
             ttft=latency,  # Simplified for non-streaming
