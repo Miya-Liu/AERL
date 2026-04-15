@@ -64,6 +64,9 @@ class ModelResponse:
     output_tokens: list[int] = field(default_factory=list)
     output_logprobs: list[float] = field(default_factory=list)
     output_versions: list[int] = field(default_factory=list)
+    # Top-k logprobs per output position: list of lists of (token_id, log_prob) tuples.
+    # None if not requested or not available.
+    output_top_logprobs: list[list[tuple[int, float]]] | None = None
     stop_reason: Literal["length", "stop", "tool_calls", "abort"] = "stop"
     # tokenizer is used for encode-decode in the inference engine
     tokenizer: PreTrainedTokenizerFast | None = None
