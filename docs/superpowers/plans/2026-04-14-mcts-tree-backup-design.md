@@ -243,7 +243,7 @@ def compute(self, trajectories: list[dict]) -> None:
     """Replace GAE advantages with tree Q-values. Mutates trajectories in-place."""
     for traj in trajectories:
         query_id = get_query_id(traj)
-        seq_id = traj["_mcts_seq_id"]  # set by insert_batch
+        seq_id = traj["_mcts_seq_id"]  # set by on_trajectory_ready callback
         advantages = self.tree_store.get_advantages(query_id, seq_id)
 
         # Mask prompt tokens — advantages only for response tokens
@@ -258,8 +258,9 @@ def compute(self, trajectories: list[dict]) -> None:
 
 - **No critic values**: tree Q-values replace GAE entirely, so `returns =
   advantages`. The `critic.compute_values` step is skipped in tree mode.
-- **`_mcts_seq_id`**: transient key added by `insert_batch`, valid only within
-  the current training step. Not persisted.
+- **`_mcts_seq_id`**: transient key added by `on_trajectory_ready` callback
+  during streaming insert, valid only within the current training step. Not
+  persisted.
 - **Advantage shape**: `[1, seq_len]` (or `[group_size, seq_len]` for grouped
   rollouts) to match existing trajectory format.
 - **KL tracking**: `kl_rewards` is still computed for logging/monitoring.
@@ -379,17 +380,173 @@ tokenizer's `chat_template` to find the assistant role marker. For most chat
 models this resolves to `<|im_start|>assistant` (Qwen, Llama-3) or
 `<|START_OF_TURN_TOKEN|><|ASSISTANT_TOKEN|>` (Gemma).
 
-## RLTrainer Integration
+## Streaming MCTS Backup Architecture
 
-**Minimal, surgical changes to `RLTrainer`:**
+### Problem
+
+The original design inserted trajectories and ran backup inside
+`PPOActor._compute_advantages` (via monkey-patch). This means backup only runs
+once all rollouts for a step are complete and enrichment (critic, ref, teacher
+logp) has finished. But the inference engine generates new paths **during
+rollout** — each trajectory arrives asynchronously. To keep Q-values up-to-date
+as the tree grows (enabling future tree-guided rollout), backup must execute
+after each new path is generated.
+
+### Solution: Decouple Insert+Backup from Advantage Computation
+
+**Current flow:**
+```
+prepare_batch → enrich → _compute_advantages (insert + backup + compute) → PPO update
+```
+
+**New flow:**
+```
+prepare_batch → each trajectory arrives → on_trajectory_ready callback → insert + backup
+                                          ↓
+              enrich → _compute_advantages (read-only: compute advantages from tree Q-values) → PPO update
+```
+
+Insert and backup happen in the `BatchTaskDispatcher` consumer thread as soon as
+each trajectory arrives. The patched `_compute_advantages` is **read-only** — it
+only reads Q-values already computed during streaming backup.
+
+### BatchTaskDispatcher Callback
+
+Add `on_trajectory_ready: Callable[[TResult], None] | None` to
+`BatchTaskDispatcher.__init__`. In the `_fetch_loop` consumer thread, after
+placing a result in `_pending_results`, fire the callback **outside** the
+`_result_cv` lock to avoid holding the lock during callback execution:
 
 ```python
-class RLTrainer:
-    def __init__(self, ...):
-        # ... existing init ...
+# Collect results under lock
+new_results = []
+with self._result_cv:
+    for result in results:
+        self._pending_results[result.task_id] = result
+        cb_addr = self._task_callbacks.pop(result.task_id, None)
+        new_results.append((result, cb_addr))
+    self._result_cv.notify_all()
 
-        # NEW: tree backup setup
-        if tree_backup_config.mode != TreeBackupMode.OFF:
+# Fire callbacks outside the lock
+for result, cb_addr in new_results:
+    if self._on_trajectory_ready is not None:
+        try:
+            self._on_trajectory_ready(result.data)
+        except Exception:
+            self.logger.error("on_trajectory_ready callback failed", exc_info=True)
+    if cb_addr:
+        self._send_callback(cb_addr, result.task_id, result.data)
+```
+
+### Thread-Safe MCTSTreeStore
+
+Since the callback fires in the consumer thread while `_compute_advantages`
+runs in the main thread, `MCTSTreeStore` must be thread-safe. Add a
+`threading.Lock` to all public methods:
+
+```python
+class MCTSTreeStore:
+    def __init__(self, turn_splitter):
+        ...
+        self._lock = threading.Lock()
+
+    def insert_trajectory(self, query_id, input_ids, reward):
+        with self._lock:
+            ...
+
+    def get_advantages(self, query_id, seq_id):
+        with self._lock:
+            ...
+
+    def get_prompt_mask(self, query_id, seq_id):
+        with self._lock:
+            ...
+
+    def insert_batch(self, trajectories):
+        with self._lock:
+            ...
+
+    def clear(self):
+        with self._lock:
+            ...
+```
+
+Single lock, coarse-grained — tree operations are fast (dict lookups, list
+appends), so contention is negligible.
+
+### TreeBackupPPOTrainer Integration
+
+The trainer wires up the streaming callback to the RolloutController's
+dispatcher **after** rollout initialization. Direct setter on the dispatcher
+(avoiding RolloutController/BatchTaskDispatcher signature changes):
+
+```python
+class TreeBackupPPOTrainer(PPOTrainer):
+    def __init__(self, ...):
+        super().__init__(...)
+        if self.tree_backup_config.mode != TreeBackupMode.OFF:
+            ...
+            patch_ppo_actor_for_tree_backup(self.tree_store, self.tree_advantage_computer)
+
+    def train(self, workflow=None, ...):
+        if self.tree_backup_config.mode != TreeBackupMode.OFF:
+            self._register_tree_callback()
+        super().train(workflow=workflow, ...)
+
+    def _register_tree_callback(self):
+        """Register on_trajectory_ready callback on the rollout dispatcher."""
+        if hasattr(self.actor, 'rollout_coordinator') and \
+           self.actor.rollout_coordinator is not None:
+            self.actor.rollout_coordinator.dispatcher._on_trajectory_ready = (
+                self._on_trajectory_ready
+            )
+
+    def _on_trajectory_ready(self, result):
+        """Callback: insert trajectory into tree and run backup.
+
+        Called from the BatchTaskDispatcher consumer thread.
+        """
+        if result is None:
+            return
+        trajectory = result.trajectory  # _RemoteRolloutResult has .trajectory
+        query_id = _get_query_id(trajectory)
+        input_ids = trajectory["input_ids"].tolist()
+        reward = trajectory["rewards"].item()
+        seq_id = self.tree_store.insert_trajectory(query_id, input_ids, reward)
+        trajectory["_mcts_seq_id"] = seq_id
+        trajectory["_mcts_query_id"] = query_id
+```
+
+The patched `_compute_advantages` becomes read-only — `tree_store.insert_batch`
+is removed:
+
+```python
+def _tree_backup_compute_advantages(self, data):
+    # ... (same KL/reward computation) ...
+
+    # === TREE BACKUP replaces GAE (read-only) ===
+    # Trajectories already inserted+backed during rollout via streaming callback
+    tree_advantage_computer.compute([data])
+
+    # ... (same advantage normalization and output) ...
+```
+
+### Reward Timing Guarantee
+
+The `on_trajectory_ready` callback receives trajectories that have already
+completed their full workflow execution, including reward computation. Rewards
+are always present when the callback fires — no fallback needed.
+
+## RLTrainer Integration
+
+**Minimal, surgical changes to `RLTrainer` via `TreeBackupPPOTrainer` subclass:**
+
+```python
+class TreeBackupPPOTrainer(PPOTrainer):
+    def __init__(self, ...):
+        super().__init__(...)
+
+        if self.tree_backup_config.mode != TreeBackupMode.OFF:
             turn_splitter = make_turn_splitter(self.tokenizer, tree_backup_config.assistant_marker)
             self.tree_store = MCTSTreeStore(turn_splitter)
             self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
@@ -399,27 +556,17 @@ class RLTrainer:
                 if self.tree_checkpoint_manager.exists():
                     self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
 
-    def _train_loop(self, ...):
-        for step in ...:
-            rollout_batch = self.actor.prepare_batch(...)
+            # Patch PPOActor to use tree backup instead of GAE
+            patch_ppo_actor_for_tree_backup(self.tree_store, self.tree_advantage_computer)
 
-            # ... existing enrichment (ref/logp/teacher_logp) ...
+    def train(self, ...):
+        # Register streaming callback after rollout initialization
+        if self.tree_backup_config.mode != TreeBackupMode.OFF:
+            self._register_tree_callback()
+        super().train(...)
 
-            # NEW: branch on tree mode
-            if self.tree_backup_config.mode != TreeBackupMode.OFF:
-                # Skip critic.compute_values — tree Q-values replace GAE
-                self.tree_store.insert_batch(rollout_batch)
-                self.tree_advantage_computer.compute(rollout_batch)
-            else:
-                # Existing path unchanged
-                self.critic.compute_values(rollout_batch)
-                self.actor.compute_advantages(rollout_batch)
-
-            self.actor.ppo_update(adv_batch)
-
-    # NEW: hook into existing checkpoint save
-    def _save_checkpoint(self, ...):
-        # ... existing model checkpoint logic ...
+    def _save_recover_checkpoint(self, ...):
+        super()._save_recover_checkpoint(...)
 
         if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
             self.tree_checkpoint_manager.save(self.tree_store)
@@ -443,4 +590,6 @@ class RLTrainer:
 
 | File | Change |
 |---|---|
-| `areal/trainer/rl_trainer.py` | Tree backup init, train loop branching, checkpoint hook |
+| `areal/infra/workflow_executor.py` | Add `on_trajectory_ready` callback to `BatchTaskDispatcher` |
+| `customized_areal/tree_search/mcts_tree_store.py` | Add `threading.Lock` for thread safety |
+| `customized_areal/tree_search/trainer.py` | Streaming callback registration, read-only `_compute_advantages` |

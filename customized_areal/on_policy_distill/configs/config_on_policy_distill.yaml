@@ -135,6 +135,14 @@ use_reward_scaling: true
 reward_scaling_factor: 10.0
 reward_bias: -0.5
 
+# Teacher model configuration (for on-policy distillation)
+teacher_base_url: http://localhost:8001
+teacher_model_name: ""  # Required: teacher model name for inference API
+teacher_top_k: 10
+teacher_max_retries: 3
+teacher_timeout: 60.0
+teacher_missing_logprob: -23.0  # log(1e-10) ≈ -23.0
+
 # Datasets
 train_dataset:
   batch_size: 2

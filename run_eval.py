@@ -101,7 +101,7 @@ async def evaluate_directory(base_dir: Path) -> dict:
 
 async def main():
     """Evaluate the specified directory."""
-    target_dir = Path('/dfs/share-groups/letrain/zhoujie/AReaL-main/logs/gaia-validation-openrouter/qwen/qwen3-vl-8b-thinking-base_retry_reasoning/level_1')
+    target_dir = Path('/dfs/share-groups/letrain/zhoujie/AReaL-main/logs/gaia-validation-openrouter/qwen/qwen3-vl-8b-thinking-base_retry_reasoning_fixtool/level_1')
     summary = await evaluate_directory(target_dir)
 
     # Print final summary

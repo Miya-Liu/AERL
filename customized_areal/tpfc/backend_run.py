@@ -1,12 +1,14 @@
 import asyncio
-import sys
-import httpx
-import json
 import base64
-import os
-import time
 import fcntl
+import json
+import os
+import re
+import sys
+import time
 from pathlib import Path
+
+import httpx
 
 # Add parent of 'customized_areal' to Python path for direct execution
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -14,115 +16,55 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # Load environment variables from .env file
 try:
     from dotenv import load_dotenv
+
     env_path = Path(__file__).parent.parent / ".env"
     load_dotenv(env_path)
 except ImportError:
     pass  # python-dotenv not installed, rely on environment variables
 
 from customized_areal.db_service import (
-    DBConnection,
-    create_task,
-    get_llm_messages,
-    AgentService,
-    AgentFilters,
-    PaginationParams,
     AgentCreateRequest,
+    DBConnection,
+    AgentService,
+    create_task,
     get_agent_loader,
+    get_llm_messages,
 )
 
-sys.stdout.reconfigure(encoding="utf-8")  # 设置标准输出为 UTF-8
+sys.stdout.reconfigure(encoding="utf-8")
 
 # Initialize logger
 try:
     from areal.utils.logging import getLogger
+
     logger = getLogger("BackendRun")
 except ImportError:
     import logging
+
     logger = logging.getLogger("BackendRun")
 
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
+DEFAULT_AGENT_ID = "8bba75cb-0d87-4efe-b566-87de77335b76"
+DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
+LE_AGENT_API_URL = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
+TOKEN_REFRESH_MARGIN = 60  # seconds — refresh 1 min before expiry, not 5
 
-# Shared token file path for multi-process token sharing
 _SHARED_TOKEN_FILE = Path(__file__).parent / ".shared_auth_token.json"
 
 
-class SharedTokenManager:
-    """File-based auth token manager for multi-process sharing.
+class _FileLock:
+    """Context manager for fcntl file locking."""
 
-    Stores the access_token in a JSON file so multiple processors can
-    read the same token. When a processor detects the token is expired,
-    it refreshes the token via _refresh_access_token and writes the new
-    token back to the file.
+    def __init__(self, fd, lock_type):
+        self._fd = fd
+        self._lock_type = lock_type
 
-    Uses fcntl file locking to prevent race conditions between processes.
-    """
+    def __enter__(self):
+        fcntl.flock(self._fd, self._lock_type)
 
-    def __init__(self, token_file: Path = _SHARED_TOKEN_FILE, refresh_token: str = DEFAULT_REFRESH_TOKEN):
-        self.token_file = token_file
-        self.refresh_token = refresh_token
-
-    def read_token(self) -> str | None:
-        """Read the shared access token from file."""
-        try:
-            with open(self.token_file, "r") as f:
-                fcntl.flock(f, fcntl.LOCK_SH)
-                try:
-                    data = json.load(f)
-                finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
-            return data.get("access_token")
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            return None
-
-    def write_token(self, access_token: str) -> None:
-        """Write the access token to the shared file."""
-        self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_file, "w") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            try:
-                json.dump({"access_token": access_token, "updated_at": time.time()}, f)
-            finally:
-                fcntl.flock(f, fcntl.LOCK_UN)
-        logger.info("Shared auth token updated in file: %s", self.token_file)
-
-    async def get_valid_token(self) -> str:
-        """Get a valid access token, refreshing if necessary.
-
-        Reads the shared token file. If the token is expired or missing,
-        refreshes it via _refresh_access_token and writes the new token
-        back to the file.
-        """
-        auth_token = self.read_token()
-        if auth_token:
-            payload = _decode_jwt_payload(auth_token)
-            exp = payload.get("exp")
-            if exp and exp >= time.time() + 300:
-                # Token is still valid for at least 5 minutes
-                return auth_token
-            # Token is expired or about to expire, need to refresh
-            logger.info("Shared auth token expired or about to expire, refreshing...")
-
-        # Refresh the token
-        try:
-            new_token = await _refresh_access_token(self.refresh_token)
-            self.write_token(new_token)
-            return new_token
-        except Exception as e:
-            logger.error(f"Failed to refresh shared access token: {e}")
-            raise RuntimeError(f"Failed to refresh shared access token: {e}")
-
-async def get_all_accounts():
-    """Load all rows from the `accounts` table."""
-    db = DBConnection()
-    client = await db.client
-
-    result = (
-        await client.schema("basejump")
-        .table("accounts")
-        .select("*")
-        .execute()
-    )
-    return result.data or []
+    def __exit__(self, *args):
+        fcntl.flock(self._fd, fcntl.LOCK_UN)
+        return False
 
 
 def _decode_jwt_payload(token: str) -> dict:
@@ -135,8 +77,99 @@ def _decode_jwt_payload(token: str) -> dict:
         payload_json = base64.urlsafe_b64decode(payload_b64)
         return json.loads(payload_json)
     except Exception as e:
-        logger.warning(f"Failed to decode JWT payload: {e}")
+        logger.warning("Failed to decode JWT payload: %s", e)
         return {}
+
+
+def _is_token_valid(token: str, margin: int = TOKEN_REFRESH_MARGIN) -> bool:
+    """Return True if *token* is still valid for at least *margin* seconds."""
+    payload = _decode_jwt_payload(token)
+    exp = payload.get("exp")
+    return bool(exp and exp >= time.time() + margin)
+
+
+class SharedTokenManager:
+    """File-based auth token manager for multi-process sharing.
+
+    Stores the access_token in a JSON file so multiple processors can
+    read the same token. When a processor detects the token is expired,
+    it refreshes the token via _refresh_access_token and writes the new
+    token back to the file.
+
+    Uses fcntl file locking to prevent race conditions between processes,
+    and asyncio.Lock to prevent race conditions between tasks in the same
+    process. The fcntl lock is NEVER held across an await.
+    """
+
+    _async_lock: asyncio.Lock | None = None
+
+    def __init__(
+        self,
+        token_file: Path = _SHARED_TOKEN_FILE,
+        refresh_token: str = DEFAULT_REFRESH_TOKEN,
+    ):
+        self.token_file = token_file
+        self.refresh_token = refresh_token
+        # One async lock per class (shared across instances in the same process)
+        if SharedTokenManager._async_lock is None:
+            SharedTokenManager._async_lock = asyncio.Lock()
+
+    def read_token(self) -> str | None:
+        """Read the shared access token from file."""
+        try:
+            with open(self.token_file, "r") as f, _FileLock(f, fcntl.LOCK_SH):
+                data = json.load(f)
+            return data.get("access_token")
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return None
+
+    def write_token(self, access_token: str) -> None:
+        """Write the access token to the shared file."""
+        self.token_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.token_file, "w") as f, _FileLock(f, fcntl.LOCK_EX):
+            json.dump({"access_token": access_token, "updated_at": time.time()}, f)
+        logger.info("Shared auth token updated in file: %s", self.token_file)
+
+    async def get_valid_token(self) -> str:
+        """Get a valid access token, refreshing if necessary.
+
+        Reads the shared token file. If the token is expired or missing,
+        acquires locks so only one coroutine/process refreshes the token.
+        The fcntl lock is never held across an await.
+        """
+        auth_token = self.read_token()
+        if auth_token and _is_token_valid(auth_token):
+            return auth_token
+
+        async with SharedTokenManager._async_lock:
+            # Double-check after acquiring async lock.
+            auth_token = self.read_token()
+            if auth_token and _is_token_valid(auth_token):
+                return auth_token
+
+            logger.info("Shared auth token expired or about to expire, refreshing...")
+
+            # Re-read under fcntl lock in case another process refreshed.
+            self.token_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.token_file, "a+") as f, _FileLock(f, fcntl.LOCK_EX):
+                try:
+                    f.seek(0)
+                    data = json.load(f)
+                    auth_token = data.get("access_token")
+                except (json.JSONDecodeError, KeyError):
+                    auth_token = None
+
+                if auth_token and _is_token_valid(auth_token):
+                    return auth_token
+
+            # Refresh token WITHOUT holding the file lock (avoids blocking the event loop).
+            new_token = await _refresh_access_token(self.refresh_token)
+
+            # Write the new token under fcntl lock.
+            with open(self.token_file, "w") as f, _FileLock(f, fcntl.LOCK_EX):
+                json.dump({"access_token": new_token, "updated_at": time.time()}, f)
+            logger.info("Shared auth token updated in file: %s", self.token_file)
+            return new_token
 
 
 async def _refresh_access_token(refresh_token: str) -> str:
@@ -144,7 +177,9 @@ async def _refresh_access_token(refresh_token: str) -> str:
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY")
     if not supabase_url or not supabase_anon_key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY must be set to refresh token")
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_ANON_KEY must be set to refresh token"
+        )
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -164,113 +199,65 @@ async def _refresh_access_token(refresh_token: str) -> str:
         return new_access_token
 
 
-async def run_backend(
-    task_description,
-    task_file_path,
-    log_path="./log.json",
-    task_id="",
-    gt="",
-    tags=None,
-    user_id: str | None = None,
-    model_name: str | None = None,
-    server_manager=None,
-    tokenizer=None,
-    agent_id='8bba75cb-0d87-4efe-b566-87de77335b76',
-    # agent_id='89395eb4-dd1a-4a13-932d-4f7d3a17bca6',
-    base_url: str | None = None,
-    api_key: str | None = None,
-    refresh_token: str | None = DEFAULT_REFRESH_TOKEN,
-):
-
-    # await get_all_accounts()
-
-    # Initialize database connection
-    db = DBConnection()
-    client = await db.client
-
-    # Step 1: Create a task to get task_id
-    user_id = user_id or '13183c90-ac94-403e-893e-c53552ad429d'
-
-    if agent_id is None:
-        # Step 2: Get agent list and find the agent
-        agent_service = AgentService(client)
-
-        # filters = AgentFilters(search="river", content_type="agents")
-        # pagination_params = PaginationParams(page=1, page_size=100)
-        # paginated_result = await agent_service.get_agents_paginated(
-        #     user_id=user_id, pagination_params=pagination_params, filters=filters
-        # )
-        spcified_agent = None
-
-        if not spcified_agent:
-            from customized_areal.db_service.builtin import TPFC_CONFIG
-            # Create the Janus agent if it doesn't exist yet
-            created_agent = await agent_service.create_agent(
-                user_id,
-                AgentCreateRequest(
-                    name=TPFC_CONFIG["name"],
-                    config=TPFC_CONFIG["config"],
-                    is_default=TPFC_CONFIG.get("is_default", False),
-                ),
-            )
-            agent_id = created_agent.agent_id
-            loader = await get_agent_loader()
-            agent_data = await loader.load_agent(agent_id, user_id, load_config=True)
-            # agent_data = None
-
-            logger.info(f"Created agent: {agent_id}")
-        else:
-            agent_id = spcified_agent.get("agent_id")
-            logger.info(f"Found agent: {agent_id}")
-
-
-    task_id = await create_task(
-        client=client,
-        account_id=user_id,
-        agent_id=agent_id, 
-        name=task_description[:100] if task_description else None,
-    )
-    logger.info(f"Task created: {task_id}")
-
-    # Step 3: Start agent run via HTTP API endpoint
-    # Use the unified_agent_start API for consistency with the frontend flow
-
-    # Determine API base URL for le-agent-dev backend API
-    # This is different from base_url (which is the AReaL proxy URL for LLM calls)
-    api_base_url = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
-
-    # Backend API authentication
-    # Use SharedTokenManager to get a valid token from the shared file.
-    # Multiple processors share the same token file; when a processor finds
-    # the token expired, it refreshes and writes the new token back.
-    token_manager = SharedTokenManager(refresh_token=refresh_token or DEFAULT_REFRESH_TOKEN)
-    auth_token = await token_manager.get_valid_token()
-
-
-    # Prepare multipart form data (common for both branches)
-    # proxy_base_url and proxy_api_key are passed to the agent for LLM routing through AReaL proxy
+def _prepare_form_data(
+    task_id: str,
+    task_description: str | None,
+    agent_id: str,
+    model_name: str | None,
+    base_url: str | None,
+    api_key: str | None,
+    tags: list[str] | None,
+) -> dict:
+    """Build the multipart form data for the agent start API."""
     form_data = {
         "task_id": task_id,
         "prompt": task_description,
         "agent_id": agent_id,
         "model_name": model_name,
         "is_sub_agent": "false",
-        "stream": "false"
+        "stream": "false",
     }
 
-    # Only include proxy settings when they have values (avoid empty strings in form data)
     if base_url is not None:
-        form_data["proxy_base_url"] = base_url  # AReaL proxy URL for LLM calls
+        form_data["proxy_base_url"] = base_url
     if api_key is not None:
-        form_data["proxy_api_key"] = api_key    # Session API key for proxy auth
-
-    # Add tags if provided
+        form_data["proxy_api_key"] = api_key
     if tags:
-        for tag in tags:
-            form_data.setdefault("tags", [])
-        # Note: For multipart, we need to handle tags differently
+        form_data.setdefault("tags", [])
 
-    # Prepare files for multipart upload and make request
+    return form_data
+
+
+async def _resolve_agent_id(client, user_id: str, agent_id: str | None) -> str:
+    """Return the provided agent_id or create a default one if missing."""
+    if agent_id is not None:
+        return agent_id
+
+    agent_service = AgentService(client)
+    from customized_areal.db_service.builtin import TPFC_CONFIG
+
+    created_agent = await agent_service.create_agent(
+        user_id,
+        AgentCreateRequest(
+            name=TPFC_CONFIG["name"],
+            config=TPFC_CONFIG["config"],
+            is_default=TPFC_CONFIG.get("is_default", False),
+        ),
+    )
+    new_agent_id = created_agent.agent_id
+    loader = await get_agent_loader()
+    await loader.load_agent(new_agent_id, user_id, load_config=True)
+    logger.info("Created agent: %s", new_agent_id)
+    return new_agent_id
+
+
+async def _start_agent_run(
+    api_base_url: str,
+    auth_token: str,
+    form_data: dict,
+    task_file_path: list[str] | None,
+) -> dict:
+    """Start the agent run via HTTP and return the JSON response."""
     async with httpx.AsyncClient(timeout=300.0) as http_client:
         files = []
         file_handles = []
@@ -282,13 +269,11 @@ async def run_backend(
                         file_handles.append(fh)
                         files.append(("files", (os.path.basename(file_path), fh, None)))
                     else:
-                        logger.warning(f"File not found: {file_path}")
+                        logger.warning("File not found: %s", file_path)
 
             response = await http_client.post(
                 f"{api_base_url}/api/agent/start",
-                headers={
-                    "Authorization": f"Bearer {auth_token}",
-                },
+                headers={"Authorization": f"Bearer {auth_token}"},
                 data=form_data,
                 files=files if files else None,
             )
@@ -298,19 +283,21 @@ async def run_backend(
 
         if response.status_code != 200:
             logger.error(
-                f"Failed to start agent run via API: status_code={response.status_code}, response={response.text}"
+                "Failed to start agent run via API: status_code=%s, response=%s",
+                response.status_code,
+                response.text,
             )
-            raise RuntimeError(f"Failed to start agent run: {response.status_code} - {response.text}")
+            raise RuntimeError(
+                f"Failed to start agent run: {response.status_code} - {response.text}"
+            )
 
-        result = response.json()
+        return response.json()
 
-    logger.info(f"Agent run started via API: {result}")
 
-    # Wait for agent run to complete
-    agent_run_id = result["agent_run_id"]
-    timeout = 3000  # 5 minutes
+async def _wait_for_agent_run(client, agent_run_id: str, timeout: int = 3000) -> str:
+    """Poll the database until the agent run reaches a terminal state."""
     start_time = time.time()
-    
+
     while (time.time() - start_time) < timeout:
         agent_run = (
             await client.table("agent_runs")
@@ -319,36 +306,105 @@ async def run_backend(
             .single()
             .execute()
         )
-        
-        status = agent_run.data["status"]
-        logger.info(f"Agent run status: {status}, agent_run_id: {agent_run_id}")
-        await asyncio.sleep(60)
 
-        if status in ["completed", "failed", "stopped"]:
-            if status == "failed":
-                logger.error(f"Agent run failed: error={agent_run.data.get('error')}, agent_run_id={agent_run_id}")
-            else:
-                logger.info(f"Agent run completed: status={status}, agent_run_id={agent_run_id}")
+        status = agent_run.data["status"]
+        # await asyncio.sleep(60)
+
+        if status in {"completed", "failed", "stopped"}:
             break
     else:
-        logger.error(f"Timeout waiting for agent run to complete: agent_run_id={agent_run_id}")
-        raise TimeoutError(f"Agent run {agent_run_id} did not complete within {timeout} seconds")
+        logger.error(
+            "Timeout waiting for agent run to complete: agent_run_id=%s", agent_run_id
+        )
+        raise TimeoutError(
+            f"Agent run {agent_run_id} did not complete within {timeout} seconds"
+        )
+
+    return status
+
+
+def _extract_final_answer(messages: list[dict]) -> str | None:
+    """Extract text inside the first <answer> tag from the last assistant message."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+
+        content = msg.get("content", "")
+        if isinstance(content, dict):
+            content = content.get("content", "")
+        elif isinstance(content, list):
+            content = "".join(
+                p.get("text", p.get("content", "")) if isinstance(p, dict) else str(p)
+                for p in content
+            )
+
+        if isinstance(content, str):
+            match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+    return None
+
+
+async def run_backend(
+    task_description: str | None,
+    task_file_path: list[str] | None,
+    log_path: str = "./log.json",
+    task_id: str = "",
+    gt: str = "",
+    tags: list[str] | None = None,
+    user_id: str | None = None,
+    model_name: str | None = None,
+    server_manager=None,
+    tokenizer=None,
+    agent_id: str | None = DEFAULT_AGENT_ID,
+    base_url: str | None = None,
+    api_key: str | None = None,
+    refresh_token: str | None = DEFAULT_REFRESH_TOKEN,
+):
+    db = DBConnection()
+    client = await db.client
+
+    user_id = user_id or DEFAULT_USER_ID
+    resolved_agent_id = await _resolve_agent_id(client, user_id, agent_id)
+
+    task_id = await create_task(
+        client=client,
+        account_id=user_id,
+        agent_id=resolved_agent_id,
+        name=task_description[:100] if task_description else None,
+    )
+    logger.info("Task created: %s", task_id)
+
+    token_manager = SharedTokenManager(
+        refresh_token=refresh_token or DEFAULT_REFRESH_TOKEN
+    )
+    auth_token = await token_manager.get_valid_token()
+
+    form_data = _prepare_form_data(
+        task_id=task_id,
+        task_description=task_description,
+        agent_id=resolved_agent_id,
+        model_name=model_name,
+        base_url=base_url,
+        api_key=api_key,
+        tags=tags,
+    )
+
+    result = await _start_agent_run(
+        api_base_url=LE_AGENT_API_URL,
+        auth_token=auth_token,
+        form_data=form_data,
+        task_file_path=task_file_path,
+    )
+    logger.info("Agent run started via API: %s", result)
+
+    agent_run_id = result["agent_run_id"]
+    await _wait_for_agent_run(client, agent_run_id)
 
     messages = await get_llm_messages(task_id, return_raw=True)
+    final_boxed_answer = _extract_final_answer(messages)
 
-    # Extract final_boxed_answer from the last assistant message with <answer> tags
-    final_boxed_answer = None
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "").get("content", "")
-            if isinstance(content, str):
-                import re
-                match = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
-                if match:
-                    final_boxed_answer = match.group(1).strip()
-                    break
-
-    # Return values expected by benchmark_run.py: (response, final_boxed_answer, log_file_path, _trace)
     return messages, final_boxed_answer, log_path, None
 
 
@@ -360,11 +416,10 @@ if __name__ == "__main__":
             task_description=task_description,
             task_file_path=[],
             tags=["debug"],
-            user_id="13183c90-ac94-403e-893e-c53552ad429d",
+            user_id=DEFAULT_USER_ID,
             model_name="openrouter/qwen/qwen3-235b-a22b",
-            # model_name="qwen/qwen3.5-397b-a17b",
-            api_key='',
-            base_url='',
+            api_key="",
+            base_url="",
             refresh_token=DEFAULT_REFRESH_TOKEN,
         )
     )

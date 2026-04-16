@@ -46,7 +46,7 @@ rollout:
     turn_discount: 1.0
 
 gconfig:
-  n_samples: 4
+  n_samples: 8
   min_new_tokens: 0
   max_new_tokens: 1024
   max_tokens: 2048
@@ -141,7 +141,7 @@ vllm:
 # TPFC dataset configuration - uses generated_training_final.parquet
 # NOTE: All samples have ~1034-1366 tokens due to long system prompts
 train_dataset:
-  batch_size: 2
+  batch_size: 8
   shuffle: true
   pin_memory: true
   num_workers: 4

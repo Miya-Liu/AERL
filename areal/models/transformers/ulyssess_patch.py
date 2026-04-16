@@ -88,6 +88,14 @@ def patch_vlm_for_ulysses_input_slicing(model_class: type):
                 call_kwargs["inputs_embeds"] = slice_input_tensor(
                     inputs_embeds, dim=1, padding=False
                 )
+                # Slice position_ids along the sequence dimension for Ulysses SP.
+                # Qwen-VL models use 3D position_ids of shape (3, batch, seq_len).
+                if "position_ids" in call_kwargs:
+                    position_ids = call_kwargs["position_ids"]
+                    if position_ids is not None:
+                        call_kwargs["position_ids"] = slice_input_tensor(
+                            position_ids, dim=-1, padding=False
+                        )
                 # Slice visual_pos_masks and deepstack_visual_embeds for Qwen3-VL models (adapted from verl)
                 if visual_pos_masks is not None:
                     original_visual_mask = visual_pos_masks
