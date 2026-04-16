@@ -264,14 +264,14 @@ explicit = true
 
 [tool.uv.sources]
 # Local wheels
-torch = { path = "torch-2.9.1+cu129-cp312-cp312-manylinux_2_28_x86_64.whl" }
-triton = { path = "triton-3.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" }
-sgl-kernel = { path = "sgl_kernel-0.3.21-cp310-abi3-manylinux2014_x86_64.whl" }
-nvidia-cudnn-cu12 = { path = "nvidia_cudnn_cu12-9.16.0.29-py3-none-manylinux_2_27_x86_64.whl" }
-nvidia-cusparselt-cu12 = { path = "nvidia_cusparselt_cu12-0.7.1-py3-none-manylinux2014_x86_64.whl" }
-nvidia-nccl-cu12 = { path = "nvidia_nccl_cu12-2.27.5-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
-nvidia-nvshmem-cu12 = { path = "nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
-flashinfer-cubin = { path = "flashinfer_cubin-0.6.3-py3-none-any.whl" }
+torch = { path = "wheels/torch-2.9.1+cu129-cp312-cp312-manylinux_2_28_x86_64.whl" }
+triton = { path = "wheels/triton-3.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" }
+sgl-kernel = { path = "wheels/sgl_kernel-0.3.21-cp310-abi3-manylinux2014_x86_64.whl" }
+nvidia-cudnn-cu12 = { path = "wheels/nvidia_cudnn_cu12-9.16.0.29-py3-none-manylinux_2_27_x86_64.whl" }
+nvidia-cusparselt-cu12 = { path = "wheels/nvidia_cusparselt_cu12-0.7.1-py3-none-manylinux2014_x86_64.whl" }
+nvidia-nccl-cu12 = { path = "wheels/nvidia_nccl_cu12-2.27.5-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
+nvidia-nvshmem-cu12 = { path = "wheels/nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
+flashinfer-cubin = { path = "wheels/flashinfer_cubin-0.6.3-py3-none-any.whl" }
 torchaudio = [
     { index = "pytorch-cu129", extra = "sglang" },
     { index = "pytorch-cu129", extra = "cuda" },

@@ -26,6 +26,7 @@ from customized_areal.db_service import (
     AgentCreateRequest,
     DBConnection,
     AgentService,
+    cleanup_sandbox_for_task,
     create_task,
     get_agent_loader,
     get_llm_messages,
@@ -294,31 +295,170 @@ async def _start_agent_run(
         return response.json()
 
 
-async def _wait_for_agent_run(client, agent_run_id: str, timeout: int = 3000) -> str:
-    """Poll the database until the agent run reaches a terminal state."""
+async def _wait_for_agent_run(
+    client,
+    agent_run_id: str,
+    api_base_url: str | None = None,
+    auth_token: str | None = None,
+    timeout: int = 3000,
+) -> str:
+    """Wait until the agent run reaches a terminal state.
+
+    If *api_base_url* and *auth_token* are provided, attempts to consume the
+    SSE stream from the backend first with auto-reconnect. Falls back to
+    database polling if the stream endpoint is unavailable or the stream ends
+    without a terminal status.
+    """
     start_time = time.time()
+    status = "pending"
+    streamed = False
+    last_event_id: str | None = None
 
-    while (time.time() - start_time) < timeout:
-        agent_run = (
-            await client.table("agent_runs")
-            .select("status, error, completed_at")
-            .eq("id", agent_run_id)
-            .single()
-            .execute()
-        )
+    def _time_left() -> float:
+        return timeout - (time.time() - start_time)
 
-        status = agent_run.data["status"]
-        # await asyncio.sleep(60)
+    if api_base_url and auth_token:
+        stream_url = f"{api_base_url}/api/agent-runs/{agent_run_id}/stream?token={auth_token}"
+        sse_retry_delay = 1.0
 
-        if status in {"completed", "failed", "stopped"}:
-            break
-    else:
-        logger.error(
-            "Timeout waiting for agent run to complete: agent_run_id=%s", agent_run_id
-        )
-        raise TimeoutError(
-            f"Agent run {agent_run_id} did not complete within {timeout} seconds"
-        )
+        while _time_left() > 0:
+            headers: dict[str, str] = {}
+            if last_event_id is not None:
+                headers["last-event-id"] = last_event_id
+
+            try:
+                async with httpx.AsyncClient(timeout=_time_left() + 10.0) as http_client:
+                    async with http_client.stream(
+                        "GET",
+                        stream_url,
+                        headers=headers,
+                        timeout=_time_left() + 10.0,
+                    ) as response:
+                        if response.status_code == 200:
+                            streamed = True
+                            sse_retry_delay = 1.0
+                            current_event = "message"
+                            current_data_parts: list[str] = []
+
+                            async for raw_line in response.aiter_lines():
+                                if _time_left() <= 0:
+                                    break
+
+                                line = raw_line.strip()
+                                if line.startswith("id:"):
+                                    last_event_id = line[3:].strip() or last_event_id
+                                    continue
+                                if line.startswith("event:"):
+                                    current_event = line[6:].strip()
+                                    continue
+                                if line.startswith("data:"):
+                                    current_data_parts.append(line[5:].strip())
+                                    continue
+                                if line == "":
+                                    if current_data_parts:
+                                        data_str = "\n".join(current_data_parts)
+                                        current_data_parts = []
+                                        try:
+                                            event = json.loads(data_str)
+                                        except json.JSONDecodeError:
+                                            event = {}
+
+                                        if current_event in {"task_end", "error"}:
+                                            status = event.get("status", status)
+                                        else:
+                                            status = event.get("status", status)
+
+                                        logger.debug(
+                                            "SSE event: type=%s status=%s agent_run_id=%s",
+                                            current_event,
+                                            status,
+                                            agent_run_id,
+                                        )
+
+                                        if status in {"completed", "failed", "stopped"}:
+                                            break
+                                    current_event = "message"
+
+                            if status in {"completed", "failed", "stopped"}:
+                                break
+
+                            logger.warning(
+                                "SSE stream ended for agent_run_id=%s, reconnecting in %.1fs",
+                                agent_run_id,
+                                sse_retry_delay,
+                            )
+                            await asyncio.sleep(min(sse_retry_delay, _time_left()))
+                            sse_retry_delay = min(sse_retry_delay * 2, 30.0)
+                            continue
+                        else:
+                            logger.warning(
+                                "SSE stream endpoint returned %s, falling back to polling: %s",
+                                response.status_code,
+                                stream_url,
+                            )
+                            break
+            except httpx.ConnectError as exc:
+                logger.warning(
+                    "SSE connect error for agent_run_id=%s, retrying in %.1fs: %s",
+                    agent_run_id,
+                    sse_retry_delay,
+                    exc,
+                )
+                await asyncio.sleep(min(sse_retry_delay, _time_left()))
+                sse_retry_delay = min(sse_retry_delay * 2, 30.0)
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "SSE error for agent_run_id=%s, retrying in %.1fs: %s",
+                    agent_run_id,
+                    sse_retry_delay,
+                    exc,
+                )
+                await asyncio.sleep(min(sse_retry_delay, _time_left()))
+                sse_retry_delay = min(sse_retry_delay * 2, 30.0)
+                continue
+
+    if not streamed or status not in {"completed", "failed", "stopped"}:
+        retry_delay = 1.0
+        while _time_left() > 0:
+            try:
+                agent_run = (
+                    await client.table("agent_runs")
+                    .select("status, error, completed_at")
+                    .eq("id", agent_run_id)
+                    .single()
+                    .execute()
+                )
+                status = agent_run.data["status"]
+            except Exception as exc:
+                if _time_left() <= 0:
+                    break
+                sleep_for = min(retry_delay, _time_left())
+                logger.warning(
+                    "DB poll failed for agent_run_id=%s, retrying in %.1fs: %s",
+                    agent_run_id,
+                    sleep_for,
+                    exc,
+                )
+                await asyncio.sleep(sleep_for)
+                retry_delay = min(retry_delay * 2, 30.0)
+                continue
+
+            if status in {"completed", "failed", "stopped"}:
+                break
+
+            if _time_left() <= 0:
+                break
+            await asyncio.sleep(min(30.0, _time_left()))
+            retry_delay = 1.0
+        else:
+            logger.error(
+                "Timeout waiting for agent run to complete: agent_run_id=%s",
+                agent_run_id,
+            )
+            raise TimeoutError(
+                f"Agent run {agent_run_id} did not complete within {timeout} seconds"
+            )
 
     return status
 
@@ -400,10 +540,18 @@ async def run_backend(
     logger.info("Agent run started via API: %s", result)
 
     agent_run_id = result["agent_run_id"]
-    await _wait_for_agent_run(client, agent_run_id)
+    status = await _wait_for_agent_run(
+        client,
+        agent_run_id,
+        api_base_url=LE_AGENT_API_URL,
+        auth_token=auth_token,
+    )
 
     messages = await get_llm_messages(task_id, return_raw=True)
     final_boxed_answer = _extract_final_answer(messages)
+
+    if status in {"completed", "failed", "stopped"}:
+        await cleanup_sandbox_for_task(client, task_id)
 
     return messages, final_boxed_answer, log_path, None
 

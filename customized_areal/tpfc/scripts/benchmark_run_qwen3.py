@@ -21,8 +21,8 @@ from omegaconf import DictConfig, OmegaConf
 from pydantic import BaseModel, Field
 
 # from summary_time_cost import generate_summary
-from backend_run import run_backend
-from eval_utils import verify_answer_for_datasets
+from customized_areal.tpfc.backend_run import run_backend
+from customized_areal.tpfc.eval_utils import verify_answer_for_datasets
 
 
 class TaskStatus(StrEnum):
@@ -645,13 +645,13 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 4, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 5, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
                 # "model_name": "openrouter/gpt-5",
                 # "model_name": "openai-compatible/gpt-5",
-                "model_name": "openrouter/qwen/qwen3.5-9b",
+                "model_name": "openrouter/qwen/qwen3-vl-8b-thinking",
                 # "model_name": "openrouter/qwen/qwen3-32b",
                 "enable_thinking": False,
                 "reasoning_effort": "low",
@@ -660,7 +660,7 @@ def main():
             "env": {"openai_api_key": ""},
             "level": 1,
             "user_id": "62ec5137-d121-4c8c-b175-ee165bdf38e4",
-            "agent_id": os.environ.get("main_agent_id", ""),
+            "agent_id": os.environ.get("main_agent_id") or None,
             "backend_mode": True,
             "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
             "api_key": "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",   # Set your API key here or via CLI
@@ -673,7 +673,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_retry_reasoning",
+        "base_retry_think_fixtool_notopenrouter",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

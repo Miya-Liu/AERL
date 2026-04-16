@@ -21,6 +21,7 @@ from .builtin import TPFC_CONFIG
 from .connection import DBConnection, SyncDBConnection
 from .messages import add_message, get_llm_messages
 from .pagination import PaginationParams
+from .sandbox import cleanup_sandbox_for_task, delete_sandbox
 from .schemas import AgentCreateRequest, AgentResponse, AgentUpdateRequest
 from .tasks import TaskStatus, create_task
 
@@ -30,6 +31,8 @@ __all__ = [
     "create_task",
     "get_llm_messages",
     "add_message",
+    "cleanup_sandbox_for_task",
+    "delete_sandbox",
     "TaskStatus",
     "TPFC_CONFIG",
     "AgentCreateRequest",
