@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from areal import PPOTrainer
 from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
@@ -68,6 +70,50 @@ def unpatch_ppo_actor() -> None:
     if hasattr(PPOActor, "_original_compute_advantages"):
         PPOActor.compute_advantages = PPOActor._original_compute_advantages
         del PPOActor._original_compute_advantages
+
+
+def _merge_cached_and_new(
+    cached_trajs: list[dict[str, Any]],
+    new_trajs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge cached and newly-generated trajectory dicts.
+
+    Both are lists of trajectory dicts with shape [1, seq_len].
+    Returns a list with a single concatenated dict of shape [total, max_seqlen].
+
+    Note: cached_trajs come from tree store with shape [1, seq_len] each.
+    new_trajs come from GroupedRolloutWorkflow as a single dict with shape
+    [group_size, max_seqlen] or as individual [1, seq_len] dicts.
+    """
+    from areal.utils.data import concat_padded_tensors
+
+    all_trajs = list(cached_trajs)
+
+    # new_trajs might be a single grouped dict or individual dicts
+    if len(new_trajs) == 1:
+        new_dict = new_trajs[0]
+        batch_size = new_dict["input_ids"].shape[0]
+        if batch_size > 1:
+            # Already grouped — split into individual, then concat all
+            for i in range(batch_size):
+                single = {}
+                for k, v in new_dict.items():
+                    if isinstance(v, torch.Tensor) and v.dim() >= 1:
+                        single[k] = v[i:i+1]
+                    else:
+                        single[k] = v
+                all_trajs.append(single)
+        else:
+            all_trajs.append(new_dict)
+    else:
+        all_trajs.extend(new_trajs)
+
+    if not all_trajs:
+        return []
+
+    # Concatenate all into one grouped dict
+    merged = concat_padded_tensors(all_trajs)
+    return [merged]
 
 
 class _CacheAwareBatchBuilder:
