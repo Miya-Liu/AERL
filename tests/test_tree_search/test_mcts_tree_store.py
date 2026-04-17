@@ -215,3 +215,41 @@ class TestMCTSTreeStoreTrainedFlag:
         s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
         assert store.get_reward("q1", s0) == 1.0
         assert store.get_reward("q1", s1) == 0.5
+
+
+class TestMCTSTreeStoreLoadTrajectories:
+    def test_load_trajectories_basic(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        trajs = store.load_trajectories("q1", n_samples=1)
+        assert len(trajs) == 1
+        traj = trajs[0]
+        assert "input_ids" in traj
+        assert "logprobs" in traj
+        assert "loss_mask" in traj
+        assert "attention_mask" in traj
+        assert "rewards" in traj
+        assert "versions" in traj
+        assert traj["input_ids"].shape[0] == 1
+        assert traj["rewards"].item() == 1.0
+
+    def test_load_trajectories_multiple(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        trajs = store.load_trajectories("q1", n_samples=2)
+        assert len(trajs) == 2
+
+    def test_load_trajectories_only_untrained(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        store.set_trained("q1", s0, True)
+        trajs = store.load_trajectories("q1", n_samples=2)
+        assert len(trajs) == 1
+        assert trajs[0]["rewards"].item() == 0.5
+
+    def test_load_trajectories_returns_empty_for_unknown_query(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        trajs = store.load_trajectories("nonexistent", n_samples=1)
+        assert trajs == []

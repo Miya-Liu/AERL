@@ -154,6 +154,69 @@ class MCTSTreeStore:
                     break
         return result
 
+    def load_trajectories(self, query_id: str, n_samples: int) -> list[dict[str, Any]]:
+        """Extract up to n_samples untrained trajectories from tree as training dicts.
+
+        Returns list of dicts with keys: input_ids, logprobs, loss_mask,
+        attention_mask, rewards, versions — each with shape [1, seq_len].
+        Also includes _mcts_query_id and _mcts_seq_id for tracking.
+        """
+        if query_id not in self.trees:
+            return []
+
+        untrained_ids = self.get_untrained_seq_ids(query_id, n_samples)
+        result = []
+        for seq_id in untrained_ids:
+            root = self.trees[query_id]
+            path_nodes = root.get_path_nodes(seq_id)
+
+            # Reconstruct full token sequence and metadata from path
+            all_tokens = []
+            all_logprobs = []
+            all_versions = []
+            prompt_len_total = 0
+
+            for node in path_nodes:
+                all_tokens.extend(node.tokens)
+                if node.logprobs:
+                    all_logprobs.extend(node.logprobs)
+                else:
+                    all_logprobs.extend([0.0] * len(node.tokens))
+                if node.versions:
+                    all_versions.extend(node.versions)
+                else:
+                    all_versions.extend([0] * len(node.tokens))
+                prompt_len_total += node.prompt_len
+
+            seq_len = len(all_tokens)
+
+            # Build tensors with [1, seq_len] shape (batch dim)
+            input_ids = torch.tensor(all_tokens, dtype=torch.int32).unsqueeze(0)
+            logprobs_t = torch.tensor(all_logprobs, dtype=torch.float32).unsqueeze(0)
+            versions_t = torch.tensor(all_versions, dtype=torch.int32).unsqueeze(0)
+            attention_mask = torch.ones(seq_len, dtype=torch.bool).unsqueeze(0)
+
+            # loss_mask: 0 for prompt tokens, 1 for response tokens
+            loss_mask = torch.zeros(seq_len, dtype=torch.int32)
+            loss_mask[prompt_len_total:] = 1
+            loss_mask = loss_mask.unsqueeze(0)
+
+            reward_val = self.get_reward(query_id, seq_id)
+            rewards = torch.tensor([reward_val], dtype=torch.float32).unsqueeze(0)
+
+            result.append({
+                "input_ids": input_ids,
+                "logprobs": logprobs_t,
+                "loss_mask": loss_mask,
+                "attention_mask": attention_mask,
+                "rewards": rewards,
+                "versions": versions_t,
+                "_mcts_query_id": query_id,
+                "_mcts_seq_id": seq_id,
+            })
+
+        return result
+
     def reset_trained_flags(self) -> None:
         for key in self._trained:
             self._trained[key] = False
