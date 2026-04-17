@@ -38,6 +38,9 @@ class MCTSTreeStore:
         self._total_values: dict[tuple[str, int], float] = {}
         self._q_values: dict[tuple[str, int], float] = {}
 
+        self._trained: dict[tuple[str, int], bool] = {}
+        self._rewards: dict[tuple[str, int], float] = {}
+
     def start_sequence(self, query_id: str) -> int:
         """Create root if needed, assign a seq_id, set cursor at root."""
         tree_idx = len(self.trees)
@@ -57,6 +60,8 @@ class MCTSTreeStore:
     def finish_sequence(self, query_id: str, seq_id: int, reward: float) -> None:
         """Run MCTS backup along the completed path, clear cursor."""
         self._backup(query_id, seq_id, reward)
+        self._rewards[(query_id, seq_id)] = reward
+        self._trained[(query_id, seq_id)] = False
         del self._cursors[(query_id, seq_id)]
 
     def _backup(self, query_id: str, seq_id: int, reward: float) -> None:
@@ -115,6 +120,44 @@ class MCTSTreeStore:
             mask[response_start : boundaries[i + 1]] = True
         return mask
 
+    def set_trained(self, query_id: str, seq_id: int, trained: bool = True) -> None:
+        self._trained[(query_id, seq_id)] = trained
+
+    def is_trained(self, query_id: str, seq_id: int) -> bool:
+        return self._trained.get((query_id, seq_id), False)
+
+    def get_reward(self, query_id: str, seq_id: int) -> float:
+        return self._rewards.get((query_id, seq_id), 0.0)
+
+    def get_untrained_count(self, query_id: str) -> int:
+        if query_id not in self.trees:
+            return 0
+        root = self.trees[query_id]
+        return sum(
+            1 for sid in set(root.sequence_ids)
+            if not self.is_trained(query_id, sid)
+        )
+
+    def get_untrained_seq_ids(self, query_id: str, n_samples: int) -> list[int]:
+        if query_id not in self.trees:
+            return []
+        root = self.trees[query_id]
+        result = []
+        seen = set()
+        for sid in root.sequence_ids:
+            if sid in seen:
+                continue
+            seen.add(sid)
+            if not self.is_trained(query_id, sid):
+                result.append(sid)
+                if len(result) >= n_samples:
+                    break
+        return result
+
+    def reset_trained_flags(self) -> None:
+        for key in self._trained:
+            self._trained[key] = False
+
     def clear(self) -> None:
         """Reset all trees, stats, and cursors."""
         self.trees.clear()
@@ -123,3 +166,5 @@ class MCTSTreeStore:
         self._visit_counts.clear()
         self._total_values.clear()
         self._q_values.clear()
+        self._trained.clear()
+        self._rewards.clear()

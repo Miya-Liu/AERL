@@ -179,3 +179,39 @@ class TestTrieNodeExtendedFields:
         child = root.add_turn(turn, seq_id=0, logprobs=logprobs, versions=versions)
         assert child.logprobs == [-0.1, -0.2, -0.3, -0.4]
         assert child.versions == [0, 0, 0, 0]
+
+
+class TestMCTSTreeStoreTrainedFlag:
+    def test_trained_flag_default_false(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        assert store.is_trained("q1", seq_id) is False
+
+    def test_set_trained(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.set_trained("q1", seq_id, True)
+        assert store.is_trained("q1", seq_id) is True
+
+    def test_get_untrained_count(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        s2 = store.insert_trajectory("q1", [1, 2, 10, 3, 6], reward=0.3)
+        assert store.get_untrained_count("q1") == 3
+        store.set_trained("q1", s0, True)
+        assert store.get_untrained_count("q1") == 2
+
+    def test_reset_trained_flags(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.set_trained("q1", s0, True)
+        store.reset_trained_flags()
+        assert store.is_trained("q1", s0) is False
+
+    def test_reward_stored_per_trajectory(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        assert store.get_reward("q1", s0) == 1.0
+        assert store.get_reward("q1", s1) == 0.5
