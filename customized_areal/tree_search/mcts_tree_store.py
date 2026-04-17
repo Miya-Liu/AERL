@@ -51,10 +51,17 @@ class MCTSTreeStore:
         self._cursors[(query_id, seq_id)] = root
         return seq_id
 
-    def add_turn(self, query_id: str, seq_id: int, turn: Turn) -> None:
+    def add_turn(
+        self,
+        query_id: str,
+        seq_id: int,
+        turn: Turn,
+        logprobs: list[float] | None = None,
+        versions: list[int] | None = None,
+    ) -> None:
         """Add a single turn at the cursor position, advance cursor."""
         cursor = self._cursors[(query_id, seq_id)]
-        child = cursor.add_turn(turn, seq_id)
+        child = cursor.add_turn(turn, seq_id, logprobs=logprobs, versions=versions)
         self._cursors[(query_id, seq_id)] = child
 
     def finish_sequence(self, query_id: str, seq_id: int, reward: float) -> None:
@@ -75,12 +82,41 @@ class MCTSTreeStore:
             self._total_values[key] = self._total_values.get(key, 0.0) + reward
             self._q_values[key] = self._total_values[key] / self._visit_counts[key]
 
-    def insert_trajectory(self, query_id: str, input_ids: list[int], reward: float) -> int:
+    @staticmethod
+    def _split_metadata_to_turns(turns: list[Turn], metadata: list) -> list[list]:
+        """Split a flat metadata list (logprobs or versions) into per-turn chunks.
+
+        Each turn has prompt_tokens + response_tokens tokens total.
+        """
+        result = []
+        offset = 0
+        for turn in turns:
+            n = len(turn.prompt_tokens) + len(turn.response_tokens)
+            result.append(metadata[offset:offset + n])
+            offset += n
+        return result
+
+    def insert_trajectory(
+        self,
+        query_id: str,
+        input_ids: list[int],
+        reward: float,
+        logprobs: list[float] | None = None,
+        versions: list[int] | None = None,
+    ) -> int:
         """Convenience: split -> start_sequence -> add_turn loop -> finish_sequence."""
         turns = self.turn_splitter(input_ids)
         seq_id = self.start_sequence(query_id)
-        for turn in turns:
-            self.add_turn(query_id, seq_id, turn)
+
+        # Split logprobs/versions across turns to match token boundaries
+        turn_logprobs = self._split_metadata_to_turns(turns, logprobs) if logprobs else None
+        turn_versions = self._split_metadata_to_turns(turns, versions) if versions else None
+
+        for i, turn in enumerate(turns):
+            lp = turn_logprobs[i] if turn_logprobs is not None else None
+            vs = turn_versions[i] if turn_versions is not None else None
+            self.add_turn(query_id, seq_id, turn, logprobs=lp, versions=vs)
+
         self.finish_sequence(query_id, seq_id, reward)
         return seq_id
 
@@ -90,7 +126,19 @@ class MCTSTreeStore:
             query_id = _get_query_id(traj)
             input_ids = traj["input_ids"].tolist()
             reward = traj["rewards"].item() if traj["rewards"].dim() > 0 else traj["rewards"].item()
-            seq_id = self.insert_trajectory(query_id, input_ids, reward)
+
+            logprobs = traj["logprobs"].tolist() if "logprobs" in traj else None
+            # Handle 2D logprobs [batch, seq_len] -> take first row
+            if logprobs is not None and isinstance(logprobs[0], list):
+                logprobs = logprobs[0]
+
+            versions = traj["versions"].tolist() if "versions" in traj else None
+            if versions is not None and isinstance(versions[0], list):
+                versions = versions[0]
+
+            seq_id = self.insert_trajectory(
+                query_id, input_ids, reward, logprobs=logprobs, versions=versions
+            )
             traj["_mcts_seq_id"] = seq_id
             traj["_mcts_query_id"] = query_id
 

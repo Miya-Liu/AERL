@@ -253,3 +253,43 @@ class TestMCTSTreeStoreLoadTrajectories:
         store = MCTSTreeStore(_two_turn_splitter)
         trajs = store.load_trajectories("nonexistent", n_samples=1)
         assert trajs == []
+
+
+class TestMCTSTreeStoreInsertBatchWithMetadata:
+    def test_insert_batch_stores_logprobs_and_versions(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        trajectories = [
+            {
+                "input_ids": torch.tensor([1, 2, 10, 3, 4]),
+                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "rewards": torch.tensor([1.0]),
+                "logprobs": torch.tensor([-0.1, -0.2, -0.3, -0.4, -0.5]),
+                "versions": torch.tensor([0, 0, 0, 0, 0]),
+                "attention_mask": torch.tensor([1, 1, 1, 1, 1], dtype=torch.bool),
+            },
+        ]
+        store.insert_batch(trajectories)
+        query_id = trajectories[0]["_mcts_query_id"]
+        trajs = store.load_trajectories(query_id, n_samples=1)
+        assert len(trajs) == 1
+        torch.testing.assert_close(
+            trajs[0]["logprobs"].squeeze(0),
+            torch.tensor([-0.1, -0.2, -0.3, -0.4, -0.5]),
+        )
+
+    def test_insert_batch_stores_reward(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        trajectories = [
+            {
+                "input_ids": torch.tensor([1, 2, 10, 3, 4]),
+                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "rewards": torch.tensor([0.75]),
+                "logprobs": torch.tensor([-0.1, -0.2, -0.3, -0.4, -0.5]),
+                "versions": torch.tensor([0, 0, 0, 0, 0]),
+                "attention_mask": torch.tensor([1, 1, 1, 1, 1], dtype=torch.bool),
+            },
+        ]
+        store.insert_batch(trajectories)
+        query_id = trajectories[0]["_mcts_query_id"]
+        seq_id = trajectories[0]["_mcts_seq_id"]
+        assert store.get_reward(query_id, seq_id) == 0.75
