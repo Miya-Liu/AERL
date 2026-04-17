@@ -155,3 +155,27 @@ class TestMCTSTreeStoreClear:
         assert len(store._cursors) == 0
         assert len(store._visit_counts) == 0
         assert len(store._q_values) == 0
+
+
+class TestTrieNodeExtendedFields:
+    def test_add_turn_stores_logprobs_and_versions(self):
+        from customized_areal.tree_search.trie_node import TrieNode
+        from customized_areal.tree_search.turn_splitter import Turn
+
+        root = TrieNode(tree_id=0)
+        turn = Turn(prompt_tokens=[1, 2], response_tokens=[3, 4])
+        child = root.add_turn(turn, seq_id=0)
+        assert child.logprobs == []
+        assert child.versions == []
+
+    def test_add_turn_with_logprobs_and_versions(self):
+        from customized_areal.tree_search.trie_node import TrieNode
+        from customized_areal.tree_search.turn_splitter import Turn
+
+        root = TrieNode(tree_id=0)
+        turn = Turn(prompt_tokens=[1, 2], response_tokens=[3, 4])
+        logprobs = [-0.1, -0.2, -0.3, -0.4]
+        versions = [0, 0, 0, 0]
+        child = root.add_turn(turn, seq_id=0, logprobs=logprobs, versions=versions)
+        assert child.logprobs == [-0.1, -0.2, -0.3, -0.4]
+        assert child.versions == [0, 0, 0, 0]

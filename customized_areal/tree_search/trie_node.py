@@ -24,8 +24,10 @@ class TrieNode:
     children: dict[int, TrieNode] = field(default_factory=dict)
     ancestors: list[TrieNode] = field(default_factory=list)
     nodes: list[TrieNode] = field(default_factory=list)
+    logprobs: list[float] = field(default_factory=list)
+    versions: list[int] = field(default_factory=list)
 
-    def add_turn(self, turn: Turn, seq_id: int) -> TrieNode:
+    def add_turn(self, turn: Turn, seq_id: int, logprobs: list[float] | None = None, versions: list[int] | None = None) -> TrieNode:
         """Add a single turn as a child, keyed by first response token.
 
         Returns the child node (cursor for next turn).
@@ -37,11 +39,15 @@ class TrieNode:
         key = turn.response_tokens[0]
         if key not in self.children:
             combined_tokens = turn.prompt_tokens + turn.response_tokens
+            combined_logprobs = logprobs if logprobs is not None else []
+            combined_versions = versions if versions is not None else []
             child = TrieNode(
                 tree_id=self.tree_id,
                 tokens=combined_tokens,
                 prompt_len=len(turn.prompt_tokens),
                 ancestors=self.ancestors + [self],
+                logprobs=combined_logprobs,
+                versions=combined_versions,
             )
             self.children[key] = child
         child = self.children[key]
