@@ -61,8 +61,7 @@ def main(args: list[str] | None = None) -> None:
     )
 
     logger.info(
-        "Cache config: dir=%s, n_samples=%d, "
-        "tree_mode=%s, teacher=%s",
+        "Cache config: dir=%s, n_samples=%d, tree_mode=%s, teacher=%s",
         cache_dir,
         n_samples,
         tree_backup_config.mode.value,

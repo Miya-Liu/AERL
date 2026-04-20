@@ -12,9 +12,6 @@ import hashlib
 from typing import Any
 
 from customized_areal.on_policy_distill.core.agent import OnPolicyDistillAgent
-from customized_areal.on_policy_distill.core.reward_compute import (
-    _compute_token_rewards,
-)
 from customized_areal.on_policy_distill.core.teacher_client import (
     TeacherConfig,
 )
@@ -79,9 +76,7 @@ def _build_student_only_position_rewards(
             )
         )
 
-    logger.debug(
-        "Built student-only position rewards: %d positions", len(results)
-    )
+    logger.debug("Built student-only position rewards: %d positions", len(results))
     return results
 
 
@@ -177,7 +172,9 @@ class TreeDistillAgent(OnPolicyDistillAgent):
                                     str(completion_messages).encode()
                                 ).hexdigest()[:16]
                                 # result is a float (scalar reward) from parent
-                                scalar_reward = result if isinstance(result, (int, float)) else 0.0
+                                scalar_reward = (
+                                    result if isinstance(result, (int, float)) else 0.0
+                                )
                                 logger.info(
                                     "Built student-only position rewards: %d positions, "
                                     "scalar_reward=%.4f",

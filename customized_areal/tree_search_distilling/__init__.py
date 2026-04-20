@@ -5,10 +5,6 @@ and rollout caching in a single training step.
 """
 
 from customized_areal.tree_search_distilling.agent import TreeDistillAgent
-
-try:
-    from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
-except ModuleNotFoundError:
-    TreeDistillPPOTrainer = None  # type: ignore[assignment,misc]
+from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
 
 __all__ = ["TreeDistillAgent", "TreeDistillPPOTrainer"]
