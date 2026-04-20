@@ -149,6 +149,8 @@ teacher_missing_logprob: -23.0
 # cache_dir: Directory for rollout cache and MCTS tree checkpoints
 # Set via command line: cache_dir=/path/to/cache
 cache_dir: ""
+assistant_marker: ""
+student_top_k: 10
 
 # Datasets
 train_dataset:

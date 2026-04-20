@@ -97,6 +97,22 @@ class OnPolicyDistillConfig(PPOConfig):
         metadata={"help": "Bias to add to rewards."},
     )
 
+    # Tree search distilling configuration
+    cache_dir: str = field(
+        default="",
+        metadata={"help": "Directory for rollout cache and MCTS tree checkpoints."},
+    )
+    assistant_marker: str = field(
+        default="",
+        metadata={"help": "Marker string for assistant turns. Auto-detected if empty."},
+    )
+    student_top_k: int = field(
+        default=10,
+        metadata={
+            "help": "Number of top candidate tokens per position for student logprob gathering."
+        },
+    )
+
     # Teacher model configuration
     teacher_base_url: str = field(
         default="http://localhost:8001",

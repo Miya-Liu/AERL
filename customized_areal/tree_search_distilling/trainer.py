@@ -124,7 +124,7 @@ class TreeDistillPPOTrainer(CacheAwarePPOTrainer):
 
             self.agent = TreeDistillAgent(
                 teacher_config=teacher_config,
-                student_top_k=getattr(self.config, "teacher_top_k", 10),
+                student_top_k=getattr(self.config, "student_top_k", 10),
             )
 
         # Get workflow configuration from config

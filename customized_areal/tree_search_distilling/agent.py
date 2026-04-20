@@ -189,7 +189,9 @@ class TreeDistillAgent(OnPolicyDistillAgent):
                                 }
                 except Exception as e:
                     logger.warning(
-                        "Failed to build student-only position rewards: %s", e
+                        "Failed to build student-only position rewards: %s",
+                        e,
+                        exc_info=True,
                     )
 
         return result
