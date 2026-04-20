@@ -117,13 +117,26 @@ Based on existing `config_on_policy_distill.yaml` with added cache/tree fields:
 
 ## No-Teacher Behavior
 
-When no teacher model is configured, the trainer must cleanly fall back to tree-search-only GRPO training with no distillation component:
+When no teacher model is configured, the trainer falls back to tree-search-only GRPO training — but **student position-level logprobs must still be saved for logging/analysis**.
+
+### What changes without a teacher
 
 1. **`config.teacher is None`** — `PPOTrainer` will not create a teacher engine, skip `teacher.compute_logp()`, and never inject `teacher_logp`, `rl_loss_weight`, or `distill_loss_weight` into batch dicts.
-2. **`teacher_model_name == ""`** (in `OnPolicyDistillConfig`) — the agent will not build a `TeacherClient`, so `position_rewards` stays empty and the agent returns only a scalar reward.
+2. **`teacher_model_name == ""`** — the agent will not build a `TeacherClient`.
 3. **`grpo_distill_loss_fn`** — when `position_rewards` is `None` in `input_data`, the distillation branch is entirely skipped and loss equals pure GRPO loss.
 
-No special handling is needed in `TreeDistillPPOTrainer` itself — the existing gating in `grpo_distill_loss_fn` and `OnPolicyDistillAgent` already handles this correctly. The tree backup advantage patch still applies and works with scalar-only rewards.
+### Saving student position-level logprobs without a teacher
+
+Currently, `OnPolicyDistillAgent` only builds `PositionRewardInfo` objects when `teacher_client is not None` — because the reward computation requires teacher logprobs. We need a **student-only path** that builds `PositionRewardInfo` from the student's own top-k logprobs when no teacher is available:
+
+- **`candidate_token_ids`**: from `student_top_k_logprobs` (top-k token IDs at each position)
+- **`logprobs`**: student's own logprobs for those tokens
+- **`rewards`**: all zeros (no teacher signal)
+- **`chosen_index`**: position of the actually-generated token in the candidate list
+
+This ensures `MultiCandidateFSDPEngine` still gathers multi-candidate logprobs during training (the 2D label tensor is built from `candidate_token_ids`), and the student's per-position logprob distribution is available for logging. The position-level GRPO loss will contribute nothing because rewards are zero.
+
+Implementation: add a `_build_student_only_position_rewards()` method to the agent (or a helper function) that constructs `PositionRewardInfo` objects from `student_top_k_logprobs` without calling the teacher.
 
 ## Implementation Notes
 
