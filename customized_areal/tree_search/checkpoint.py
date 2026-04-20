@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.trie_node import TrieNode
@@ -25,7 +25,21 @@ class TreeCheckpointManager:
             filepath = os.path.join(self.save_dir, f"query_{query_id}.json")
             with open(filepath, "w") as f:
                 json.dump(tree_data, f)
-        metadata = {"next_seq_id": tree_store._next_seq_id}
+
+        # Serialize trained flags and rewards
+        trained_data = {
+            f"{qid}:{sid}": trained
+            for (qid, sid), trained in tree_store._trained.items()
+        }
+        rewards_data = {
+            f"{qid}:{sid}": reward for (qid, sid), reward in tree_store._rewards.items()
+        }
+
+        metadata = {
+            "next_seq_id": tree_store._next_seq_id,
+            "trained": trained_data,
+            "rewards": rewards_data,
+        }
         with open(os.path.join(self.save_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
 
@@ -41,7 +55,9 @@ class TreeCheckpointManager:
             filepath = os.path.join(self.save_dir, filename)
             with open(filepath) as f:
                 tree_data = json.load(f)
-            root = self._deserialize_node(tree_data["root"], parent=None, tree_id=len(store.trees))
+            root = self._deserialize_node(
+                tree_data["root"], parent=None, tree_id=len(store.trees)
+            )
             root.sequence_ids = list(root.sequence_ids)
             store.trees[query_id] = root
         return store
@@ -60,9 +76,15 @@ class TreeCheckpointManager:
         }
         if node.prompt_len > 0:
             result["prompt_len"] = node.prompt_len
+        if node.logprobs:
+            result["logprobs"] = node.logprobs
+        if node.versions:
+            result["versions"] = node.versions
         return result
 
-    def _deserialize_node(self, data: dict, parent: TrieNode | None, tree_id: int) -> TrieNode:
+    def _deserialize_node(
+        self, data: dict, parent: TrieNode | None, tree_id: int
+    ) -> TrieNode:
         node = TrieNode(
             tree_id=tree_id,
             start_idx=data["start_idx"],
@@ -70,6 +92,8 @@ class TreeCheckpointManager:
             tokens=data["tokens"],
             sequence_ids=data["sequence_ids"],
             prompt_len=data.get("prompt_len", 0),
+            logprobs=data.get("logprobs", []),
+            versions=data.get("versions", []),
         )
         if parent is not None:
             node.ancestors = parent.ancestors + [parent]

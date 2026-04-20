@@ -184,7 +184,9 @@ class TeacherClient:
         # (prompt + generated). We only need the positions corresponding to
         # the output tokens, which start at index len(input_ids).
         prompt_len = len(input_ids)
-        output_top_logprobs = top_logprobs_list[prompt_len : prompt_len + num_output_tokens]
+        output_top_logprobs = top_logprobs_list[
+            prompt_len : prompt_len + num_output_tokens
+        ]
 
         if len(output_top_logprobs) < num_output_tokens:
             logger.warning(
@@ -203,7 +205,10 @@ class TeacherClient:
 
             # Build a lookup from the teacher's top-k for this position.
             teacher_logprob_map: dict[int, float] = {}
-            if pos_idx < len(output_top_logprobs) and output_top_logprobs[pos_idx] is not None:
+            if (
+                pos_idx < len(output_top_logprobs)
+                and output_top_logprobs[pos_idx] is not None
+            ):
                 for token_entry in output_top_logprobs[pos_idx]:
                     # Each entry is like {"token_id": int, "logprob": float}
                     # or {"token": str, "logprob": float} depending on API.
@@ -252,7 +257,11 @@ class TeacherClient:
                 response = await client.post("/v1/completions", json=payload)
                 response.raise_for_status()
                 return response.json()
-            except (httpx.HTTPStatusError, httpx.RequestError, httpx.TimeoutException) as exc:
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                httpx.TimeoutException,
+            ) as exc:
                 last_exc = exc
                 logger.warning(
                     "Teacher API request failed (attempt %d/%d): %s",

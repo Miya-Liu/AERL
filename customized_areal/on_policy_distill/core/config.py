@@ -104,7 +104,9 @@ class OnPolicyDistillConfig(PPOConfig):
     )
     teacher_model_name: str = field(
         default="",
-        metadata={"help": "Teacher model name for the inference API. Required for teacher distillation."},
+        metadata={
+            "help": "Teacher model name for the inference API. Required for teacher distillation."
+        },
     )
     teacher_top_k: int = field(
         default=10,
@@ -120,5 +122,7 @@ class OnPolicyDistillConfig(PPOConfig):
     )
     teacher_missing_logprob: float = field(
         default=-23.0,
-        metadata={"help": "Default logprob for tokens not in teacher's top-k (log(1e-10) ≈ -23.0)."},
+        metadata={
+            "help": "Default logprob for tokens not in teacher's top-k (log(1e-10) ≈ -23.0)."
+        },
     )

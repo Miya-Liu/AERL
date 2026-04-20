@@ -28,6 +28,7 @@ Example
 from __future__ import annotations
 
 from areal.utils import logging
+
 from ..proxy.cache import PositionRewardInfo
 from .teacher_client import TeacherClient
 
@@ -83,12 +84,12 @@ async def _compute_token_rewards(
         candidate_token_ids.append(candidates)
 
     # Query the teacher for logprobs of the candidate tokens.
-    teacher_logprobs_per_pos: list[dict[int, float]] = (
-        await teacher_client.get_logprobs_for_candidates(
-            input_ids=student_input_ids,
-            output_ids=student_output_ids,
-            candidate_token_ids=candidate_token_ids,
-        )
+    teacher_logprobs_per_pos: list[
+        dict[int, float]
+    ] = await teacher_client.get_logprobs_for_candidates(
+        input_ids=student_input_ids,
+        output_ids=student_output_ids,
+        candidate_token_ids=candidate_token_ids,
     )
 
     missing_logprob = teacher_client.config.teacher_missing_logprob
@@ -139,9 +140,7 @@ async def _compute_token_rewards(
             )
         )
 
-    logger.debug(
-        "Computed token rewards for %d positions.", len(results)
-    )
+    logger.debug("Computed token rewards for %d positions.", len(results))
     return results
 
 

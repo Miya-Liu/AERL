@@ -2,15 +2,15 @@
 
 ## Overview
 
-| Aspect | `areal/experimental/openai/proxy/` | `customized_areal/on_policy_distill/proxy/` |
-|--------|-----------------------------------|---------------------------------------------|
-| **Purpose** | Standard proxy server for RL training | Extended proxy with token-level reward support |
-| **Reward Types** | Scalar only | Scalar + Token-wise + Position-wise |
-| **Cache Design** | Server-side cache | Server-side cache with token-level storage |
-| **API** | HTTP REST API | Extended HTTP REST API |
-| **Local Cache** | No | **No** - Token rewards via HTTP API |
+| Aspect           | `areal/experimental/openai/proxy/`    | `customized_areal/on_policy_distill/proxy/`    |
+| ---------------- | ------------------------------------- | ---------------------------------------------- |
+| **Purpose**      | Standard proxy server for RL training | Extended proxy with token-level reward support |
+| **Reward Types** | Scalar only                           | Scalar + Token-wise + Position-wise            |
+| **Cache Design** | Server-side cache                     | Server-side cache with token-level storage     |
+| **API**          | HTTP REST API                         | Extended HTTP REST API                         |
+| **Local Cache**  | No                                    | **No** - Token rewards via HTTP API            |
 
----
+______________________________________________________________________
 
 ## Architecture Comparison
 
@@ -67,27 +67,27 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
+______________________________________________________________________
 
 ## Key Changes
 
 ### 1. No Local Cache
 
-| Aspect | Before | After |
-|--------|--------|-------|
-| **Cache Location** | Local client + Server | Server only |
-| **Token Rewards** | Applied locally after import | Sent via HTTP during session |
-| **Import Step** | Required `import_from_server()` | **Eliminated** |
-| **Complexity** | Two-phase workflow | Single-phase workflow |
+| Aspect             | Before                          | After                        |
+| ------------------ | ------------------------------- | ---------------------------- |
+| **Cache Location** | Local client + Server           | Server only                  |
+| **Token Rewards**  | Applied locally after import    | Sent via HTTP during session |
+| **Import Step**    | Required `import_from_server()` | **Eliminated**               |
+| **Complexity**     | Two-phase workflow              | Single-phase workflow        |
 
 ### 2. New HTTP Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/rl/set_reward` | POST | Scalar reward (inherited) |
-| `/rl/set_token_rewards` | POST | **NEW** - Token-wise rewards |
-| `/rl/set_position_rewards` | POST | **NEW** - Position-wise rewards |
-| `/rl/compute_entropy` | POST | **NEW** - Compute entropy from logprobs |
+| Endpoint                   | Method | Description                             |
+| -------------------------- | ------ | --------------------------------------- |
+| `/rl/set_reward`           | POST   | Scalar reward (inherited)               |
+| `/rl/set_token_rewards`    | POST   | **NEW** - Token-wise rewards            |
+| `/rl/set_position_rewards` | POST   | **NEW** - Position-wise rewards         |
+| `/rl/compute_entropy`      | POST   | **NEW** - Compute entropy from logprobs |
 
 ### 3. New Data Models
 
@@ -135,7 +135,7 @@ class TokenRewardSessionData(SessionData):
         # Apply token rewards to interactions before export
 ```
 
----
+______________________________________________________________________
 
 ## Workflow Comparison
 
@@ -170,7 +170,7 @@ async with client:
 interactions = await client.export_interactions()
 ```
 
----
+______________________________________________________________________
 
 ## Usage Example
 
@@ -226,48 +226,51 @@ async with aiohttp.ClientSession() as http_session:
     interactions = await client.export_interactions()
 ```
 
----
+______________________________________________________________________
 
 ## Benefits of New Design
 
-| Benefit | Description |
-|---------|-------------|
-| **Simpler** | Single client, no local cache management |
-| **Consistent** | All rewards go through HTTP API |
-| **Scalable** | Server handles all state, easier to distribute |
-| **Cleaner** | No need for `import_from_server()` step |
+| Benefit        | Description                                       |
+| -------------- | ------------------------------------------------- |
+| **Simpler**    | Single client, no local cache management          |
+| **Consistent** | All rewards go through HTTP API                   |
+| **Scalable**   | Server handles all state, easier to distribute    |
+| **Cleaner**    | No need for `import_from_server()` step           |
 | **Compatible** | Still works with existing scalar reward workflows |
 
----
+______________________________________________________________________
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `proxy/server.py` | **NEW** - Extended server models and session data |
+| File                            | Change                                              |
+| ------------------------------- | --------------------------------------------------- |
+| `proxy/server.py`               | **NEW** - Extended server models and session data   |
 | `proxy/proxy_rollout_server.py` | **NEW** - FastAPI server with token-level endpoints |
-| `proxy/client.py` | **UPDATED** - Removed local cache, use HTTP API |
-| `proxy/workflow.py` | **UPDATED** - Simplified, no import_from_server() |
+| `proxy/client.py`               | **UPDATED** - Removed local cache, use HTTP API     |
+| `proxy/workflow.py`             | **UPDATED** - Simplified, no import_from_server()   |
 
----
+______________________________________________________________________
 
 ## Migration Guide
 
 ### From Old Design
 
 1. **Start new server**:
+
    ```bash
    python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server
    ```
 
-2. **Update client imports** (no change needed):
+1. **Update client imports** (no change needed):
+
    ```python
    from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
    ```
 
-3. **Remove `import_from_server()` calls** - no longer needed
+1. **Remove `import_from_server()` calls** - no longer needed
 
-4. **Call `set_rewards()` within session context**:
+1. **Call `set_rewards()` within session context**:
+
    ```python
    async with client:
        # ... run agent ...

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Optional
 
-from httpx import AsyncClient as AsyncHttpxClient, Client as SyncHttpxClient, Timeout
-from supabase.lib.client_options import AsyncClientOptions, SyncClientOptions
+from httpx import AsyncClient as AsyncHttpxClient
+from httpx import Client as SyncHttpxClient
+from httpx import Timeout
 from supabase import AsyncClient, Client, create_async_client, create_client
+from supabase.lib.client_options import AsyncClientOptions, SyncClientOptions
 
 
 class SyncDBConnection:
@@ -18,7 +19,7 @@ class SyncDBConnection:
     available (e.g., synchronous file operations or background tasks).
     """
 
-    _instance: Optional["SyncDBConnection"] = None
+    _instance: SyncDBConnection | None = None
     _lock = threading.Lock()
 
     def __new__(cls):
@@ -39,7 +40,9 @@ class SyncDBConnection:
             return
 
         supabase_url = os.environ.get("SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get(
+            "SUPABASE_ANON_KEY"
+        )
 
         if not supabase_url or not supabase_key:
             raise RuntimeError(
@@ -93,7 +96,7 @@ class DBConnection:
         result = await client.table("tasks").select("*").execute()
     """
 
-    _instance: Optional["DBConnection"] = None
+    _instance: DBConnection | None = None
     _lock = threading.Lock()
 
     def __new__(cls):
@@ -116,7 +119,9 @@ class DBConnection:
             return
 
         supabase_url = os.environ.get("SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get(
+            "SUPABASE_ANON_KEY"
+        )
 
         if not supabase_url or not supabase_key:
             raise RuntimeError(

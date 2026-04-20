@@ -1,7 +1,8 @@
 """Tests for client module."""
 
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 # Mock the areal imports before importing the module
 with patch.dict(
@@ -66,7 +67,9 @@ class TestOpenAIProxyClient:
         mock_session.post = AsyncMock(return_value=mock_response)
 
         # Mock parent methods
-        client._session_auth_headers = Mock(return_value={"Authorization": "Bearer token"})
+        client._session_auth_headers = Mock(
+            return_value={"Authorization": "Bearer token"}
+        )
         client.session_id = "test-session-id"
 
         with patch(
@@ -92,8 +95,18 @@ class TestOpenAIProxyClient:
             new_callable=AsyncMock,
         ) as mock_post:
             position_rewards = [
-                Mock(position=0, candidates=["a", "b"], rewards=[0.1, 0.5], chosen_index=1),
-                Mock(position=1, candidates=["c", "d"], rewards=[0.2, 0.6], chosen_index=0),
+                Mock(
+                    position=0,
+                    candidates=["a", "b"],
+                    rewards=[0.1, 0.5],
+                    chosen_index=1,
+                ),
+                Mock(
+                    position=1,
+                    candidates=["c", "d"],
+                    rewards=[0.2, 0.6],
+                    chosen_index=0,
+                ),
             ]
 
             await client.set_position_rewards("comp-1", position_rewards)
@@ -104,7 +117,9 @@ class TestOpenAIProxyClient:
         """Test set_last_rewards method."""
         with patch.object(client, "set_rewards", new_callable=AsyncMock) as mock_set:
             await client.set_last_rewards([0.1, 0.2, 0.3])
-            mock_set.assert_called_once_with(completion_id="", token_rewards=[0.1, 0.2, 0.3])
+            mock_set.assert_called_once_with(
+                completion_id="", token_rewards=[0.1, 0.2, 0.3]
+            )
 
     @pytest.mark.asyncio
     async def test_compute_entropy_success(self, client, mock_session):
@@ -119,7 +134,9 @@ class TestOpenAIProxyClient:
         client.session_id = "test-session-id"
 
         # Mock _session_auth_headers
-        client._session_auth_headers = Mock(return_value={"Authorization": "Bearer token"})
+        client._session_auth_headers = Mock(
+            return_value={"Authorization": "Bearer token"}
+        )
 
         entropies = await client.compute_entropy("comp-1")
         assert entropies == [0.5, 0.6, 0.7]
@@ -135,7 +152,9 @@ class TestOpenAIProxyClient:
     @pytest.mark.asyncio
     async def test_get_entropies_success(self, client):
         """Test successful get_entropies call."""
-        with patch.object(client, "compute_entropy", new_callable=AsyncMock) as mock_compute:
+        with patch.object(
+            client, "compute_entropy", new_callable=AsyncMock
+        ) as mock_compute:
             mock_compute.return_value = [0.5, 0.6, 0.7]
 
             entropies = await client.get_entropies("comp-1")
@@ -144,7 +163,9 @@ class TestOpenAIProxyClient:
     @pytest.mark.asyncio
     async def test_get_entropies_failure(self, client):
         """Test get_entropies when compute_entropy fails returns None."""
-        with patch.object(client, "compute_entropy", new_callable=AsyncMock) as mock_compute:
+        with patch.object(
+            client, "compute_entropy", new_callable=AsyncMock
+        ) as mock_compute:
             mock_compute.side_effect = Exception("Compute failed")
 
             entropies = await client.get_entropies("comp-1")

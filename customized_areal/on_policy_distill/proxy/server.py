@@ -11,29 +11,26 @@ token-level rewards directly on the proxy server.
 
 from __future__ import annotations
 
-import asyncio
 import threading
-import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import torch
 from pydantic import BaseModel
 
 from areal.experimental.openai.proxy.server import (
-    RL_START_SESSION_PATHNAME,
-    RL_END_SESSION_PATHNAME,
-    RL_SET_REWARD_PATHNAME,
     EXPORT_TRAJECTORIES_PATHNAME,
     GRANT_CAPACITY_PATHNAME,
-    StartSessionRequest,
-    StartSessionResponse,
-    SetRewardRequest,
+    RL_END_SESSION_PATHNAME,
+    RL_SET_REWARD_PATHNAME,
+    RL_START_SESSION_PATHNAME,
+    SESSION_TIMEOUT_SECONDS,
     ExportTrajectoriesRequest,
     ExportTrajectoriesResponse,
     SessionData,
-    serialize_interactions,
+    SetRewardRequest,
+    StartSessionRequest,
+    StartSessionResponse,
     deserialize_interactions,
-    SESSION_TIMEOUT_SECONDS,
+    serialize_interactions,
 )
 
 if TYPE_CHECKING:

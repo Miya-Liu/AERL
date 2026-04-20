@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 
@@ -92,7 +93,7 @@ class MCTSTreeStore:
         offset = 0
         for turn in turns:
             n = len(turn.prompt_tokens) + len(turn.response_tokens)
-            result.append(metadata[offset:offset + n])
+            result.append(metadata[offset : offset + n])
             offset += n
         return result
 
@@ -109,8 +110,12 @@ class MCTSTreeStore:
         seq_id = self.start_sequence(query_id)
 
         # Split logprobs/versions across turns to match token boundaries
-        turn_logprobs = self._split_metadata_to_turns(turns, logprobs) if logprobs else None
-        turn_versions = self._split_metadata_to_turns(turns, versions) if versions else None
+        turn_logprobs = (
+            self._split_metadata_to_turns(turns, logprobs) if logprobs else None
+        )
+        turn_versions = (
+            self._split_metadata_to_turns(turns, versions) if versions else None
+        )
 
         for i, turn in enumerate(turns):
             lp = turn_logprobs[i] if turn_logprobs is not None else None
@@ -125,7 +130,11 @@ class MCTSTreeStore:
         for traj in trajectories:
             query_id = _get_query_id(traj)
             input_ids = traj["input_ids"].tolist()
-            reward = traj["rewards"].item() if traj["rewards"].dim() > 0 else traj["rewards"].item()
+            reward = (
+                traj["rewards"].item()
+                if traj["rewards"].dim() > 0
+                else traj["rewards"].item()
+            )
 
             logprobs = traj["logprobs"].tolist() if "logprobs" in traj else None
             # Handle 2D logprobs [batch, seq_len] -> take first row
@@ -182,8 +191,7 @@ class MCTSTreeStore:
             return 0
         root = self.trees[query_id]
         return sum(
-            1 for sid in set(root.sequence_ids)
-            if not self.is_trained(query_id, sid)
+            1 for sid in set(root.sequence_ids) if not self.is_trained(query_id, sid)
         )
 
     def get_untrained_seq_ids(self, query_id: str, n_samples: int) -> list[int]:
@@ -252,16 +260,18 @@ class MCTSTreeStore:
             reward_val = self.get_reward(query_id, seq_id)
             rewards = torch.tensor([reward_val], dtype=torch.float32).unsqueeze(0)
 
-            result.append({
-                "input_ids": input_ids,
-                "logprobs": logprobs_t,
-                "loss_mask": loss_mask,
-                "attention_mask": attention_mask,
-                "rewards": rewards,
-                "versions": versions_t,
-                "_mcts_query_id": query_id,
-                "_mcts_seq_id": seq_id,
-            })
+            result.append(
+                {
+                    "input_ids": input_ids,
+                    "logprobs": logprobs_t,
+                    "loss_mask": loss_mask,
+                    "attention_mask": attention_mask,
+                    "rewards": rewards,
+                    "versions": versions_t,
+                    "_mcts_query_id": query_id,
+                    "_mcts_seq_id": seq_id,
+                }
+            )
 
         return result
 

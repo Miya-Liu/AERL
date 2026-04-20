@@ -1,5 +1,5 @@
 import torch
-import pytest
+
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.turn_splitter import Turn
 
@@ -7,7 +7,12 @@ from customized_areal.tree_search.turn_splitter import Turn
 def _two_turn_splitter(input_ids: list[int]) -> list[Turn]:
     try:
         split_pos = input_ids.index(10)
-        return [Turn(prompt_tokens=input_ids[:split_pos], response_tokens=input_ids[split_pos:])]
+        return [
+            Turn(
+                prompt_tokens=input_ids[:split_pos],
+                response_tokens=input_ids[split_pos:],
+            )
+        ]
     except ValueError:
         return [Turn(prompt_tokens=[], response_tokens=list(input_ids))]
 
@@ -69,10 +74,12 @@ class TestCacheAwareBatchBuilder:
         from customized_areal.tree_search.trainer import _CacheAwareBatchBuilder
 
         store = MCTSTreeStore(_two_turn_splitter)
-        store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0,
-                                logprobs=[-0.1]*5, versions=[0]*5)
-        store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5,
-                                logprobs=[-0.2]*5, versions=[0]*5)
+        store.insert_trajectory(
+            "q1", [1, 2, 10, 3, 4], reward=1.0, logprobs=[-0.1] * 5, versions=[0] * 5
+        )
+        store.insert_trajectory(
+            "q1", [1, 2, 10, 3, 5], reward=0.5, logprobs=[-0.2] * 5, versions=[0] * 5
+        )
 
         builder = _CacheAwareBatchBuilder(store, n_samples=4)
         cached, _ = builder.split_prompts([{"_mcts_query_id": "q1"}])
@@ -90,7 +97,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.1, -0.2, -0.3, -0.4, -0.5]], dtype=torch.float32),
+                "logprobs": torch.tensor(
+                    [[-0.1, -0.2, -0.3, -0.4, -0.5]], dtype=torch.float32
+                ),
                 "rewards": torch.tensor([[1.0]], dtype=torch.float32),
                 "versions": torch.tensor([[0, 0, 0, 0, 0]], dtype=torch.int32),
             },
@@ -98,7 +107,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 5]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.2, -0.2, -0.2, -0.2, -0.2]], dtype=torch.float32),
+                "logprobs": torch.tensor(
+                    [[-0.2, -0.2, -0.2, -0.2, -0.2]], dtype=torch.float32
+                ),
                 "rewards": torch.tensor([[0.5]], dtype=torch.float32),
                 "versions": torch.tensor([[0, 0, 0, 0, 0]], dtype=torch.int32),
             },
@@ -109,7 +120,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 6, 0]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 0]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1, 0]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.3, -0.3, -0.3, -0.3, -0.3, 0.0]], dtype=torch.float32),
+                "logprobs": torch.tensor(
+                    [[-0.3, -0.3, -0.3, -0.3, -0.3, 0.0]], dtype=torch.float32
+                ),
                 "rewards": torch.tensor([[0.3]], dtype=torch.float32),
                 "versions": torch.tensor([[0, 0, 0, 0, 0, 0]], dtype=torch.int32),
             },
@@ -127,7 +140,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.1, -0.2, -0.3, -0.4, -0.5]], dtype=torch.float32),
+                "logprobs": torch.tensor(
+                    [[-0.1, -0.2, -0.3, -0.4, -0.5]], dtype=torch.float32
+                ),
                 "rewards": torch.tensor([[1.0]], dtype=torch.float32),
                 "versions": torch.tensor([[0, 0, 0, 0, 0]], dtype=torch.int32),
             },
@@ -135,7 +150,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 5]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.2, -0.2, -0.2, -0.2, -0.2]], dtype=torch.float32),
+                "logprobs": torch.tensor(
+                    [[-0.2, -0.2, -0.2, -0.2, -0.2]], dtype=torch.float32
+                ),
                 "rewards": torch.tensor([[0.5]], dtype=torch.float32),
                 "versions": torch.tensor([[0, 0, 0, 0, 0]], dtype=torch.int32),
             },
@@ -144,12 +161,18 @@ class TestMergeCachedAndNew:
         # Grouped new trajs: shape [2, seq_len]
         new_trajs = [
             {
-                "input_ids": torch.tensor([[1, 2, 10, 3, 6], [1, 2, 10, 3, 7]], dtype=torch.int32),
-                "attention_mask": torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]], dtype=torch.bool),
-                "loss_mask": torch.tensor([[0, 0, 0, 1, 1], [0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.3]*5, [-0.4]*5], dtype=torch.float32),
+                "input_ids": torch.tensor(
+                    [[1, 2, 10, 3, 6], [1, 2, 10, 3, 7]], dtype=torch.int32
+                ),
+                "attention_mask": torch.tensor(
+                    [[1, 1, 1, 1, 1], [1, 1, 1, 1, 1]], dtype=torch.bool
+                ),
+                "loss_mask": torch.tensor(
+                    [[0, 0, 0, 1, 1], [0, 0, 0, 1, 1]], dtype=torch.int32
+                ),
+                "logprobs": torch.tensor([[-0.3] * 5, [-0.4] * 5], dtype=torch.float32),
                 "rewards": torch.tensor([[0.3], [0.2]], dtype=torch.float32),
-                "versions": torch.tensor([[0]*5, [0]*5], dtype=torch.int32),
+                "versions": torch.tensor([[0] * 5, [0] * 5], dtype=torch.int32),
             },
         ]
 
@@ -165,9 +188,9 @@ class TestMergeCachedAndNew:
                 "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
                 "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
                 "loss_mask": torch.tensor([[0, 0, 0, 1, 1]], dtype=torch.int32),
-                "logprobs": torch.tensor([[-0.1]*5], dtype=torch.float32),
+                "logprobs": torch.tensor([[-0.1] * 5], dtype=torch.float32),
                 "rewards": torch.tensor([[1.0]], dtype=torch.float32),
-                "versions": torch.tensor([[0]*5], dtype=torch.int32),
+                "versions": torch.tensor([[0] * 5], dtype=torch.int32),
             },
         ]
 

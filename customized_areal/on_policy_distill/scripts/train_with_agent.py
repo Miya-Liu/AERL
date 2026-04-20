@@ -18,6 +18,7 @@ project_root = pathlib.Path(__file__).parent.parent.parent.absolute()
 sys.path.insert(0, str(project_root))
 
 from customized_areal.on_policy_distill.config import OnPolicyDistillConfig
+
 from areal import PPOTrainer
 from areal.api.cli_args import load_expr_config
 from areal.dataset import get_custom_dataset

@@ -1,10 +1,14 @@
 # Token-Level Reward Proxy System
 
-This directory contains a customized OpenAI-compatible proxy system for AReaL that supports **token-level rewards** via HTTP API. Unlike the base AReaL implementation which only supports scalar rewards, this system allows assigning different reward values to individual tokens in the generated output.
+This directory contains a customized OpenAI-compatible proxy system for AReaL that
+supports **token-level rewards** via HTTP API. Unlike the base AReaL implementation
+which only supports scalar rewards, this system allows assigning different reward values
+to individual tokens in the generated output.
 
 ## Overview
 
-The token-level reward proxy system enables fine-grained RL training where each output token can have its own reward signal. This is useful for:
+The token-level reward proxy system enables fine-grained RL training where each output
+token can have its own reward signal. This is useful for:
 
 - **Sparse reward assignment**: Reward only specific tokens (e.g., final answer tokens)
 - **Credit assignment**: Different rewards for different parts of the response
@@ -50,13 +54,13 @@ The token-level reward proxy system enables fine-grained RL training where each 
 
 ## File Structure
 
-| File | Purpose |
-|------|---------|
-| `workflow.py` | `OpenAIProxyWorkflow` - Main workflow class that orchestrates episodes with token-level reward support |
-| `client.py` | `OpenAIProxyClient` - HTTP client with methods for setting token-level and position-level rewards |
-| `server.py` | Data models and session management for token-level rewards (`TokenRewardSessionData`, `PositionRewardInfo`, etc.) |
-| `types.py` | `InteractionWithTokenLevelReward` - Extended interaction type with token-level reward fields |
-| `proxy_rollout_server.py` | Extended FastAPI server with token-level reward endpoints |
+| File                      | Purpose                                                                                                           |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `workflow.py`             | `OpenAIProxyWorkflow` - Main workflow class that orchestrates episodes with token-level reward support            |
+| `client.py`               | `OpenAIProxyClient` - HTTP client with methods for setting token-level and position-level rewards                 |
+| `server.py`               | Data models and session management for token-level rewards (`TokenRewardSessionData`, `PositionRewardInfo`, etc.) |
+| `types.py`                | `InteractionWithTokenLevelReward` - Extended interaction type with token-level reward fields                      |
+| `proxy_rollout_server.py` | Extended FastAPI server with token-level reward endpoints                                                         |
 
 ## Key Features
 
@@ -73,7 +77,8 @@ return {
 
 ### 2. Position-Level Rewards
 
-Assign candidate-wise rewards at each generation position (useful for KL-regularized training):
+Assign candidate-wise rewards at each generation position (useful for KL-regularized
+training):
 
 ```python
 position_rewards = [
@@ -92,7 +97,8 @@ await client.set_position_rewards("completion_id", position_rewards)
 
 ### 3. HTTP-Based Communication
 
-Unlike previous designs that used local caches, this system communicates rewards via HTTP API:
+Unlike previous designs that used local caches, this system communicates rewards via
+HTTP API:
 
 - **Scalable**: Rewards are stored on the proxy server, not locally
 - **Clean separation**: Agent and trainer communicate via well-defined HTTP endpoints
@@ -110,29 +116,29 @@ class MyTokenRewardAgent:
         # Get proxy client for setting rewards
         proxy_client = extra_kwargs.get("proxy_client")
         api_key = extra_kwargs.get("api_key")
-        
+
         # Use OpenAI SDK with the proxy
         import openai
         client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=extra_kwargs.get("base_url")
         )
-        
+
         # Generate response
         response = await client.chat.completions.create(
             model="default",
             messages=[{"role": "user", "content": data["prompt"]}]
         )
-        
+
         # Extract completion ID from response
         completion_id = response.id
-        
+
         # Set token-level rewards (e.g., reward last token more)
         num_tokens = len(response.choices[0].logprobs.content)
         token_rewards = [0.0] * (num_tokens - 1) + [1.0]
-        
+
         await proxy_client.set_rewards(completion_id, token_rewards)
-        
+
         return {completion_id: token_rewards}
 
 # Create workflow
@@ -159,9 +165,9 @@ class PositionRewardAgent:
     async def run(self, data, **extra_kwargs):
         proxy_client = extra_kwargs.get("proxy_client")
         api_key = extra_kwargs.get("api_key")
-        
+
         # ... generate response and get top-k logprobs ...
-        
+
         # Set position-wise rewards
         position_rewards = []
         for pos, top_k in enumerate(top_k_logprobs):
@@ -174,9 +180,9 @@ class PositionRewardAgent:
                 chosen_index=0,  # Index of selected token
             )
             position_rewards.append(pr)
-        
+
         await proxy_client.set_position_rewards(completion_id, position_rewards)
-        
+
         # Return scalar reward for backward compatibility
         return total_reward
 ```
@@ -240,21 +246,21 @@ Response:
 
 The agent's `run()` method can return rewards in several formats:
 
-| Return Type | Example | Description |
-|-------------|---------|-------------|
-| `float` | `1.0` | Scalar reward for the last completion |
-| `dict[str, float]` | `{"id1": 1.0, "id2": 0.5}` | Completion ID → scalar reward |
-| `dict[str, list[float]]` | `{"id1": [0.0, 0.5, 1.0]}` | Completion ID → token-level rewards |
+| Return Type              | Example                    | Description                           |
+| ------------------------ | -------------------------- | ------------------------------------- |
+| `float`                  | `1.0`                      | Scalar reward for the last completion |
+| `dict[str, float]`       | `{"id1": 1.0, "id2": 0.5}` | Completion ID → scalar reward         |
+| `dict[str, list[float]]` | `{"id1": [0.0, 0.5, 1.0]}` | Completion ID → token-level rewards   |
 
 ## Comparison with Base AReaL
 
-| Feature | Base AReaL | This Customization |
-|---------|------------|-------------------|
-| Reward type | Scalar only | Token-level + Position-level |
-| Reward storage | Server-side | Server-side (HTTP API) |
-| Cache | None | None (HTTP-based) |
-| Modes | inline, subproc, online | inline only |
-| Entropy computation | Not supported | Via `/rl/compute_entropy` |
+| Feature             | Base AReaL              | This Customization           |
+| ------------------- | ----------------------- | ---------------------------- |
+| Reward type         | Scalar only             | Token-level + Position-level |
+| Reward storage      | Server-side             | Server-side (HTTP API)       |
+| Cache               | None                    | None (HTTP-based)            |
+| Modes               | inline, subproc, online | inline only                  |
+| Entropy computation | Not supported           | Via `/rl/compute_entropy`    |
 
 See `workflow_comparison.md` for a detailed comparison.
 
@@ -295,9 +301,9 @@ python -m pytest test_token_rewards.py -v
 Token-level rewards are applied during `export_interactions()`:
 
 1. Server stores rewards via `set_token_rewards()` or `set_position_rewards()`
-2. When session ends, `export_interactions()` applies rewards to interactions
-3. Rewards are propagated through the `InteractionWithTokenLevelReward` object
-4. `to_tensor_dict()` broadcasts token rewards to the full sequence tensor
+1. When session ends, `export_interactions()` applies rewards to interactions
+1. Rewards are propagated through the `InteractionWithTokenLevelReward` object
+1. `to_tensor_dict()` broadcasts token rewards to the full sequence tensor
 
 ### Memory Management
 

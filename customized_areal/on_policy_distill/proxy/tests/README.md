@@ -1,6 +1,7 @@
 # Proxy History Consistency Tests
 
-These tests verify that the customized `proxy_rollout_server` correctly stores and exports conversation history with token-level rewards.
+These tests verify that the customized `proxy_rollout_server` correctly stores and
+exports conversation history with token-level rewards.
 
 ## Test Overview
 
@@ -11,6 +12,7 @@ Tests history consistency when using an external proxy server.
 **Usage:**
 
 Terminal 1 - Start proxy server:
+
 ```bash
 python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server \
     --host 0.0.0.0 \
@@ -19,6 +21,7 @@ python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server \
 ```
 
 Terminal 2 - Run test:
+
 ```bash
 python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_consistency.py \
     --proxy-addr http://localhost:8000 \
@@ -27,21 +30,25 @@ python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_consist
 
 ### 2. `test_proxy_history_integration.py`
 
-Integrated test that automatically launches the proxy server, runs the test, and verifies history consistency.
+Integrated test that automatically launches the proxy server, runs the test, and
+verifies history consistency.
 
 **Usage:**
 
 Run with auto-managed proxy server:
+
 ```bash
 python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_integration.py
 ```
 
 Or specify a custom port:
+
 ```bash
 python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_integration.py --port 9999
 ```
 
 Or use an existing proxy server:
+
 ```bash
 # First, start proxy manually
 python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server --port 8000
@@ -54,10 +61,11 @@ python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_integra
 
 ## What the Tests Verify
 
-1. **Agent History Saving**: The agent saves its own copy of the conversation history during execution
-2. **Proxy Storage**: The proxy server stores interactions via the HTTP API
-3. **History Export**: After the session ends, the proxy exports all interactions
-4. **Consistency Check**: The test verifies:
+1. **Agent History Saving**: The agent saves its own copy of the conversation history
+   during execution
+1. **Proxy Storage**: The proxy server stores interactions via the HTTP API
+1. **History Export**: After the session ends, the proxy exports all interactions
+1. **Consistency Check**: The test verifies:
    - Number of completions match between agent and proxy
    - Completion IDs match exactly
    - Token-level rewards are properly stored
@@ -120,6 +128,7 @@ comp-1:
 ### Connection Refused
 
 If you see connection errors, ensure the proxy server is running:
+
 ```bash
 curl http://localhost:8000/docs
 ```
@@ -127,6 +136,7 @@ curl http://localhost:8000/docs
 ### Import Errors
 
 Make sure you're running from the project root:
+
 ```bash
 cd /dfs/share-groups/letrain/zhoujie/AReaL-main
 python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_integration.py
@@ -135,6 +145,7 @@ python customized_areal/on_policy_distill/proxy/tests/test_proxy_history_integra
 ### Port Already in Use
 
 If port 8000 (or your chosen port) is already in use:
+
 ```bash
 # Find and kill the process
 lsof -ti:8000 | xargs kill -9

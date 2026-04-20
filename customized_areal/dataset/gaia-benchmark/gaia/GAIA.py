@@ -1,11 +1,9 @@
 """GAIA 2023 dataset."""
 
-
 import json
 import os
 
 import datasets
-
 
 _CITATION = """ """
 
@@ -41,10 +39,19 @@ class GAIA_dataset(datasets.GeneratorBasedBuilder):
                 "task_id": datasets.Value("string"),
                 "Question": datasets.Value("string"),
                 "Level": datasets.Value("string"),
-                "Final answer": datasets.Value("string"), # ? for test values
+                "Final answer": datasets.Value("string"),  # ? for test values
                 "file_name": datasets.Value("string"),
                 "file_path": datasets.Value("string"),  # generated here
-                "Annotator Metadata": {k: datasets.Value("string") for k in ["Steps", "Number of steps", "How long did this take?", "Tools", "Number of tools"]} # "", 
+                "Annotator Metadata": {
+                    k: datasets.Value("string")
+                    for k in [
+                        "Steps",
+                        "Number of steps",
+                        "How long did this take?",
+                        "Tools",
+                        "Number of tools",
+                    ]
+                },  # "",
             }
         )
         return datasets.DatasetInfo(
@@ -68,29 +75,35 @@ class GAIA_dataset(datasets.GeneratorBasedBuilder):
         for split in ["test", "validation"]:
             root_file = dl_manager.download(os.path.join(year, split, "metadata.jsonl"))
             test_attached_files = {"": ""}
-            with open(root_file, "r", encoding="utf-8") as f:
+            with open(root_file, encoding="utf-8") as f:
                 for line in f:
                     cur_line = json.loads(line)
                     if cur_line["Level"] in levels and cur_line["file_name"] != "":
                         attached_file_name = cur_line["file_name"]
-                        attached_file = dl_manager.download(os.path.join(year, split, attached_file_name))
+                        attached_file = dl_manager.download(
+                            os.path.join(year, split, attached_file_name)
+                        )
                         test_attached_files[attached_file_name] = attached_file
 
             output.append(
                 datasets.SplitGenerator(
                     name=getattr(datasets.Split, split.upper()),
-                    gen_kwargs={"root_file": root_file, "attached_files": test_attached_files, "levels": levels},
+                    gen_kwargs={
+                        "root_file": root_file,
+                        "attached_files": test_attached_files,
+                        "levels": levels,
+                    },
                 )
             )
         return output
 
     # method parameters are unpacked from `gen_kwargs` as given in `_split_generators`
-    def _generate_examples(self, root_file: str, attached_files: dict, levels: list[int]):
-        with open(root_file, "r", encoding="utf-8") as f:
+    def _generate_examples(
+        self, root_file: str, attached_files: dict, levels: list[int]
+    ):
+        with open(root_file, encoding="utf-8") as f:
             for key, line in enumerate(f):
                 cur_line = json.loads(line)
                 if cur_line["Level"] in levels:
                     cur_line["file_path"] = attached_files[cur_line["file_name"]]
                     yield key, cur_line
-
-

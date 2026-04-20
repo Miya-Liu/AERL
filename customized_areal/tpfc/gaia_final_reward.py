@@ -35,8 +35,12 @@ def extract_answer(response_text):
     response_text = _flatten_content(response_text)
     start_tag = "<answer>"
     end_tag = "</answer>"
-    start_positions = [i for i in range(len(response_text)) if response_text.startswith(start_tag, i)]
-    end_positions = [i for i in range(len(response_text)) if response_text.startswith(end_tag, i)]
+    start_positions = [
+        i for i in range(len(response_text)) if response_text.startswith(start_tag, i)
+    ]
+    end_positions = [
+        i for i in range(len(response_text)) if response_text.startswith(end_tag, i)
+    ]
 
     for start_pos in reversed(start_positions):
         for end_pos in end_positions:
@@ -109,7 +113,9 @@ def call_openai_compatible_model(
         ssl_context = ssl._create_unverified_context()
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
+        with urllib.request.urlopen(
+            request, timeout=timeout, context=ssl_context
+        ) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -128,7 +134,7 @@ def parse_judge_score(judge_response_text):
     if start_pos < 0 or end_pos < 0 or start_pos >= end_pos:
         return 0.0
 
-    content = stripped[start_pos + 7:end_pos].strip()
+    content = stripped[start_pos + 7 : end_pos].strip()
     try:
         score = float(content)
         return 1.0 if score >= 0.9 else 0.0

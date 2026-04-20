@@ -27,7 +27,13 @@ class TrieNode:
     logprobs: list[float] = field(default_factory=list)
     versions: list[int] = field(default_factory=list)
 
-    def add_turn(self, turn: Turn, seq_id: int, logprobs: list[float] | None = None, versions: list[int] | None = None) -> TrieNode:
+    def add_turn(
+        self,
+        turn: Turn,
+        seq_id: int,
+        logprobs: list[float] | None = None,
+        versions: list[int] | None = None,
+    ) -> TrieNode:
         """Add a single turn as a child, keyed by first response token.
 
         Returns the child node (cursor for next turn).

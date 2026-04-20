@@ -11,11 +11,9 @@ from collections.abc import Callable
 from typing import Any
 
 import torch
-import torch.distributed as dist
 
 from areal.engine.fsdp_engine import FSDPEngine
 from areal.utils import logging
-from areal.utils.functional import gather_logprobs_entropy
 
 from ..training.logprobs import gather_logprobs_entropy_multi_candidates
 
@@ -244,7 +242,6 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         2. Compute multi-candidate logprobs
         3. Pass multi-candidate logprobs to loss function
         """
-        from areal.engine.core import compute_total_loss_weight
 
         if self.config.is_critic and self.enable_tree_training:
             raise NotImplementedError(
@@ -254,7 +251,12 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         if not self.config.is_critic:
             if self.enable_tree_training:
                 return super()._compute_logprobs_and_loss(
-                    logits, ctx, loss_fn, loss_weight_fn, total_loss_weight, loss_multiplier,
+                    logits,
+                    ctx,
+                    loss_fn,
+                    loss_weight_fn,
+                    total_loss_weight,
+                    loss_multiplier,
                 )
             else:
                 # Check if we have multi-candidate data

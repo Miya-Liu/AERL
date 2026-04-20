@@ -1,8 +1,10 @@
-from random import randint
 import time
+from random import randint
+
 
 class UhOh(Exception):
     pass
+
 
 class Hmm:
     def __init__(self):
@@ -14,9 +16,11 @@ class Hmm:
         else:
             raise UhOh()
 
+
 def Okay():
     while True:
         yield Hmm()
+
 
 def keep_trying(go, first_try=True):
     maybe = next(go)
@@ -29,6 +33,7 @@ def keep_trying(go, first_try=True):
             print("Please wait patiently...")
         time.sleep(0.1)
         return keep_trying(go, first_try=False)
+
 
 if __name__ == "__main__":
     go = Okay()

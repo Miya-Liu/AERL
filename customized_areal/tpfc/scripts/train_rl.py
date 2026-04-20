@@ -2,12 +2,12 @@
 
 import sys
 
+# Import custom dataset loader directly from customized_areal
+from customized_areal.dataset.tpfc import get_tpfc_rl_dataset
+
 from areal import PPOTrainer
 from areal.api.cli_args import GRPOConfig, load_expr_config
 from areal.utils.hf_utils import load_hf_tokenizer
-
-# Import custom dataset loader directly from customized_areal
-from customized_areal.dataset.tpfc import get_tpfc_rl_dataset
 
 
 def main(args):

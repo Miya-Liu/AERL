@@ -1,29 +1,39 @@
 # MCTS Tree Backup Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Switch TreeBackupPPOTrainer from inner-method patching to outer-method patching — patch `PPOActor.compute_advantages` instead of `_compute_advantages`, eliminating code duplication and fixing the data format mismatch.
+**Goal:** Switch TreeBackupPPOTrainer from inner-method patching to outer-method
+patching — patch `PPOActor.compute_advantages` instead of `_compute_advantages`,
+eliminating code duplication and fixing the data format mismatch.
 
-**Architecture:** The patched outer method calls the original first (which runs full GAE: KL rewards, scaling, normalization), then inserts trajectories into the tree and overwrites `advantages`/`returns` with tree Q-values. `kl_rewards`, `tot_rewards`, `loss_mask`, `logprobs` from the original method are preserved for logging. Tree uses raw `traj["rewards"]` (not KL-adjusted).
+**Architecture:** The patched outer method calls the original first (which runs full
+GAE: KL rewards, scaling, normalization), then inserts trajectories into the tree and
+overwrites `advantages`/`returns` with tree Q-values. `kl_rewards`, `tot_rewards`,
+`loss_mask`, `logprobs` from the original method are preserved for logging. Tree uses
+raw `traj["rewards"]` (not KL-adjusted).
 
 **Tech Stack:** Python 3.12+ | PyTorch | dataclasses
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| Action | Path | Responsibility |
-|--------|------|----------------|
+| Action | Path                                      | Responsibility                 |
+| ------ | ----------------------------------------- | ------------------------------ |
 | Modify | `customized_areal/tree_search/trainer.py` | Rewrite: outer method patching |
-| Modify | `tests/test_tree_search/test_trainer.py` | New: test trainer patching |
+| Modify | `tests/test_tree_search/test_trainer.py`  | New: test trainer patching     |
 
-Only `trainer.py` changes. The core `tree_search` package (config, trie_node, turn_splitter, mcts_tree_store, advantage, checkpoint, __init__) stays the same.
+Only `trainer.py` changes. The core `tree_search` package (config, trie_node,
+turn_splitter, mcts_tree_store, advantage, checkpoint, __init__) stays the same.
 
----
+______________________________________________________________________
 
 ### Task 1: Write failing test for outer-method patching
 
 **Files:**
+
 - Create: `tests/test_tree_search/test_trainer.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -200,14 +210,18 @@ class TestUnpatchSafety:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
-Expected: FAIL — `ImportError: cannot import name 'patch_ppo_actor_for_tree_backup' from 'customized_areal.tree_search.trainer'` (current module uses inner-method patching, function names may differ)
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
+Expected: FAIL —
+`ImportError: cannot import name 'patch_ppo_actor_for_tree_backup' from 'customized_areal.tree_search.trainer'`
+(current module uses inner-method patching, function names may differ)
 
----
+______________________________________________________________________
 
 ### Task 2: Rewrite trainer.py with outer-method patching
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 
 - [ ] **Step 1: Rewrite trainer.py**
@@ -349,13 +363,20 @@ class TreeBackupPPOTrainer(PPOTrainer):
 
 - [ ] **Step 2: Run the trainer tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
 
-Expected: Some tests may fail because the mock PPOActor doesn't have the full set of attributes that the original `compute_advantages` → `batched_call` → `_compute_advantages` path needs. The `test_patched_method_calls_original_first` and `test_tree_uses_raw_rewards` tests use `MockPPOActor` which lacks config, kl_ctl, etc.
+Expected: Some tests may fail because the mock PPOActor doesn't have the full set of
+attributes that the original `compute_advantages` → `batched_call` →
+`_compute_advantages` path needs. The `test_patched_method_calls_original_first` and
+`test_tree_uses_raw_rewards` tests use `MockPPOActor` which lacks config, kl_ctl, etc.
 
-The fix: instead of a full mock, use a simpler integration test approach. Update the test to only test the patching/unpatching mechanics (Tasks 1 tests that don't need a real PPOActor) and add a note that full integration testing requires a GPU cluster.
+The fix: instead of a full mock, use a simpler integration test approach. Update the
+test to only test the patching/unpatching mechanics (Tasks 1 tests that don't need a
+real PPOActor) and add a note that full integration testing requires a GPU cluster.
 
-Let me revise the test file to be realistic about what we can test without a real PPOActor:
+Let me revise the test file to be realistic about what we can test without a real
+PPOActor:
 
 ```python
 # tests/test_tree_search/test_trainer.py
@@ -471,12 +492,14 @@ class TestTreeBackupConfigDefaults:
 
 - [ ] **Step 3: Run the updated tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/test_trainer.py -v`
 Expected: PASS (7 passed)
 
 - [ ] **Step 4: Run all tree_search tests to verify no regressions**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/ -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest tests/test_tree_search/ -v`
 Expected: PASS (all tests green, 7 new + 39 existing = 46+)
 
 - [ ] **Step 5: Commit**
@@ -487,30 +510,43 @@ git add customized_areal/tree_search/trainer.py tests/test_tree_search/test_trai
 git commit -m "feat(tree-search): switch to outer method patching for tree backup advantages"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Verify __init__.py exports are correct
 
 **Files:**
+
 - Verify: `customized_areal/tree_search/__init__.py`
 
 - [ ] **Step 1: Verify imports still work**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.tree_search import TreeBackupConfig, TreeBackupMode, TrieNode, Turn, MCTSTreeStore, TreeAdvantageComputer, TreeCheckpointManager, make_turn_splitter, TreeBackupPPOTrainer; print('All imports OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.tree_search import TreeBackupConfig, TreeBackupMode, TrieNode, Turn, MCTSTreeStore, TreeAdvantageComputer, TreeCheckpointManager, make_turn_splitter, TreeBackupPPOTrainer; print('All imports OK')"`
 Expected: `All imports OK`
 
-- [ ] **Step 2: Verify that `patch_ppo_actor_for_tree_backup` and `unpatch_ppo_actor` are importable**
+- [ ] **Step 2: Verify that `patch_ppo_actor_for_tree_backup` and `unpatch_ppo_actor`
+  are importable**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.tree_search.trainer import patch_ppo_actor_for_tree_backup, unpatch_ppo_actor; print('Patch imports OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.tree_search.trainer import patch_ppo_actor_for_tree_backup, unpatch_ppo_actor; print('Patch imports OK')"`
 Expected: `Patch imports OK`
 
 No commit needed if no changes.
 
----
+______________________________________________________________________
 
 ## Self-Review Checklist
 
-- [x] **Spec coverage**: The spec's "TreeBackupPPOTrainer Integration" section describes outer method patching → Task 2 implements it. The spec's "Reward choice" says raw rewards → test_tree_uses_raw_rewards (removed in revised test; the patching structure guarantees it since `insert_batch` reads `traj["rewards"]` before any scaling). The spec's "Advantage normalization" says no additional normalization → the patched method doesn't apply any. Config section → Task 3 verifies exports.
+- [x] **Spec coverage**: The spec's "TreeBackupPPOTrainer Integration" section describes
+  outer method patching → Task 2 implements it. The spec's "Reward choice" says raw
+  rewards → test_tree_uses_raw_rewards (removed in revised test; the patching structure
+  guarantees it since `insert_batch` reads `traj["rewards"]` before any scaling). The
+  spec's "Advantage normalization" says no additional normalization → the patched method
+  doesn't apply any. Config section → Task 3 verifies exports.
 - [x] **Placeholder scan**: No TBD, TODO, or vague steps. Every step has complete code.
-- [x] **Type consistency**: `patch_ppo_actor_for_tree_backup(MCTSTreeStore, TreeAdvantageComputer)` — same types as before. `unpatch_ppo_actor()` — no args. `compute_advantages(self, data: list[dict])` — matches PPOActor signature.
-- [x] **No code duplication**: The patched method has 3 lines of tree logic, no duplicated KL/reward code.
+- [x] **Type consistency**:
+  `patch_ppo_actor_for_tree_backup(MCTSTreeStore, TreeAdvantageComputer)` — same types
+  as before. `unpatch_ppo_actor()` — no args.
+  `compute_advantages(self, data: list[dict])` — matches PPOActor signature.
+- [x] **No code duplication**: The patched method has 3 lines of tree logic, no
+  duplicated KL/reward code.

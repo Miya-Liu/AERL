@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from .pagination import PaginationParams, PaginatedResponse, PaginationService
-from .schemas import AgentCreateRequest, AgentResponse, AgentUpdateRequest, AgentConfig
+from .pagination import PaginatedResponse, PaginationParams, PaginationService
+from .schemas import AgentConfig, AgentCreateRequest, AgentResponse, AgentUpdateRequest
 
 
 @dataclass
@@ -184,7 +184,9 @@ class AgentService:
         # Apply search filter
         if filters.search:
             search_term = f"%{filters.search}%"
-            query = query.or_(f"name.ilike.{search_term},description.ilike.{search_term}")
+            query = query.or_(
+                f"name.ilike.{search_term},description.ilike.{search_term}"
+            )
 
         # Apply has_default filter
         if filters.has_default is not None:
@@ -279,9 +281,7 @@ class AgentService:
             "created_by": user_id,
         }
 
-        result = (
-            await self.db.table("agent_versions").insert(version_record).execute()
-        )
+        result = await self.db.table("agent_versions").insert(version_record).execute()
         if not result.data:
             raise RuntimeError("Failed to create initial version")
 
@@ -325,9 +325,7 @@ class AgentService:
             "created_by": user_id,
         }
 
-        result = (
-            await self.db.table("agent_versions").insert(version_record).execute()
-        )
+        result = await self.db.table("agent_versions").insert(version_record).execute()
         if not result.data:
             raise RuntimeError("Failed to create new version")
 

@@ -7,15 +7,19 @@
 
 __all__ = ["TPFCConfig", "TPFCAgent", "tpfc_reward_fn"]
 
+
 # Lazy imports
 def __getattr__(name):
     if name == "TPFCConfig":
         from customized_areal.tpfc.tpfc_config import TPFCConfig
+
         return TPFCConfig
     elif name == "TPFCAgent":
         from customized_areal.tpfc.tpfc_agent import TPFCAgent
+
         return TPFCAgent
     elif name == "tpfc_reward_fn":
         from customized_areal.tpfc.tpfc_agent import tpfc_reward_fn
+
         return tpfc_reward_fn
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -7,7 +7,6 @@ from typing import Any
 
 from .connection import DBConnection
 
-
 # ── Table constants ──
 
 TABLE_MESSAGES = "messages"
@@ -170,17 +169,21 @@ def _parse_messages(raw_messages: list[dict]) -> list[dict[str, Any]]:
                 messages.append(parsed_item)
             except json.JSONDecodeError:
                 if is_compressed:
-                    messages.append({
-                        "role": "user",
-                        "content": content,
-                        "message_id": item["message_id"],
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": content,
+                            "message_id": item["message_id"],
+                        }
+                    )
                 else:
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                        "message_id": item["message_id"],
-                    })
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": content,
+                            "message_id": item["message_id"],
+                        }
+                    )
         elif isinstance(content, dict):
             content["message_id"] = item["message_id"]
             # Filter empty user messages
@@ -190,10 +193,12 @@ def _parse_messages(raw_messages: list[dict]) -> list[dict[str, Any]]:
                     continue
             messages.append(content)
         else:
-            messages.append({
-                "role": "user",
-                "content": str(content),
-                "message_id": item["message_id"],
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": str(content),
+                    "message_id": item["message_id"],
+                }
+            )
 
     return messages

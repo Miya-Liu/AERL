@@ -1,4 +1,3 @@
-import pytest
 from customized_areal.tree_search.config import TreeBackupConfig, TreeBackupMode
 
 

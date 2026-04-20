@@ -10,14 +10,15 @@ Token-level rewards are sent directly to the proxy server via HTTP.
 
 from __future__ import annotations
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from areal.infra import workflow_context
-from areal.utils import logging, stats_tracker
-from areal.utils.perf_tracer import session_context, trace_session
 from areal.experimental.openai.proxy.workflow import (
     OpenAIProxyWorkflow as BaseOpenAIProxyWorkflow,
 )
+from areal.infra import workflow_context
+from areal.utils import logging, stats_tracker
+from areal.utils.perf_tracer import session_context, trace_session
+
 from .client import OpenAIProxyClient
 from .types import TokenRewardInteractions
 
@@ -127,7 +128,6 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
                 "ANTHROPIC_API_KEY": session_api_key,
             }
             import asyncio
-            from concurrent.futures import ProcessPoolExecutor
 
             loop = asyncio.get_running_loop()
             # Subproc mode does not support proxy client injection
@@ -153,8 +153,8 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
     def _wrap_run_subproc(
         agent: Any, data: dict[str, Any], extra_envs: dict[str, str]
     ) -> Any:
-        import os
         import asyncio
+        import os
 
         for key, value in extra_envs.items():
             os.environ[key] = value
@@ -166,9 +166,7 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
 
         return _get_executor()
 
-    async def _process_rewards(
-        self, client: OpenAIProxyClient, rewards: Any
-    ) -> None:
+    async def _process_rewards(self, client: OpenAIProxyClient, rewards: Any) -> None:
         """
         Process rewards from agent output and send to proxy server via HTTP.
 

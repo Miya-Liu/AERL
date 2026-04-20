@@ -1,7 +1,7 @@
 import torch
-import pytest
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+
 from customized_areal.tree_search.advantage import TreeAdvantageComputer
+from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.turn_splitter import Turn
 
 
@@ -9,7 +9,12 @@ def _simple_splitter(input_ids: list[int]) -> list[Turn]:
     """Split at token 10 -- everything before is prompt, everything from 10 onward is response."""
     try:
         split_pos = input_ids.index(10)
-        return [Turn(prompt_tokens=input_ids[:split_pos], response_tokens=input_ids[split_pos:])]
+        return [
+            Turn(
+                prompt_tokens=input_ids[:split_pos],
+                response_tokens=input_ids[split_pos:],
+            )
+        ]
     except ValueError:
         return [Turn(prompt_tokens=[], response_tokens=list(input_ids))]
 

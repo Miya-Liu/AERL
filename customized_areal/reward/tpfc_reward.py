@@ -38,8 +38,12 @@ def _extract_answer_tag(response_text: str) -> str | None:
     response_text = _flatten_content(response_text)
     start_tag = "<answer>"
     end_tag = "</answer>"
-    start_positions = [i for i in range(len(response_text)) if response_text.startswith(start_tag, i)]
-    end_positions = [i for i in range(len(response_text)) if response_text.startswith(end_tag, i)]
+    start_positions = [
+        i for i in range(len(response_text)) if response_text.startswith(start_tag, i)
+    ]
+    end_positions = [
+        i for i in range(len(response_text)) if response_text.startswith(end_tag, i)
+    ]
 
     for start_pos in reversed(start_positions):
         for end_pos in end_positions:
@@ -72,8 +76,14 @@ def _call_llm_judge(prompt: str) -> str:
     """Call LLM judge API with environment-based configuration."""
     # Get configuration from environment variables
     model_name = os.getenv("TPFC_JUDGE_MODEL", "qwen2.5-72b-instruct")
-    base_url = os.getenv("TPFC_JUDGE_BASE_URL", "http://10.254.10.192:8443/service-large-64-1772072563849/llm/v1")
-    api_key = os.getenv("TPFC_JUDGE_API_KEY", "RlkgHzgBa2zbPcQrw96rdn68dr7kXk8Mv84Nhs5Trrk6gfq8Cqw5CcDQ787p6d6bPrAWDrw8b97gq8N7jWWxhasnVP76FD76r8tJ2688mdPnSP7N6V7gl1VLKD9LasJq")
+    base_url = os.getenv(
+        "TPFC_JUDGE_BASE_URL",
+        "http://10.254.10.192:8443/service-large-64-1772072563849/llm/v1",
+    )
+    api_key = os.getenv(
+        "TPFC_JUDGE_API_KEY",
+        "RlkgHzgBa2zbPcQrw96rdn68dr7kXk8Mv84Nhs5Trrk6gfq8Cqw5CcDQ787p6d6bPrAWDrw8b97gq8N7jWWxhasnVP76FD76r8tJ2688mdPnSP7N6V7gl1VLKD9LasJq",
+    )
     timeout = float(os.getenv("TPFC_JUDGE_TIMEOUT", "120.0"))
 
     url = base_url.rstrip("/") + "/chat/completions"
@@ -102,7 +112,9 @@ def _call_llm_judge(prompt: str) -> str:
     ssl_context = ssl._create_unverified_context()
 
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
+        with urllib.request.urlopen(
+            request, timeout=timeout, context=ssl_context
+        ) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -122,7 +134,7 @@ def _parse_judge_score(judge_response_text: str) -> float:
     if start_pos < 0 or end_pos < 0 or start_pos >= end_pos:
         return 0.0
 
-    content = stripped[start_pos + 7:end_pos].strip()
+    content = stripped[start_pos + 7 : end_pos].strip()
     try:
         score = float(content)
         return 1.0 if score >= 0.9 else 0.0
@@ -131,12 +143,7 @@ def _parse_judge_score(judge_response_text: str) -> float:
 
 
 def tpfc_reward_fn(
-    prompt,
-    completions,
-    prompt_ids,
-    completion_ids,
-    answer,
-    **kwargs
+    prompt, completions, prompt_ids, completion_ids, answer, **kwargs
 ) -> float:
     """TPFC reward function using LLM-as-judge.
 
@@ -157,7 +164,9 @@ def tpfc_reward_fn(
     """
     try:
         # Extract model answer from completion
-        completion_str = str(completions) if not isinstance(completions, str) else completions
+        completion_str = (
+            str(completions) if not isinstance(completions, str) else completions
+        )
         model_answer = _extract_answer_tag(completion_str)
 
         if model_answer is None:
@@ -182,7 +191,9 @@ def tpfc_reward_fn(
         # Parse score
         score = _parse_judge_score(judge_response)
 
-        logger.debug(f"TPFC reward: score={score}, model_answer={model_answer[:100]}...")
+        logger.debug(
+            f"TPFC reward: score={score}, model_answer={model_answer[:100]}..."
+        )
 
         return score
 

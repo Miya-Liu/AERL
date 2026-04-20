@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from areal.utils import logging
+
 from .types import InteractionWithTokenLevelReward
 
 logger = logging.getLogger("MockTokenRewardCache")
@@ -378,9 +379,7 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         else:
             # Pad to same length
             max_len = max(len(self._total_list_reward), len(token_rewards))
-            self._total_list_reward += [0.0] * (
-                max_len - len(self._total_list_reward)
-            )
+            self._total_list_reward += [0.0] * (max_len - len(self._total_list_reward))
             rewards_padded = token_rewards + [0.0] * (max_len - len(token_rewards))
             self._total_list_reward = [
                 a + b for a, b in zip(self._total_list_reward, rewards_padded)

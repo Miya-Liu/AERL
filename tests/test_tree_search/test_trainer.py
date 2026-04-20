@@ -1,16 +1,15 @@
 # tests/test_tree_search/test_trainer.py
 from unittest.mock import MagicMock
 
-import pytest
+from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.config import TreeBackupConfig, TreeBackupMode
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
-from customized_areal.tree_search.advantage import TreeAdvantageComputer
-from customized_areal.tree_search.turn_splitter import Turn
 from customized_areal.tree_search.trainer import (
-    TreeBackupPPOTrainer,
     patch_ppo_actor_for_tree_backup,
     unpatch_ppo_actor,
 )
+from customized_areal.tree_search.turn_splitter import Turn
+
 from areal.trainer.ppo.actor import PPOActor
 
 
@@ -18,7 +17,12 @@ def _simple_splitter(input_ids: list[int]) -> list[Turn]:
     """Split at token 10 — everything before is prompt, everything after is response."""
     try:
         split_pos = input_ids.index(10)
-        return [Turn(prompt_tokens=input_ids[:split_pos], response_tokens=input_ids[split_pos:])]
+        return [
+            Turn(
+                prompt_tokens=input_ids[:split_pos],
+                response_tokens=input_ids[split_pos:],
+            )
+        ]
     except ValueError:
         return [Turn(prompt_tokens=[], response_tokens=list(input_ids))]
 
@@ -158,4 +162,6 @@ class TestPatchedMethodBehavior:
         # We verify this by checking the patched method accepts the same args
         original_sig = inspect.signature(original)
         patched_sig = inspect.signature(patched)
-        assert list(original_sig.parameters.keys()) == list(patched_sig.parameters.keys())
+        assert list(original_sig.parameters.keys()) == list(
+            patched_sig.parameters.keys()
+        )

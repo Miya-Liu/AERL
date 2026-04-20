@@ -136,6 +136,7 @@ dependencies = [
     "scipy>=1.17.1",
     "supabase>=2.28.3",
     "sglang[tracing]==0.5.9",
+    "daytona>=0.166.0",
 ]
 
 [project.optional-dependencies]

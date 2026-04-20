@@ -1,13 +1,14 @@
 """Tests for cache module."""
 
-import pytest
 import threading
 import time
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
+
+import pytest
 
 from customized_areal.on_policy_distill.proxy.cache import (
-    PositionRewardInfo,
     InteractionCache,
+    PositionRewardInfo,
 )
 from customized_areal.on_policy_distill.proxy.types import (
     InteractionWithTokenLevelReward,

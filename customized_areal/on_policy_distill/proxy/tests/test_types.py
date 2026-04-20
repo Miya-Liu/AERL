@@ -1,8 +1,8 @@
 """Tests for types module."""
 
-import pytest
-import torch
 from dataclasses import dataclass
+
+import pytest
 
 from customized_areal.on_policy_distill.proxy.types import (
     InteractionWithTokenLevelReward,

@@ -25,14 +25,15 @@ def test_imports():
 
     try:
         from customized_areal.on_policy_distill import (
-            OnPolicyDistillConfig,
-            OnPolicyDistillationTrainer,
-            OnPolicyDistillAgent,
             MultiCandidateFSDPEngine,
             MultiCandidateFSDPPPOActor,
+            OnPolicyDistillAgent,
+            OnPolicyDistillationTrainer,
+            OnPolicyDistillConfig,
             OpenAIProxyWorkflow,
         )
         from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
+
         print("  ✓ All main imports successful")
         return True
     except ImportError as e:
@@ -45,8 +46,9 @@ def test_actor_creation():
     print("\nTesting actor creation...")
 
     try:
-        from areal.api.cli_args import PPOActorConfig
         from customized_areal.on_policy_distill import MultiCandidateFSDPPPOActor
+
+        from areal.api.cli_args import PPOActorConfig
 
         config = PPOActorConfig(
             path="dummy/path",
@@ -58,7 +60,9 @@ def test_actor_creation():
         # In real usage, actor.initialize() is called by trainer
         print("  ✓ Actor config created successfully")
         print(f"  ✓ Actor class: {MultiCandidateFSDPPPOActor.__name__}")
-        print(f"  ✓ Actor MRO: {[c.__name__ for c in MultiCandidateFSDPPPOActor.__mro__[:4]]}")
+        print(
+            f"  ✓ Actor MRO: {[c.__name__ for c in MultiCandidateFSDPPPOActor.__mro__[:4]]}"
+        )
         return True
     except Exception as e:
         print(f"  ✗ Actor creation failed: {e}")
@@ -70,10 +74,11 @@ def test_loss_patch():
     print("\nTesting loss function patch...")
 
     try:
-        from areal.trainer.ppo.actor import PPOActor
         from customized_areal.on_policy_distill.training.actor import (
             patch_ppo_actor_class_to_use_distill_loss,
         )
+
+        from areal.trainer.ppo.actor import PPOActor
 
         # Store original method
         original_ppo_update = PPOActor._ppo_update
@@ -100,8 +105,6 @@ def test_workflow_components():
 
     try:
         from customized_areal.on_policy_distill import (
-            OpenAIProxyWorkflow,
-            OpenAIProxyClient,
             PositionRewardInfo,
         )
 

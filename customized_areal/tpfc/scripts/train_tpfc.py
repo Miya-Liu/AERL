@@ -18,6 +18,7 @@ sys.path.insert(0, str(project_root))
 
 from customized_areal.tpfc.tpfc_config import TPFCConfig
 from customized_areal.tpfc.tpfc_dataset import get_tpfc_rl_dataset
+
 from areal import PPOTrainer
 from areal.api.cli_args import load_expr_config
 from areal.utils.hf_utils import load_hf_tokenizer
@@ -48,7 +49,7 @@ def main(args):
     # Build workflow kwargs from config
     workflow_kwargs = dict(
         temperature=config.gconfig.temperature,
-        top_p=getattr(config.gconfig, 'top_p', 1.0),
+        top_p=getattr(config.gconfig, "top_p", 1.0),
         # For openai
         max_completion_tokens=config.gconfig.max_new_tokens,
     )

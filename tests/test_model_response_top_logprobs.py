@@ -1,5 +1,5 @@
 """Tests for ModelResponse.output_top_logprobs field."""
-import pytest
+
 from areal.api.io_struct import ModelResponse
 
 

@@ -1,17 +1,24 @@
 # MultiCandidateFSDPEngine
 
-Custom FSDP Engine with multi-candidate logprob gathering support for on-policy distillation training.
+Custom FSDP Engine with multi-candidate logprob gathering support for on-policy
+distillation training.
 
 ## Overview
 
-`MultiCandidateFSDPEngine` extends the standard AReaL `FSDPEngine` to support gathering logprobs for multiple candidate tokens per position using `gather_logprobs_entropy_multi_candidates`.
+`MultiCandidateFSDPEngine` extends the standard AReaL `FSDPEngine` to support gathering
+logprobs for multiple candidate tokens per position using
+`gather_logprobs_entropy_multi_candidates`.
 
 ## Key Features
 
-1. **Multi-candidate support**: Gathers logprobs for multiple candidates at each position
-2. **Fresh on-policy logprobs**: Computes logprobs from current model (with gradients) for training
-3. **Backward compatible**: Works with standard single-candidate training (labels shape `[seq_len]`)
-4. **Position-level rewards**: Integrates with `PositionRewardInfo` for candidate-wise reward computation
+1. **Multi-candidate support**: Gathers logprobs for multiple candidates at each
+   position
+1. **Fresh on-policy logprobs**: Computes logprobs from current model (with gradients)
+   for training
+1. **Backward compatible**: Works with standard single-candidate training (labels shape
+   `[seq_len]`)
+1. **Position-level rewards**: Integrates with `PositionRewardInfo` for candidate-wise
+   reward computation
 
 ## Architecture
 
@@ -47,6 +54,7 @@ def _prepare_multi_candidate_labels(
 ```
 
 **Parameters**:
+
 - `model_inputs`: Standard model inputs (for device reference)
 - `position_rewards`: List of `PositionRewardInfo` with `candidate_token_ids`
 - `seq_len`: Sequence length
@@ -70,7 +78,9 @@ def _compute_logprobs_entropy(
 ```
 
 **Key behaviors**:
-- Handles both 1D labels `[seq_len]` (single candidate) and 2D labels `[seq_len, num_candidates]` (multi-candidate)
+
+- Handles both 1D labels `[seq_len]` (single candidate) and 2D labels
+  `[seq_len, num_candidates]` (multi-candidate)
 - Uses `gather_logprobs_entropy_multi_candidates` for logprob gathering
 - Supports tensor parallelism (TP) and sequence parallelism (Ulysses)
 
@@ -91,10 +101,11 @@ def _compute_logprobs_and_loss(
 ```
 
 **Logic flow**:
+
 1. Check if `position_rewards` is in `ctx.mb_input`
-2. If yes, prepare multi-candidate labels and compute multi-candidate logprobs
-3. If no, use standard single-candidate path
-4. Pass logprobs to `loss_fn` for loss computation
+1. If yes, prepare multi-candidate labels and compute multi-candidate logprobs
+1. If no, use standard single-candidate path
+1. Pass logprobs to `loss_fn` for loss computation
 
 ## Usage
 
@@ -133,29 +144,32 @@ loss = loss_fn(
 ```
 
 The loss function:
+
 1. Uses fresh logprobs (with gradients) for the policy gradient
-2. Uses old logprobs from `position_rewards` for importance sampling weights
-3. Computes: `loss = -E[importance_weight * reward * logp]`
+1. Uses old logprobs from `position_rewards` for importance sampling weights
+1. Computes: `loss = -E[importance_weight * reward * logp]`
 
 ## Differences from Standard FSDPEngine
 
-| Aspect | FSDPEngine | MultiCandidateFSDPEngine |
-|--------|-----------|-------------------------|
-| Logprob gathering | `gather_logprobs_entropy()` | `gather_logprobs_entropy_multi_candidates()` |
-| Label shape | 1D only `[seq_len]` | 1D `[seq_len]` or 2D `[seq_len, num_candidates]` |
-| Multi-candidate | Not supported | Full support |
-| Position rewards | Not supported | Integrated |
-| Gradient flow | Standard | Preserved for all candidates |
+| Aspect            | FSDPEngine                  | MultiCandidateFSDPEngine                         |
+| ----------------- | --------------------------- | ------------------------------------------------ |
+| Logprob gathering | `gather_logprobs_entropy()` | `gather_logprobs_entropy_multi_candidates()`     |
+| Label shape       | 1D only `[seq_len]`         | 1D `[seq_len]` or 2D `[seq_len, num_candidates]` |
+| Multi-candidate   | Not supported               | Full support                                     |
+| Position rewards  | Not supported               | Integrated                                       |
+| Gradient flow     | Standard                    | Preserved for all candidates                     |
 
 ## When to Use
 
 Use `MultiCandidateFSDPEngine` when:
+
 - You want multi-candidate logprob gathering at the engine level
 - You're using position-level rewards with multiple candidates per position
 - You need fresh on-policy logprobs for all candidates during training
 - You're implementing on-policy distillation with token-level rewards
 
 Use standard `FSDPEngine` when:
+
 - You're doing standard single-candidate training
 - You don't need multi-candidate support
 - You want to minimize code changes

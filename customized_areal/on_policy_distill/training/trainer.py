@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Add project root to path
 _project_root = Path(__file__).parent.parent.parent.absolute()
@@ -17,7 +17,6 @@ if str(_project_root) not in sys.path:
 
 from areal import PPOTrainer
 from areal.api.cli_args import PPOActorConfig
-from areal.api import AllocationMode
 from areal.utils import logging
 from areal.utils.environ import is_single_controller
 
@@ -45,8 +44,8 @@ class OnPolicyDistillationTrainer(PPOTrainer):
         config: Any,
         train_dataset: Any | None = None,
         valid_dataset: Any | None = None,
-        workflow: Optional[OpenAIProxyWorkflow] = None,
-        agent: Optional[Any] = None,
+        workflow: OpenAIProxyWorkflow | None = None,
+        agent: Any | None = None,
     ):
         from ..training.actor import (
             patch_ppo_actor_class_to_use_distill_loss,
@@ -109,7 +108,6 @@ class OnPolicyDistillationTrainer(PPOTrainer):
         actor_cls = MultiCandidateFSDPPPOActor
 
         if is_single_controller():
-            from areal.infra.scheduler import Scheduler
             actor = actor_cls.as_controller(actor_config, self.scheduler)
         else:
             actor = actor_cls(config=actor_config)

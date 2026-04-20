@@ -4,8 +4,6 @@ This script demonstrates how to use the OnPolicyDistillationTrainer
 with the customized grpo_distill_loss_fn that supports position_rewards.
 """
 
-import torch
-from areal.api.cli_args import PPOConfig
 from customized_areal.on_policy_distill import (
     OnPolicyDistillationTrainer,
     OnPolicyDistillConfig,

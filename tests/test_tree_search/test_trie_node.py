@@ -1,4 +1,5 @@
 import pytest
+
 from customized_areal.tree_search.trie_node import TrieNode
 from customized_areal.tree_search.turn_splitter import Turn
 

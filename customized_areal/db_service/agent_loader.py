@@ -5,19 +5,19 @@ Provides AgentConfig/AgentData models and a loader to fetch agents with a
 consistent schema and unified caching behavior.
 """
 
-import copy
 import uuid as _uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from customized_areal.db_service.connection import DBConnection
 
-
 try:
     from areal.utils.logging import getLogger
+
     logger = getLogger("AgentLoader")
 except ImportError:
     import logging
+
     logger = logging.getLogger("AgentLoader")
 
 
@@ -163,7 +163,11 @@ class AgentLoader:
         return None
 
     async def load_agent(
-        self, agent_id: str, user_id: str, load_config: bool = True, skip_cache: bool = False
+        self,
+        agent_id: str,
+        user_id: str,
+        load_config: bool = True,
+        skip_cache: bool = False,
     ) -> AgentData:
         """
         Load a single agent with full configuration.
@@ -183,7 +187,9 @@ class AgentLoader:
         client = await self.db.client
 
         # Fetch agent metadata
-        result = await client.table("agents").select("*").eq("agent_id", agent_id).execute()
+        result = (
+            await client.table("agents").select("*").eq("agent_id", agent_id).execute()
+        )
 
         if not result.data:
             raise ValueError(f"Agent {agent_id} not found")
@@ -254,9 +260,9 @@ class AgentLoader:
                     .execute()
                 )
                 if creator_result.data:
-                    creator_name = creator_result.data.get("name") or creator_result.data.get(
-                        "slug"
-                    )
+                    creator_name = creator_result.data.get(
+                        "name"
+                    ) or creator_result.data.get("slug")
             except Exception as e:
                 logger.warning(f"Failed to fetch creator name: {e}")
 
@@ -330,7 +336,8 @@ class AgentLoader:
                 context_manager_type=config_dict.get("context_manager_type", "vanilla"),
                 max_iterations=config_dict.get("max_iterations"),
             ),
-            version_name=data.get("version_name") or current_version.get("version_name"),
+            version_name=data.get("version_name")
+            or current_version.get("version_name"),
             version_number=current_version.get("version_number"),
             version_created_at=current_version.get("created_at"),
             version_updated_at=current_version.get("updated_at"),
@@ -385,7 +392,9 @@ class AgentLoader:
         )
 
         if not result.data:
-            raise ValueError(f"Version {agent.current_version_id} not found for agent {agent.agent_id}")
+            raise ValueError(
+                f"Version {agent.current_version_id} not found for agent {agent.agent_id}"
+            )
 
         version_row = result.data[0]
         self._apply_version_config(agent, version_row)
@@ -417,9 +426,7 @@ class AgentLoader:
     async def _batch_load_configs(self, agents: list[AgentData]):
         """Batch load configurations for multiple agents."""
         # Get all version IDs for agents
-        version_ids = [
-            a.current_version_id for a in agents if a.current_version_id
-        ]
+        version_ids = [a.current_version_id for a in agents if a.current_version_id]
 
         if not version_ids:
             return
@@ -443,7 +450,9 @@ class AgentLoader:
             # Apply configs
             for agent in agents:
                 if agent.current_version_id and agent.current_version_id in version_map:
-                    self._apply_version_config(agent, version_map[agent.current_version_id])
+                    self._apply_version_config(
+                        agent, version_map[agent.current_version_id]
+                    )
                     agent.config_loaded = True
 
         except Exception as e:

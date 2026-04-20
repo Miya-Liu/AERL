@@ -1,4 +1,5 @@
 """Tests for SGLangBackend.parse_generation_response output_top_logprobs parsing."""
+
 import pytest
 
 from areal.api.io_struct import HttpGenerationResult

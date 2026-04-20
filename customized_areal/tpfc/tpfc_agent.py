@@ -5,14 +5,13 @@ This module provides a class-based agent interface consistent with AReaL's
 agentic RL training pattern, wrapping the existing run_backend functionality.
 """
 
-import asyncio
 from typing import Any
-
-from areal.api import AsyncRewardWrapper
-from areal.utils import logging
 
 from customized_areal.tpfc.backend_run import run_backend
 from customized_areal.tpfc.gaia_final_reward import compute_reward
+
+from areal.api import AsyncRewardWrapper
+from areal.utils import logging
 
 logger = logging.getLogger("TPFCAgent")
 
@@ -50,7 +49,9 @@ def tpfc_reward_fn(
             content = msg.get("content", "")
             if isinstance(content, list):
                 response_text = "".join(
-                    p.get("text", p.get("content", "")) if isinstance(p, dict) else str(p)
+                    p.get("text", p.get("content", ""))
+                    if isinstance(p, dict)
+                    else str(p)
                     for p in content
                 )
             elif isinstance(content, dict):
@@ -65,7 +66,9 @@ def tpfc_reward_fn(
     # Use default judge model if not specified
     model_name = "z-ai/glm-5.1"
     base_url = "https://openrouter.ai/api/v1"
-    api_key = "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"
+    api_key = (
+        "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"
+    )
 
     try:
         result = compute_reward(
@@ -79,26 +82,26 @@ def tpfc_reward_fn(
         return float(result.get("answer_reward", 0))
     except Exception as exc:
         logger.warning("GAIA reward computation failed: %s", exc)
-        return 0.0 
+        return 0.0
 
 
 class TPFCAgent:
     """
     TPFC Agent for AReaL integration.
-    
+
     This class wraps the run_backend function in a class-based structure
     compatible with AReal's RolloutWorkflow and PPOTrainer.
-    
+
     Usage:
         agent = TPFCAgent()
         reward = await agent.run(data={"prompt": "task description", "answer": "ground_truth"}, **extra_kwargs)
-    
+
     Attributes:
         default_agent_id: Default agent ID for TPFC agent runs.
     """
-    
-    default_agent_id: str = '8bba75cb-0d87-4efe-b566-87de77335b76'
-    
+
+    default_agent_id: str = "8bba75cb-0d87-4efe-b566-87de77335b76"
+
     def __init__(
         self,
         agent_id: str | None = None,
@@ -127,7 +130,7 @@ class TPFCAgent:
         self.judge_model_name = judge_model_name
         self.judge_base_url = judge_base_url
         self.judge_api_key = judge_api_key
-    
+
     async def run(
         self,
         data: dict[str, Any],
@@ -135,11 +138,11 @@ class TPFCAgent:
     ) -> float:
         """
         Execute a single agent run and return the reward.
-        
+
         This method is compatible with AReaL's OpenAIProxyWorkflow interface.
         The http_client from extra_kwargs is used to route LLM calls through
         AReaL's proxy server for token-level tracking.
-        
+
         Args:
             data: Input data for the agent. Expected keys:
                 - "messages": List of message dicts (last message contains the task)
@@ -148,10 +151,10 @@ class TPFCAgent:
                 - http_client: httpx.AsyncClient for proxy routing
                 - base_url: Proxy server base URL
                 - api_key: Session API key
-        
+
         Returns:
             Float reward value (0.0 to 1.0).
-        
+
         Raises:
             RuntimeError: If agent run fails to start.
             TimeoutError: If agent run doesn't complete within timeout.
@@ -162,7 +165,7 @@ class TPFCAgent:
             task_description = messages[-1].get("content", "")
         else:
             task_description = data.get("prompt", "")
-        
+
         # Extract ground truth for reward calculation
         gt = data.get("answer", "")
 
@@ -199,7 +202,7 @@ class TPFCAgent:
             base_url=base_url,
             api_key=api_key,
         )
-        
+
         # Calculate reward using reward function
         reward_fn = AsyncRewardWrapper(tpfc_reward_fn)
         reward = await reward_fn(
@@ -210,11 +213,11 @@ class TPFCAgent:
             judge_base_url=self.judge_base_url,
             judge_api_key=self.judge_api_key,
         )
-        
+
         logger.info(
             "TPFCAgent run completed: message_count=%d, reward=%.4f",
             len(completion_messages),
             reward,
         )
-        
+
         return float(reward)

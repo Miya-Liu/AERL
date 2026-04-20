@@ -36,7 +36,7 @@ class ProxyServerManager:
         self,
         host: str = "127.0.0.1",
         port: int = 8765,
-        admin_api_key: str = "test-integration-key"
+        admin_api_key: str = "test-integration-key",
     ):
         self.host = host
         self.port = port
@@ -50,9 +50,12 @@ class ProxyServerManager:
             sys.executable,
             "-m",
             "customized_areal.on_policy_distill.proxy.proxy_rollout_server",
-            "--host", self.host,
-            "--port", str(self.port),
-            "--admin-api-key", self.admin_api_key,
+            "--host",
+            self.host,
+            "--port",
+            str(self.port),
+            "--admin-api-key",
+            self.admin_api_key,
         ]
 
         logger.info(f"Starting proxy server: {' '.join(cmd)}")
@@ -62,7 +65,7 @@ class ProxyServerManager:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=str(project_root)
+                cwd=str(project_root),
             )
 
             # Wait for server to start
@@ -72,13 +75,14 @@ class ProxyServerManager:
             # Check if process is still running
             if self.process.poll() is not None:
                 stdout, stderr = self.process.communicate()
-                logger.error(f"Proxy server failed to start!")
+                logger.error("Proxy server failed to start!")
                 logger.error(f"stdout: {stdout.decode()}")
                 logger.error(f"stderr: {stderr.decode()}")
                 return False
 
             # Try to connect
             import urllib.request
+
             try:
                 urllib.request.urlopen(f"{self.base_url}/docs", timeout=5)
                 logger.info(f"Proxy server started at {self.base_url}")
@@ -150,7 +154,7 @@ class HistorySavingAgent:
         async with aiohttp.ClientSession() as session:
             headers = {
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
 
             # Try to call proxy, fall back to simulated response
@@ -159,7 +163,7 @@ class HistorySavingAgent:
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json={"model": "test", "messages": messages, "max_tokens": 20},
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -190,13 +194,13 @@ class HistorySavingAgent:
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 }
                 async with session.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json={"model": "test", "messages": messages, "max_tokens": 20},
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -218,13 +222,17 @@ class HistorySavingAgent:
             logger.info(f"Set {len(token_rewards2)} token rewards for {completion_id2}")
 
         # Save agent's history
-        self.saved_histories.append({
-            "conversation": conversation,
-            "completion_ids": completion_ids,
-        })
+        self.saved_histories.append(
+            {
+                "conversation": conversation,
+                "completion_ids": completion_ids,
+            }
+        )
         self.completion_ids = completion_ids
 
-        logger.info(f"Agent completed with {len(conversation)} messages, {len(completion_ids)} completions")
+        logger.info(
+            f"Agent completed with {len(conversation)} messages, {len(completion_ids)} completions"
+        )
 
         # Return rewards dict
         return {
@@ -235,6 +243,7 @@ class HistorySavingAgent:
 
 class MockInferenceEngine:
     """Mock inference engine."""
+
     version = 0
 
     def get_version(self):
@@ -269,6 +278,7 @@ async def run_history_test(proxy_manager: ProxyServerManager) -> bool:
     except Exception as e:
         logger.error(f"Workflow failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -287,12 +297,16 @@ async def run_history_test(proxy_manager: ProxyServerManager) -> bool:
     agent_history = agent.saved_histories[0]
     agent_completion_ids = set(agent_history["completion_ids"])
     logger.info(f"   ✓ Agent saved {len(agent_history['conversation'])} messages")
-    logger.info(f"   ✓ Agent recorded {len(agent_completion_ids)} completions: {agent_completion_ids}")
+    logger.info(
+        f"   ✓ Agent recorded {len(agent_completion_ids)} completions: {agent_completion_ids}"
+    )
 
     # Get proxy's exported interactions
     logger.info("\n3. Checking proxy's exported interactions...")
     proxy_completion_ids = set(interactions.keys())
-    logger.info(f"   ✓ Proxy exported {len(proxy_completion_ids)} interactions: {proxy_completion_ids}")
+    logger.info(
+        f"   ✓ Proxy exported {len(proxy_completion_ids)} interactions: {proxy_completion_ids}"
+    )
 
     # Compare
     logger.info("\n4. Comparing histories...")
@@ -332,21 +346,16 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Proxy history integration test")
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="Port for proxy server"
-    )
+    parser.add_argument("--port", type=int, default=8765, help="Port for proxy server")
     parser.add_argument(
         "--use-existing",
         action="store_true",
-        help="Use existing proxy server (don't start new one)"
+        help="Use existing proxy server (don't start new one)",
     )
     parser.add_argument(
         "--proxy-addr",
         default=None,
-        help="Address of existing proxy server (if --use-existing)"
+        help="Address of existing proxy server (if --use-existing)",
     )
 
     args = parser.parse_args()
@@ -359,8 +368,12 @@ def main():
         class DummyManager:
             base_url = proxy_addr
             admin_api_key = "test-admin-key"
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
 
         manager = DummyManager()
     else:
@@ -383,6 +396,7 @@ def main():
     except Exception as e:
         logger.error(f"Test failed: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

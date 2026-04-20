@@ -32,25 +32,41 @@ class AgentCreateRequest(BaseModel):
         default=None,
         description="Agent configuration including system prompt, model, and tools",
     )
-    is_default: bool | None = Field(default=False, description="Whether this is a default agent")
+    is_default: bool | None = Field(
+        default=False, description="Whether this is a default agent"
+    )
     icon_name: str | None = Field(default=None, description="Icon name for the agent")
     icon_color: str | None = Field(default=None, description="Icon foreground color")
-    icon_background: str | None = Field(default=None, description="Icon background color")
+    icon_background: str | None = Field(
+        default=None, description="Icon background color"
+    )
 
 
 class AgentUpdateRequest(BaseModel):
     """Request model for updating an existing agent."""
 
-    name: str | None = Field(default=None, description="Updated display name for the agent")
-    description: str | None = Field(default=None, description="Updated short agent description")
+    name: str | None = Field(
+        default=None, description="Updated display name for the agent"
+    )
+    description: str | None = Field(
+        default=None, description="Updated short agent description"
+    )
     config: AgentConfig | None = Field(
         default=None,
         description="Updated agent configuration including system prompt, model, and tools",
     )
-    is_default: bool | None = Field(default=None, description="Whether this is a default agent")
-    icon_name: str | None = Field(default=None, description="Updated icon name for the agent")
-    icon_color: str | None = Field(default=None, description="Updated icon foreground color")
-    icon_background: str | None = Field(default=None, description="Updated icon background color")
+    is_default: bool | None = Field(
+        default=None, description="Whether this is a default agent"
+    )
+    icon_name: str | None = Field(
+        default=None, description="Updated icon name for the agent"
+    )
+    icon_color: str | None = Field(
+        default=None, description="Updated icon foreground color"
+    )
+    icon_background: str | None = Field(
+        default=None, description="Updated icon background color"
+    )
 
 
 class AgentVersionResponse(BaseModel):

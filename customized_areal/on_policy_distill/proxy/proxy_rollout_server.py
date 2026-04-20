@@ -17,41 +17,37 @@ import asyncio
 import secrets
 import threading
 import time
-from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
-
-from areal.utils.logging import getLogger
-from areal.utils.network import gethostip
 
 # Import from areal base server
 from areal.experimental.openai.proxy.server import (
-    RL_START_SESSION_PATHNAME,
-    RL_END_SESSION_PATHNAME,
-    RL_SET_REWARD_PATHNAME,
+    DEFAULT_ADMIN_API_KEY,
     EXPORT_TRAJECTORIES_PATHNAME,
     GRANT_CAPACITY_PATHNAME,
-    StartSessionRequest,
-    StartSessionResponse,
-    SetRewardRequest,
+    RL_END_SESSION_PATHNAME,
+    RL_SET_REWARD_PATHNAME,
+    RL_START_SESSION_PATHNAME,
+    SESSION_TIMEOUT_SECONDS,
     ExportTrajectoriesRequest,
     ExportTrajectoriesResponse,
+    SetRewardRequest,
+    StartSessionRequest,
+    StartSessionResponse,
     serialize_interactions,
-    SESSION_TIMEOUT_SECONDS,
-    DEFAULT_ADMIN_API_KEY,
 )
+from areal.utils.logging import getLogger
 
 # Import from local server module
 from .server import (
-    RL_SET_TOKEN_REWARDS_PATHNAME,
-    RL_SET_POSITION_REWARDS_PATHNAME,
     RL_COMPUTE_ENTROPY_PATHNAME,
-    SetTokenRewardsRequest,
-    SetPositionRewardsRequest,
+    RL_SET_POSITION_REWARDS_PATHNAME,
+    RL_SET_TOKEN_REWARDS_PATHNAME,
     ComputeEntropyRequest,
     ComputeEntropyResponse,
+    SetPositionRewardsRequest,
+    SetTokenRewardsRequest,
     TokenRewardSessionData,
 )
 
@@ -90,7 +86,9 @@ def _require_admin_key(request: Request) -> str:
     """Validate admin API key from Authorization header."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid Authorization header"
+        )
     token = auth[7:]  # Remove "Bearer "
     if token != _admin_api_key:
         raise HTTPException(status_code=403, detail="Invalid admin API key")
@@ -101,7 +99,9 @@ def _require_session_key(request: Request) -> str:
     """Validate session API key and return session_id."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid Authorization header"
+        )
     token = auth[7:]  # Remove "Bearer "
 
     with _lock:
@@ -144,7 +144,9 @@ def end_session(session_id: str = Depends(_require_session_key)):
     """End an RL session."""
     with _lock:
         if session_id not in _session_cache:
-            raise HTTPException(status_code=410, detail="Session already ended or expired")
+            raise HTTPException(
+                status_code=410, detail="Session already ended or expired"
+            )
         session_data = _session_cache[session_id]
 
     session_data.finish()
@@ -169,7 +171,9 @@ def export_trajectories(
 
     with _lock:
         if session_id not in _session_cache:
-            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Session {session_id} not found"
+            )
         session_data = _session_cache[session_id]
 
     # Wait for session to complete

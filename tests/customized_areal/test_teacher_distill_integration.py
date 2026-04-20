@@ -4,22 +4,27 @@ Tests the full flow: TeacherConfig -> TeacherClient -> _compute_token_rewards
 -> PositionRewardInfo, with mocked teacher API responses.
 """
 
-import math
 from unittest.mock import AsyncMock
 
 import pytest
 
-from customized_areal.on_policy_distill.core.reward_compute import _compute_token_rewards
-from customized_areal.on_policy_distill.core.teacher_client import TeacherClient, TeacherConfig
+from customized_areal.on_policy_distill.core.reward_compute import (
+    _compute_token_rewards,
+)
+from customized_areal.on_policy_distill.core.teacher_client import (
+    TeacherClient,
+    TeacherConfig,
+)
 from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_teacher_top_logprobs(token_logprob_pairs: list[tuple[int, float]]) -> list[dict]:
+def _make_teacher_top_logprobs(
+    token_logprob_pairs: list[tuple[int, float]],
+) -> list[dict]:
     """Build a single-position top_logprobs entry as returned by vLLM/SGLang.
 
     The real API returns a list of dicts like:
@@ -209,8 +214,8 @@ async def test_pipeline_reward_sign_consistency():
     )
 
     student_top_k_logprobs = [
-        [(100, -0.5)],   # student thinks P=exp(-0.5)
-        [(200, -1.5)],   # student thinks P=exp(-1.5)
+        [(100, -0.5)],  # student thinks P=exp(-0.5)
+        [(200, -1.5)],  # student thinks P=exp(-1.5)
     ]
 
     position_rewards = await _compute_token_rewards(

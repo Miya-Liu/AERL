@@ -1,8 +1,8 @@
 """Tests for server module."""
 
+from unittest.mock import Mock, patch
+
 import pytest
-import math
-from unittest.mock import Mock, patch, MagicMock
 
 # Mock areal imports
 with patch.dict(
@@ -18,11 +18,11 @@ with patch.dict(
     },
 ):
     from customized_areal.on_policy_distill.proxy.server import (
-        PositionRewardInfo,
-        SetTokenRewardsRequest,
-        SetPositionRewardsRequest,
         ComputeEntropyRequest,
         ComputeEntropyResponse,
+        PositionRewardInfo,
+        SetPositionRewardsRequest,
+        SetTokenRewardsRequest,
         TokenRewardSessionData,
     )
 

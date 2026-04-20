@@ -12,7 +12,6 @@ from typing import Any
 import torch
 
 from areal.api.cli_args import MicroBatchSpec
-from areal.api import AllocationMode
 from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging, stats_tracker
 from areal.utils.data import split_padded_tensor_dict_into_mb_list
@@ -77,7 +76,11 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
                 if isinstance(loss_mask, torch.Tensor):
                     n_valid = loss_mask.count_nonzero().item()
                 else:
-                    n_valid = sum(mb["loss_mask"].count_nonzero().item() for mb in mb_inputs.mbs if "loss_mask" in mb)
+                    n_valid = sum(
+                        mb["loss_mask"].count_nonzero().item()
+                        for mb in mb_inputs.mbs
+                        if "loss_mask" in mb
+                    )
                 stats_tracker.denominator(n_valid_tokens=n_valid)
 
     PPOActor._ppo_update = _ppo_update_with_distill_loss

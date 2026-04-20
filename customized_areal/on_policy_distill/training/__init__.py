@@ -6,9 +6,9 @@ This module contains:
 - logprobs.py: Log probability and entropy computation utilities
 """
 
-from .trainer import OnPolicyDistillationTrainer
-from .loss import grpo_distill_loss_fn
 from .logprobs import gather_logprobs_entropy_multi_candidates
+from .loss import grpo_distill_loss_fn
+from .trainer import OnPolicyDistillationTrainer
 
 __all__ = [
     "OnPolicyDistillationTrainer",

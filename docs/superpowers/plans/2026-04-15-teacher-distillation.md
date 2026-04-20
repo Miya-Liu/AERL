@@ -1,41 +1,53 @@
 # Teacher Distillation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement teacher distillation where a remote teacher model evaluates the student's top-k candidate tokens and provides position-level rewards (student_logp - teacher_logp) for the grpo_distill_loss_fn.
+**Goal:** Implement teacher distillation where a remote teacher model evaluates the
+student's top-k candidate tokens and provides position-level rewards (student_logp -
+teacher_logp) for the grpo_distill_loss_fn.
 
-**Architecture:** Proxy-server-mediated teacher evaluation. After student rollout via proxy server, _compute_token_rewards calls the teacher API to get logprobs for student's top-k candidates at each position, computes rewards, and sends PositionRewardInfo to the proxy server. The existing MultiCandidateFSDPEngine and grpo_distill_loss_fn consume these rewards during training.
+**Architecture:** Proxy-server-mediated teacher evaluation. After student rollout via
+proxy server, \_compute_token_rewards calls the teacher API to get logprobs for
+student's top-k candidates at each position, computes rewards, and sends
+PositionRewardInfo to the proxy server. The existing MultiCandidateFSDPEngine and
+grpo_distill_loss_fn consume these rewards during training.
 
-**Tech Stack:** Python 3.12+, aiohttp/httpx for async HTTP, OpenAI-compatible completions API (vLLM/SGLang), PyTorch, AReaL framework.
+**Tech Stack:** Python 3.12+, aiohttp/httpx for async HTTP, OpenAI-compatible
+completions API (vLLM/SGLang), PyTorch, AReaL framework.
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility | Change Type |
-|------|---------------|-------------|
-| `customized_areal/on_policy_distill/core/config.py` | Add TeacherConfig fields to OnPolicyDistillConfig | Modify |
-| `customized_areal/on_policy_distill/core/teacher_client.py` | **NEW**: TeacherClient for remote teacher API | Create |
-| `customized_areal/on_policy_distill/core/reward_compute.py` | **NEW**: _compute_token_rewards function | Create |
-| `customized_areal/on_policy_distill/core/agent.py` | Replace _convert_to_position_rewards with _compute_token_rewards | Modify |
-| `customized_areal/on_policy_distill/core/__init__.py` | Export new modules | Modify |
-| `customized_areal/on_policy_distill/proxy/client.py` | Fix set_last_rewards bug; add get_last_interaction | Modify |
-| `customized_areal/on_policy_distill/engine/fsdp_engine.py` | Fix try/finally for rolled_input_ids; fix tree training duplication | Modify |
-| `customized_areal/on_policy_distill/training/actor.py` | Fix stats logging gap in patched _ppo_update | Modify |
-| `customized_areal/on_policy_distill/configs/config_on_policy_distill.yaml` | Add teacher config section | Modify |
-| `areal/api/io_struct.py` | Add output_top_logprobs field to ModelResponse | Modify |
-| `areal/engine/sglang_remote.py` | Parse and store top_logprobs from SGLang response | Modify |
-| `tests/customized_areal/test_teacher_client.py` | **NEW**: Unit tests for TeacherClient | Create |
-| `tests/customized_areal/test_reward_compute.py` | **NEW**: Unit tests for _compute_token_rewards | Create |
+| File                                                                       | Responsibility                                                      | Change Type |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------- |
+| `customized_areal/on_policy_distill/core/config.py`                        | Add TeacherConfig fields to OnPolicyDistillConfig                   | Modify      |
+| `customized_areal/on_policy_distill/core/teacher_client.py`                | **NEW**: TeacherClient for remote teacher API                       | Create      |
+| `customized_areal/on_policy_distill/core/reward_compute.py`                | **NEW**: \_compute_token_rewards function                           | Create      |
+| `customized_areal/on_policy_distill/core/agent.py`                         | Replace \_convert_to_position_rewards with \_compute_token_rewards  | Modify      |
+| `customized_areal/on_policy_distill/core/__init__.py`                      | Export new modules                                                  | Modify      |
+| `customized_areal/on_policy_distill/proxy/client.py`                       | Fix set_last_rewards bug; add get_last_interaction                  | Modify      |
+| `customized_areal/on_policy_distill/engine/fsdp_engine.py`                 | Fix try/finally for rolled_input_ids; fix tree training duplication | Modify      |
+| `customized_areal/on_policy_distill/training/actor.py`                     | Fix stats logging gap in patched \_ppo_update                       | Modify      |
+| `customized_areal/on_policy_distill/configs/config_on_policy_distill.yaml` | Add teacher config section                                          | Modify      |
+| `areal/api/io_struct.py`                                                   | Add output_top_logprobs field to ModelResponse                      | Modify      |
+| `areal/engine/sglang_remote.py`                                            | Parse and store top_logprobs from SGLang response                   | Modify      |
+| `tests/customized_areal/test_teacher_client.py`                            | **NEW**: Unit tests for TeacherClient                               | Create      |
+| `tests/customized_areal/test_reward_compute.py`                            | **NEW**: Unit tests for \_compute_token_rewards                     | Create      |
 
----
+______________________________________________________________________
 
 ### Task 1: Add output_top_logprobs to ModelResponse
 
-This is the foundation - everything else depends on having top-k logprobs available in ModelResponse.
+This is the foundation - everything else depends on having top-k logprobs available in
+ModelResponse.
 
 **Files:**
+
 - Modify: `areal/api/io_struct.py:60-81` (ModelResponse dataclass)
+
 - Test: `tests/test_model_response_top_logprobs.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -82,8 +94,8 @@ def test_model_response_backward_compatible_without_top_logprobs():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_model_response_top_logprobs.py -v`
-Expected: FAIL with `AttributeError: ModelResponse has no field output_top_logprobs`
+Run: `uv run pytest tests/test_model_response_top_logprobs.py -v` Expected: FAIL with
+`AttributeError: ModelResponse has no field output_top_logprobs`
 
 - [ ] **Step 3: Add output_top_logprobs field to ModelResponse**
 
@@ -97,8 +109,8 @@ In `areal/api/io_struct.py`, add after line 66 (after `output_versions`):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_model_response_top_logprobs.py -v`
-Expected: All 3 tests PASS
+Run: `uv run pytest tests/test_model_response_top_logprobs.py -v` Expected: All 3 tests
+PASS
 
 - [ ] **Step 5: Commit**
 
@@ -107,14 +119,16 @@ git add areal/api/io_struct.py tests/test_model_response_top_logprobs.py
 git commit -m "feat: add output_top_logprobs field to ModelResponse for teacher distillation"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Parse top-k logprobs from SGLang response
 
 Extend the SGLang remote engine to capture and store top-k logprobs when available.
 
 **Files:**
+
 - Modify: `areal/engine/sglang_remote.py:88-124` (parse_generation_response)
+
 - Test: `tests/test_sglang_top_logprobs.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -211,14 +225,16 @@ def test_parse_top_logprobs_with_token_string_keys():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_sglang_top_logprobs.py -v`
-Expected: FAIL (output_top_logprobs not yet parsed)
+Run: `uv run pytest tests/test_sglang_top_logprobs.py -v` Expected: FAIL
+(output_top_logprobs not yet parsed)
 
 - [ ] **Step 3: Implement top-k logprobs parsing in SGLangBackend**
 
-In `areal/engine/sglang_remote.py`, modify `parse_generation_response` (around lines 88-124) to extract `output_top_logprobs` from `meta_info`:
+In `areal/engine/sglang_remote.py`, modify `parse_generation_response` (around lines
+88-124) to extract `output_top_logprobs` from `meta_info`:
 
-After the existing lines that extract `output_tokens` and `output_logprobs` (lines 116-117), add:
+After the existing lines that extract `output_tokens` and `output_logprobs` (lines
+116-117), add:
 
 ```python
     # Extract top-k logprobs per position if available
@@ -236,12 +252,12 @@ After the existing lines that extract `output_tokens` and `output_logprobs` (lin
             output_top_logprobs.append(position_logprobs)
 ```
 
-And add `output_top_logprobs=output_top_logprobs` to the `HttpGenerationResult` return statement.
+And add `output_top_logprobs=output_top_logprobs` to the `HttpGenerationResult` return
+statement.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_sglang_top_logprobs.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_sglang_top_logprobs.py -v` Expected: All tests PASS
 
 - [ ] **Step 5: Commit**
 
@@ -250,14 +266,16 @@ git add areal/engine/sglang_remote.py tests/test_sglang_top_logprobs.py
 git commit -m "feat: parse output_top_logprobs from SGLang response for teacher distillation"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Create TeacherClient
 
 New module for calling the remote teacher inference API.
 
 **Files:**
+
 - Create: `customized_areal/on_policy_distill/core/teacher_client.py`
+
 - Test: `tests/customized_areal/test_teacher_client.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -426,8 +444,9 @@ async def test_get_logprobs_retry_on_failure(teacher_client):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/customized_areal/test_teacher_client.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'customized_areal.on_policy_distill.core.teacher_client'`
+Run: `uv run pytest tests/customized_areal/test_teacher_client.py -v` Expected: FAIL
+with
+`ModuleNotFoundError: No module named 'customized_areal.on_policy_distill.core.teacher_client'`
 
 - [ ] **Step 3: Implement TeacherClient**
 
@@ -688,8 +707,8 @@ class TeacherClient:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/customized_areal/test_teacher_client.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/customized_areal/test_teacher_client.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 5: Commit**
 
@@ -698,14 +717,16 @@ git add customized_areal/on_policy_distill/core/teacher_client.py tests/customiz
 git commit -m "feat: add TeacherClient for remote teacher model API calls"
 ```
 
----
+______________________________________________________________________
 
-### Task 4: Create _compute_token_rewards function
+### Task 4: Create \_compute_token_rewards function
 
 The core reward computation that compares student and teacher logprobs.
 
 **Files:**
+
 - Create: `customized_areal/on_policy_distill/core/reward_compute.py`
+
 - Test: `tests/customized_areal/test_reward_compute.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -817,10 +838,11 @@ async def test_compute_token_rewards_empty_output(mock_teacher_client):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/customized_areal/test_reward_compute.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'customized_areal.on_policy_distill.core.reward_compute'`
+Run: `uv run pytest tests/customized_areal/test_reward_compute.py -v` Expected: FAIL
+with
+`ModuleNotFoundError: No module named 'customized_areal.on_policy_distill.core.reward_compute'`
 
-- [ ] **Step 3: Implement _compute_token_rewards**
+- [ ] **Step 3: Implement \_compute_token_rewards**
 
 Create `customized_areal/on_policy_distill/core/reward_compute.py`:
 
@@ -952,8 +974,8 @@ async def _compute_token_rewards(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/customized_areal/test_reward_compute.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/customized_areal/test_reward_compute.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 5: Commit**
 
@@ -962,20 +984,24 @@ git add customized_areal/on_policy_distill/core/reward_compute.py tests/customiz
 git commit -m "feat: add _compute_token_rewards for teacher/student logprob comparison"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Add TeacherConfig to OnPolicyDistillConfig
 
 Add teacher configuration fields and integrate TeacherClient into OnPolicyDistillAgent.
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/core/config.py:1-98`
+
 - Modify: `customized_areal/on_policy_distill/core/agent.py:1-292`
+
 - Modify: `customized_areal/on_policy_distill/core/__init__.py`
 
 - [ ] **Step 1: Add TeacherConfig fields to OnPolicyDistillConfig**
 
-In `customized_areal/on_policy_distill/core/config.py`, add after the `reward_bias` field (line 98):
+In `customized_areal/on_policy_distill/core/config.py`, add after the `reward_bias`
+field (line 98):
 
 ```python
     # Teacher model configuration
@@ -1011,7 +1037,7 @@ Also add the import for `TeacherConfig` at the top:
 from customized_areal.on_policy_distill.core.teacher_client import TeacherConfig
 ```
 
-- [ ] **Step 2: Modify OnPolicyDistillAgent to use _compute_token_rewards**
+- [ ] **Step 2: Modify OnPolicyDistillAgent to use \_compute_token_rewards**
 
 In `customized_areal/on_policy_distill/core/agent.py`:
 
@@ -1022,7 +1048,8 @@ from customized_areal.on_policy_distill.core.teacher_client import TeacherClient
 from customized_areal.on_policy_distill.core.reward_compute import _compute_token_rewards
 ```
 
-2. Modify `OnPolicyDistillAgent.__init__` (around line 87) to accept and initialize TeacherClient:
+2. Modify `OnPolicyDistillAgent.__init__` (around line 87) to accept and initialize
+   TeacherClient:
 
 Replace the current `__init__` method with:
 
@@ -1059,9 +1086,13 @@ Replace the current `__init__` method with:
         )
 ```
 
-3. Replace the `_convert_to_position_rewards` method and the position rewards extraction in `run()` (lines 112-216) with a new implementation that uses `_compute_token_rewards`. The key change is replacing lines 177-193 (the metadata-based extraction) with teacher-based computation:
+3. Replace the `_convert_to_position_rewards` method and the position rewards extraction
+   in `run()` (lines 112-216) with a new implementation that uses
+   `_compute_token_rewards`. The key change is replacing lines 177-193 (the
+   metadata-based extraction) with teacher-based computation:
 
-Replace the block from `# Extract token_rewards from message metadata` through `_convert_to_position_rewards` with:
+Replace the block from `# Extract token_rewards from message metadata` through
+`_convert_to_position_rewards` with:
 
 ```python
             # Compute position-level rewards using teacher model
@@ -1109,7 +1140,8 @@ Replace the block from `# Extract token_rewards from message metadata` through `
 
 - [ ] **Step 3: Update core/__init__.py exports**
 
-In `customized_areal/on_policy_distill/core/__init__.py`, add exports for the new modules:
+In `customized_areal/on_policy_distill/core/__init__.py`, add exports for the new
+modules:
 
 ```python
 from .teacher_client import TeacherClient, TeacherConfig
@@ -1120,12 +1152,13 @@ And update `__all__` to include these.
 
 - [ ] **Step 4: Update parent __init__.py**
 
-In `customized_areal/on_policy_distill/__init__.py`, add `__getattr__` entries for `TeacherClient`, `TeacherConfig`, and `_compute_token_rewards`.
+In `customized_areal/on_policy_distill/__init__.py`, add `__getattr__` entries for
+`TeacherClient`, `TeacherConfig`, and `_compute_token_rewards`.
 
 - [ ] **Step 5: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/customized_areal/ -v --timeout=30`
-Expected: Existing tests PASS (new code is additive)
+Run: `uv run pytest tests/customized_areal/ -v --timeout=30` Expected: Existing tests
+PASS (new code is additive)
 
 - [ ] **Step 6: Commit**
 
@@ -1134,27 +1167,32 @@ git add customized_areal/on_policy_distill/core/config.py customized_areal/on_po
 git commit -m "feat: integrate TeacherClient and _compute_token_rewards into OnPolicyDistillAgent"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Fix set_last_rewards bug and add get_last_interaction
 
 Bug fix and feature addition for the proxy client.
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/client.py:212-251`
 
 - [ ] **Step 1: Fix `set_last_rewards` to send `None` instead of `""`**
 
-In `customized_areal/on_policy_distill/proxy/client.py`, change lines 212-229 and 231-251:
+In `customized_areal/on_policy_distill/proxy/client.py`, change lines 212-229 and
+231-251:
 
 Replace `set_last_rewards` (line 227):
+
 ```python
         await self.set_rewards(
             completion_id="",  # Empty string means "last interaction"
             token_rewards=token_rewards,
         )
 ```
+
 With:
+
 ```python
         await self.set_rewards(
             completion_id=None,  # None means "last interaction"
@@ -1163,13 +1201,16 @@ With:
 ```
 
 Replace `set_last_position_rewards` (line 249):
+
 ```python
         await self.set_position_rewards(
             completion_id="",  # Empty string means "last interaction"
             position_rewards=position_rewards,
         )
 ```
+
 With:
+
 ```python
         await self.set_position_rewards(
             completion_id=None,  # None means "last interaction"
@@ -1179,7 +1220,8 @@ With:
 
 - [ ] **Step 2: Add `get_last_interaction` method to OpenAIProxyClient**
 
-In `customized_areal/on_policy_distill/proxy/client.py`, add a new method after `get_entropies`:
+In `customized_areal/on_policy_distill/proxy/client.py`, add a new method after
+`get_entropies`:
 
 ```python
     async def get_last_interaction(self) -> Any:
@@ -1213,7 +1255,9 @@ In `customized_areal/on_policy_distill/proxy/client.py`, add a new method after 
         return interactions[last_id]
 ```
 
-Also add the import for `EXPORT_TRAJECTORIES_PATHNAME` at the top if not already present:
+Also add the import for `EXPORT_TRAJECTORIES_PATHNAME` at the top if not already
+present:
+
 ```python
 from areal.experimental.openai.proxy.server import EXPORT_TRAJECTORIES_PATHNAME
 ```
@@ -1225,21 +1269,26 @@ git add customized_areal/on_policy_distill/proxy/client.py
 git commit -m "fix: set_last_rewards sends None instead of empty string; add get_last_interaction"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Fix engine and actor bugs
 
-Fix the `rolled_input_ids` mutation without try/finally, tree training duplication, and stats logging gap.
+Fix the `rolled_input_ids` mutation without try/finally, tree training duplication, and
+stats logging gap.
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/engine/fsdp_engine.py:255-315`
+
 - Modify: `customized_areal/on_policy_distill/training/actor.py:43-71`
 
 - [ ] **Step 1: Fix rolled_input_ids mutation in fsdp_engine.py**
 
-In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, replace lines 304-315 (the multi-candidate labels override and restoration):
+In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, replace lines 304-315
+(the multi-candidate labels override and restoration):
 
 Replace:
+
 ```python
                         if multi_candidate_labels is not None:
                         # Use multi-candidate labels for gathering
@@ -1259,6 +1308,7 @@ Replace:
 ```
 
 With:
+
 ```python
                         if multi_candidate_labels is not None:
                         # Use multi-candidate labels for gathering
@@ -1281,9 +1331,11 @@ With:
 
 - [ ] **Step 2: Fix tree training path duplication**
 
-In the same file, replace the tree training branch (lines 255-277) with a delegation to super():
+In the same file, replace the tree training branch (lines 255-277) with a delegation to
+super():
 
 Replace the `if self.enable_tree_training:` block (lines 255-277) with:
+
 ```python
             if self.enable_tree_training:
                 # Delegate to parent class for tree training
@@ -1292,11 +1344,14 @@ Replace the `if self.enable_tree_training:` block (lines 255-277) with:
                 )
 ```
 
-Note: This requires removing the `from areal.models.tree_attn.functional import ...` that was inside the tree training block. The import is no longer needed in this file since we're delegating to super().
+Note: This requires removing the `from areal.models.tree_attn.functional import ...`
+that was inside the tree training block. The import is no longer needed in this file
+since we're delegating to super().
 
 - [ ] **Step 3: Fix stats logging gap in actor.py**
 
-In `customized_areal/on_policy_distill/training/actor.py`, add back critical stats tracking to `_ppo_update_with_distill_loss`:
+In `customized_areal/on_policy_distill/training/actor.py`, add back critical stats
+tracking to `_ppo_update_with_distill_loss`:
 
 Replace the `_ppo_update_with_distill_loss` method body (lines 43-71) with:
 
@@ -1341,13 +1396,16 @@ Replace the `_ppo_update_with_distill_loss` method body (lines 43-71) with:
 ```
 
 Add the missing import at the top:
+
 ```python
 import torch
 ```
 
 - [ ] **Step 4: Remove unused import**
 
-In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, remove the unused import on line 247:
+In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, remove the unused import
+on line 247:
+
 ```python
 from areal.engine.core import compute_total_loss_weight
 ```
@@ -1359,14 +1417,16 @@ git add customized_areal/on_policy_distill/engine/fsdp_engine.py customized_area
 git commit -m "fix: rolled_input_ids try/finally, tree training delegation, stats logging gap"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Update config YAML
 
 Add teacher configuration section to the YAML config.
 
 **Files:**
-- Modify: `customized_areal/on_policy_distill/configs/config_on_policy_distill.yaml:124-136`
+
+- Modify:
+  `customized_areal/on_policy_distill/configs/config_on_policy_distill.yaml:124-136`
 
 - [ ] **Step 1: Add teacher config section**
 
@@ -1389,22 +1449,29 @@ git add customized_areal/on_policy_distill/configs/config_on_policy_distill.yaml
 git commit -m "feat: add teacher model configuration to on-policy distill config"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Remove dead code
 
-Remove `_convert_to_position_rewards` that references non-existent `manager_idm.py` and clean up.
+Remove `_convert_to_position_rewards` that references non-existent `manager_idm.py` and
+clean up.
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/core/agent.py`
 
 - [ ] **Step 1: Remove `_convert_to_position_rewards` method**
 
-In `customized_areal/on_policy_distill/core/agent.py`, delete the entire `_convert_to_position_rewards` method (lines 218-292). This method referenced non-existent `manager_idm.py:_compute_token_rewards` and is replaced by the `_compute_token_rewards` function from `reward_compute.py`.
+In `customized_areal/on_policy_distill/core/agent.py`, delete the entire
+`_convert_to_position_rewards` method (lines 218-292). This method referenced
+non-existent `manager_idm.py:_compute_token_rewards` and is replaced by the
+`_compute_token_rewards` function from `reward_compute.py`.
 
 - [ ] **Step 2: Update `__init__.py` exports**
 
-In `customized_areal/on_policy_distill/__init__.py`, remove `_convert_to_position_rewards` from exports if it was listed (it wasn't, so no change needed).
+In `customized_areal/on_policy_distill/__init__.py`, remove
+`_convert_to_position_rewards` from exports if it was listed (it wasn't, so no change
+needed).
 
 - [ ] **Step 3: Commit**
 
@@ -1413,13 +1480,15 @@ git add customized_areal/on_policy_distill/core/agent.py
 git commit -m "refactor: remove dead _convert_to_position_rewards method referencing non-existent manager_idm"
 ```
 
----
+______________________________________________________________________
 
 ### Task 10: Integration test
 
-Write an end-to-end integration test that verifies the full teacher distillation pipeline with mock components.
+Write an end-to-end integration test that verifies the full teacher distillation
+pipeline with mock components.
 
 **Files:**
+
 - Create: `tests/customized_areal/test_teacher_distill_integration.py`
 
 - [ ] **Step 1: Write integration test**
@@ -1572,8 +1641,7 @@ Expected: All tests PASS
 
 - [ ] **Step 3: Run all existing tests to verify no regressions**
 
-Run: `uv run pytest tests/customized_areal/ -v --timeout=60`
-Expected: All tests PASS
+Run: `uv run pytest tests/customized_areal/ -v --timeout=60` Expected: All tests PASS
 
 - [ ] **Step 4: Commit**
 
@@ -1582,26 +1650,33 @@ git add tests/customized_areal/test_teacher_distill_integration.py
 git commit -m "test: add integration tests for teacher distillation pipeline"
 ```
 
----
+______________________________________________________________________
 
 ## Self-Review Checklist
 
 1. **Spec coverage:**
+
    - TeacherConfig → Task 5 (config fields) + Task 8 (YAML)
    - TeacherClient → Task 3
-   - _compute_token_rewards → Task 4
+   - \_compute_token_rewards → Task 4
    - Modified OnPolicyDistillAgent → Task 5 (agent.py changes)
    - Student rollout logprobs → Task 1 (ModelResponse) + Task 2 (SGLang parsing)
    - Bug fixes (set_last_rewards, try/finally, stats, tree training) → Tasks 6, 7
    - Remove dead code → Task 9
    - Testing → Tasks 1, 2, 3, 4, 10
 
-2. **Placeholder scan:** All code is concrete - no TBD/TODO/fill-in-later.
+1. **Placeholder scan:** All code is concrete - no TBD/TODO/fill-in-later.
 
-3. **Type consistency:**
-   - `PositionRewardInfo` is imported from `..proxy.cache` in `reward_compute.py` - matches the existing dataclass
-   - `TeacherConfig` is defined in `teacher_client.py` and used in `config.py` and `agent.py` - consistent
+1. **Type consistency:**
+
+   - `PositionRewardInfo` is imported from `..proxy.cache` in `reward_compute.py` -
+     matches the existing dataclass
+   - `TeacherConfig` is defined in `teacher_client.py` and used in `config.py` and
+     `agent.py` - consistent
    - `student_top_k_logprobs` is `list[list[tuple[int, float]]]` throughout
    - `candidate_token_ids` is `list[list[int]]` throughout
 
-4. **Open spec question:** The `get_last_interaction()` method added to `OpenAIProxyClient` in Task 6 uses the export endpoint to fetch interactions. This is a simple approach but may not be the most efficient for getting just the last interaction. A dedicated endpoint could be added later if needed.
+1. **Open spec question:** The `get_last_interaction()` method added to
+   `OpenAIProxyClient` in Task 6 uses the export endpoint to fetch interactions. This is
+   a simple approach but may not be the most efficient for getting just the last
+   interaction. A dedicated endpoint could be added later if needed.

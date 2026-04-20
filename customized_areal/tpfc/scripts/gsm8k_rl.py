@@ -1,4 +1,3 @@
-
 import sys
 
 # Patch: Fix 'set' object is not subscriptable error in FSDP
@@ -19,11 +18,12 @@ def _patched_apply_fsdp2(model, fsdp_kwargs, wrap_policy):
 _fsdp_utils.apply_fsdp2 = _patched_apply_fsdp2
 # End patch
 
+from customized_areal.tpfc.tpfc_config import TPFCConfig
+
 from areal import PPOTrainer
 from areal.api.cli_args import load_expr_config
 from areal.dataset import get_custom_dataset
 from areal.utils.hf_utils import load_hf_tokenizer
-from customized_areal.tpfc.tpfc_config import TPFCConfig
 
 
 def main(args):

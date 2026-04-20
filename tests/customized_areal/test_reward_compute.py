@@ -1,7 +1,7 @@
 """Tests for _compute_token_rewards in reward_compute.py."""
 
 import math
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,7 +12,6 @@ from customized_areal.on_policy_distill.core.teacher_client import (
     TeacherClient,
     TeacherConfig,
 )
-from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
 
 
 def _make_mock_teacher_client(
@@ -36,9 +35,7 @@ def _make_mock_teacher_client(
     """
     config = TeacherConfig(teacher_missing_logprob=missing_logprob)
     client = TeacherClient(config)
-    client.get_logprobs_for_candidates = AsyncMock(
-        return_value=teacher_logprobs
-    )
+    client.get_logprobs_for_candidates = AsyncMock(return_value=teacher_logprobs)
     return client
 
 
@@ -52,7 +49,7 @@ async def test_basic_reward_computation():
     """Test reward = student_logp - teacher_logp with known values."""
     teacher_logprobs = [
         {100: -0.5, 200: -1.0, 300: -2.0},  # position 0
-        {400: -0.2, 500: -0.6},              # position 1
+        {400: -0.2, 500: -0.6},  # position 1
     ]
     client = _make_mock_teacher_client(teacher_logprobs)
 
@@ -61,7 +58,7 @@ async def test_basic_reward_computation():
         student_input_ids=[10, 20, 30],
         student_top_k_logprobs=[
             [(100, -0.5), (200, -1.0), (300, -2.0)],  # position 0
-            [(400, -0.2), (500, -0.6)],                # position 1
+            [(400, -0.2), (500, -0.6)],  # position 1
         ],
         teacher_client=client,
         top_k=10,

@@ -31,7 +31,7 @@ rollout:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   tokenizer_path: ${tokenizer_path}
-  max_concurrent_rollouts: 20
+  max_concurrent_rollouts: 40
   queue_size: null
   consumer_batch_size: ${train_dataset.batch_size}
   max_head_offpolicyness: 6
@@ -85,7 +85,7 @@ actor:
   reward_scaling: 10.0
   reward_bias: -0.5
   kl_ctl: 0.0
-  ppo_n_minibatches: 1
+  ppo_n_minibatches: 4
   recompute_logprob: true
   use_decoupled_loss: true
   behave_imp_weight_cap: 5.0

@@ -10,8 +10,8 @@ from typing import Any
 
 import torch
 
-from areal.api.cli_args import PPOActorConfig
 from areal.api import Scheduler
+from areal.api.cli_args import PPOActorConfig
 from areal.utils import logging
 
 from .fsdp_engine import MultiCandidateFSDPEngine

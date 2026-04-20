@@ -1,8 +1,8 @@
 # customized_areal/tree_search/turn_splitter.py
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 
 @dataclass
@@ -73,7 +73,9 @@ def make_turn_splitter(
             if not response_tokens:
                 continue  # skip markers with no response after them
 
-            turns.append(Turn(prompt_tokens=prompt_tokens, response_tokens=response_tokens))
+            turns.append(
+                Turn(prompt_tokens=prompt_tokens, response_tokens=response_tokens)
+            )
 
         return turns
 

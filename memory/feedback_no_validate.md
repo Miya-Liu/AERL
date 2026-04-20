@@ -8,4 +8,6 @@ type: feedback
 
 **Why:** User wants fast iterations without extra checks.
 
-**How to apply:** After editing YAML configs or similar files, just confirm the changes were made. Do not run validation scripts, linting, or verification commands on the edited files.
+**How to apply:** After editing YAML configs or similar files, just confirm the changes
+were made. Do not run validation scripts, linting, or verification commands on the
+edited files.

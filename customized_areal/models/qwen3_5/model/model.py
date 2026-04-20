@@ -12,14 +12,15 @@ from torch import nn
 if TYPE_CHECKING:
     from customized_areal.models.qwen3_5.model.args import Qwen35ModelArgs
 
-from areal.experimental.models.archon.attention import VarlenAttentionWrapper
-from areal.experimental.models.archon.base import BaseArchonModel
-from areal.experimental.models.archon.moe import MoE
 from customized_areal.models.qwen3_5.model.rope import (
     apply_rotary_emb,
     precompute_rope_cache,
     repeat_kv,
 )
+
+from areal.experimental.models.archon.attention import VarlenAttentionWrapper
+from areal.experimental.models.archon.base import BaseArchonModel
+from areal.experimental.models.archon.moe import MoE
 
 # Optional GPU dependencies (fla, causal-conv1d).
 try:

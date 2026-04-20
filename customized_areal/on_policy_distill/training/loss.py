@@ -15,7 +15,6 @@ For multi-candidate training:
 from __future__ import annotations
 
 import torch
-from typing import Any
 
 from areal.api.cli_args import PPOActorConfig
 from areal.trainer.ppo.stats import infer_token_denominator
@@ -71,7 +70,6 @@ def grpo_distill_loss_fn(
     torch.Tensor
         Combined loss (GRPO + position-level GRPO).
     """
-    from areal.trainer.ppo.actor import grpo_loss_fn
 
     old_logp = input_data["logprobs"]
     advantages = input_data["advantages"]
@@ -116,7 +114,9 @@ def grpo_distill_loss_fn(
         distill_loss_weight = input_data.get("distill_loss_weight", 0.005)
 
         # Determine output length from loss_mask
-        loss_mask_list = loss_mask.squeeze(0).tolist() if loss_mask.dim() > 1 else loss_mask.tolist()
+        loss_mask_list = (
+            loss_mask.squeeze(0).tolist() if loss_mask.dim() > 1 else loss_mask.tolist()
+        )
         try:
             first_one_idx = loss_mask_list.index(1)
             output_len = len(loss_mask_list) - first_one_idx
@@ -281,16 +281,24 @@ def _compute_position_level_grpo_loss(
 
     # Build padded tensors [n_pos, max_candidates]
     rewards_t = torch.zeros(n_pos, max_candidates, dtype=torch.float32, device=device)
-    old_logprobs_t = torch.zeros(n_pos, max_candidates, dtype=torch.float32, device=device)
+    old_logprobs_t = torch.zeros(
+        n_pos, max_candidates, dtype=torch.float32, device=device
+    )
     candidate_mask = torch.zeros(n_pos, max_candidates, dtype=torch.bool, device=device)
     has_old_mask = torch.zeros(n_pos, max_candidates, dtype=torch.bool, device=device)
 
     for i in range(n_pos):
         num = len(reward_rows[i])
-        rewards_t[i, :num] = torch.tensor(reward_rows[i], dtype=torch.float32, device=device)
-        old_logprobs_t[i, :num] = torch.tensor(old_logprob_rows[i], dtype=torch.float32, device=device)
+        rewards_t[i, :num] = torch.tensor(
+            reward_rows[i], dtype=torch.float32, device=device
+        )
+        old_logprobs_t[i, :num] = torch.tensor(
+            old_logprob_rows[i], dtype=torch.float32, device=device
+        )
         candidate_mask[i, :num] = True
-        has_old_mask[i, :num] = torch.tensor(has_old_mask_rows[i], dtype=torch.bool, device=device)
+        has_old_mask[i, :num] = torch.tensor(
+            has_old_mask_rows[i], dtype=torch.bool, device=device
+        )
 
     # Get new logprobs for all positions at once [n_pos, max_candidates]
     new_logprobs = logprobs[positions_t, :]
@@ -305,7 +313,9 @@ def _compute_position_level_grpo_loss(
     reward_mean = (rewards_t * candidate_mask).sum(dim=1, keepdim=True) / num_valid
 
     # Unbiased std (match original torch.std behavior)
-    var = ((rewards_t - reward_mean) ** 2 * candidate_mask).sum(dim=1, keepdim=True) / (num_valid - 1).clamp(min=1)
+    var = ((rewards_t - reward_mean) ** 2 * candidate_mask).sum(dim=1, keepdim=True) / (
+        num_valid - 1
+    ).clamp(min=1)
     reward_std = torch.sqrt(var)
     reward_std = torch.where(num_valid > 1, reward_std, torch.zeros_like(reward_std))
 
@@ -314,10 +324,14 @@ def _compute_position_level_grpo_loss(
 
     # Compute weighted loss with importance sampling
     weighted_advantages = importance_weights * advantages
-    loss_per_position = -(weighted_advantages * new_logprobs).sum(dim=1) / num_valid.squeeze(1)
+    loss_per_position = -(weighted_advantages * new_logprobs).sum(
+        dim=1
+    ) / num_valid.squeeze(1)
 
     total_weight = importance_weights.sum(dim=1)
-    loss_per_position = torch.where(total_weight > 0, loss_per_position / total_weight, loss_per_position)
+    loss_per_position = torch.where(
+        total_weight > 0, loss_per_position / total_weight, loss_per_position
+    )
 
     # Pad or truncate to output_len
     n_loss = loss_per_position.shape[0]

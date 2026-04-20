@@ -24,8 +24,8 @@ except ImportError:
 
 from customized_areal.db_service import (
     AgentCreateRequest,
-    DBConnection,
     AgentService,
+    DBConnection,
     cleanup_sandbox_for_task,
     create_task,
     get_agent_loader,
@@ -45,7 +45,8 @@ except ImportError:
     logger = logging.getLogger("BackendRun")
 
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
-DEFAULT_AGENT_ID = "8bba75cb-0d87-4efe-b566-87de77335b76"
+DEFAULT_AGENT_ID = "b11faebe-8d6a-4467-8609-10323d9444d6"
+# DEFAULT_AGENT_ID = None
 DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
 LE_AGENT_API_URL = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
 TOKEN_REFRESH_MARGIN = 60  # seconds — refresh 1 min before expiry, not 5
@@ -118,7 +119,7 @@ class SharedTokenManager:
     def read_token(self) -> str | None:
         """Read the shared access token from file."""
         try:
-            with open(self.token_file, "r") as f, _FileLock(f, fcntl.LOCK_SH):
+            with open(self.token_file) as f, _FileLock(f, fcntl.LOCK_SH):
                 data = json.load(f)
             return data.get("access_token")
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
@@ -247,7 +248,8 @@ async def _resolve_agent_id(client, user_id: str, agent_id: str | None) -> str:
     )
     new_agent_id = created_agent.agent_id
     loader = await get_agent_loader()
-    await loader.load_agent(new_agent_id, user_id, load_config=True)
+    # agent_data = await loader.load_agent(agent_id, user_id, load_config=True)
+    agent_data = await loader.load_agent(new_agent_id, user_id, load_config=True)
     logger.info("Created agent: %s", new_agent_id)
     return new_agent_id
 
@@ -318,7 +320,9 @@ async def _wait_for_agent_run(
         return timeout - (time.time() - start_time)
 
     if api_base_url and auth_token:
-        stream_url = f"{api_base_url}/api/agent-runs/{agent_run_id}/stream?token={auth_token}"
+        stream_url = (
+            f"{api_base_url}/api/agent-runs/{agent_run_id}/stream?token={auth_token}"
+        )
         sse_retry_delay = 1.0
 
         while _time_left() > 0:
@@ -327,7 +331,9 @@ async def _wait_for_agent_run(
                 headers["last-event-id"] = last_event_id
 
             try:
-                async with httpx.AsyncClient(timeout=_time_left() + 10.0) as http_client:
+                async with httpx.AsyncClient(
+                    timeout=_time_left() + 10.0
+                ) as http_client:
                     async with http_client.stream(
                         "GET",
                         stream_url,

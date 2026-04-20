@@ -1,7 +1,7 @@
 """Tests for TeacherClient and TeacherConfig."""
 
 import math
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -9,9 +9,7 @@ import pytest
 from customized_areal.on_policy_distill.core.teacher_client import (
     TeacherClient,
     TeacherConfig,
-    _DEFAULT_MISSING_LOGPROB,
 )
-
 
 # ---------------------------------------------------------------------------
 # TeacherConfig tests
@@ -272,9 +270,7 @@ class TestTeacherClient:
         )
 
         mock_http_client = AsyncMock()
-        mock_http_client.post = AsyncMock(
-            side_effect=[fail_response, success_response]
-        )
+        mock_http_client.post = AsyncMock(side_effect=[fail_response, success_response])
 
         async with client:
             client._client = mock_http_client

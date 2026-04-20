@@ -1,5 +1,5 @@
 import torch
-import pytest
+
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.turn_splitter import Turn
 
@@ -8,7 +8,12 @@ def _two_turn_splitter(input_ids: list[int]) -> list[Turn]:
     """Simple splitter for testing: splits at token 10, first half is prompt, second is response."""
     try:
         split_pos = input_ids.index(10)
-        return [Turn(prompt_tokens=input_ids[:split_pos], response_tokens=input_ids[split_pos:])]
+        return [
+            Turn(
+                prompt_tokens=input_ids[:split_pos],
+                response_tokens=input_ids[split_pos:],
+            )
+        ]
     except ValueError:
         return [Turn(prompt_tokens=[], response_tokens=list(input_ids))]
 

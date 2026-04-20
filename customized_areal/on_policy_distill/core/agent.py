@@ -5,18 +5,21 @@ This module provides a class-based agent interface consistent with AReaL's
 agentic RL training pattern, using the run_backend function from tpfc.
 """
 
-import os
 import hashlib
 from typing import Any
 
-import httpx
+from customized_areal.on_policy_distill.core.reward_compute import (
+    _compute_token_rewards,
+)
+from customized_areal.on_policy_distill.core.teacher_client import (
+    TeacherClient,
+    TeacherConfig,
+)
+from customized_areal.tpfc.backend_run import run_backend
 
 from areal.api import AsyncRewardWrapper
 from areal.utils import logging
 
-from customized_areal.tpfc.backend_run import run_backend
-from customized_areal.on_policy_distill.core.teacher_client import TeacherClient, TeacherConfig
-from customized_areal.on_policy_distill.core.reward_compute import _compute_token_rewards
 from ..proxy.cache import PositionRewardInfo
 
 logger = logging.getLogger("OnPolicyDistillAgent")
@@ -189,8 +192,14 @@ class OnPolicyDistillAgent:
                 if proxy_client is not None:
                     try:
                         interaction = await proxy_client.get_last_interaction()
-                        if interaction and hasattr(interaction, 'model_response') and interaction.model_response is not None:
-                            student_output_ids = interaction.model_response.output_tokens
+                        if (
+                            interaction
+                            and hasattr(interaction, "model_response")
+                            and interaction.model_response is not None
+                        ):
+                            student_output_ids = (
+                                interaction.model_response.output_tokens
+                            )
                             student_input_ids = interaction.model_response.input_tokens
                             student_top_k_logprobs = getattr(
                                 interaction.model_response, "output_top_logprobs", None
@@ -212,7 +221,9 @@ class OnPolicyDistillAgent:
                                     len(position_rewards),
                                 )
                     except Exception as e:
-                        logger.warning("Failed to compute position rewards via teacher: %s", e)
+                        logger.warning(
+                            "Failed to compute position rewards via teacher: %s", e
+                        )
 
             # Calculate reward using reward function
             reward_fn = AsyncRewardWrapper(on_policy_distill_reward_fn)
@@ -236,4 +247,3 @@ class OnPolicyDistillAgent:
         except Exception as e:
             logger.error(f"OnPolicyDistillAgent run failed: {e}")
             raise
-

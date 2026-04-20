@@ -51,6 +51,7 @@ def convert_image_to_bytes(
 
     # Save to JPEG bytes
     import io
+
     output = io.BytesIO()
     image.save(output, format="JPEG")
     return output.getvalue()
@@ -147,6 +148,7 @@ def get_tpfc_rl_dataset(
 
     # Filter by length if requested
     if max_length is not None and tokenizer is not None:
+
         def filter_length(sample):
             try:
                 # Concatenate all message content for length check

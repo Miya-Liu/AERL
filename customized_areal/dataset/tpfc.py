@@ -53,7 +53,11 @@ def get_tpfc_rl_dataset(
         images = sample.get("images")
         if images is not None and len(images) > 0:
             result["files_path"] = [
-                img["image"][7:] if isinstance(img, dict) and img.get("image", "").startswith("file://") else img.get("image", "") if isinstance(img, dict) else img
+                img["image"][7:]
+                if isinstance(img, dict) and img.get("image", "").startswith("file://")
+                else img.get("image", "")
+                if isinstance(img, dict)
+                else img
                 for img in images
             ]
 
@@ -67,14 +71,17 @@ def get_tpfc_rl_dataset(
     dataset = dataset.map(process)
 
     # Remove original columns
-    columns_to_remove = [col for col in dataset.column_names if col not in [
-        "messages", "answer", "style", "files_path", "extra_info"
-    ]]
+    columns_to_remove = [
+        col
+        for col in dataset.column_names
+        if col not in ["messages", "answer", "style", "files_path", "extra_info"]
+    ]
     if columns_to_remove:
         dataset = dataset.remove_columns(columns_to_remove)
 
     # Filter by max_length if provided
     if max_length is not None:
+
         def filter_length(sample):
             # Estimate token count from messages
             total_chars = sum(len(m.get("content", "")) for m in sample["messages"])

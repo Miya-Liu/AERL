@@ -7,8 +7,8 @@ This module contains:
 - reward_compute.py: _compute_token_rewards for teacher/student logprob comparison
 """
 
-from .teacher_client import TeacherClient, TeacherConfig
 from .reward_compute import _compute_token_rewards
+from .teacher_client import TeacherClient, TeacherConfig
 
 __all__ = [
     "TeacherClient",

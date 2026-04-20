@@ -1,13 +1,14 @@
 # Qwen3.5 Model Spec for Customized Archon Engine
 
-from areal.experimental.models.archon.model_spec import ModelSpec, register_model_spec
-from areal.experimental.models.archon.pipeline_parallel import pipeline_llm
 from customized_areal.models.qwen3_5.infra.parallelize import parallelize_qwen35
 from customized_areal.models.qwen3_5.model.args import Qwen35ModelArgs
 from customized_areal.models.qwen3_5.model.model import Qwen35Model
 from customized_areal.models.qwen3_5.model.state_dict_adapter import (
     Qwen35StateDictAdapter,
 )
+
+from areal.experimental.models.archon.model_spec import ModelSpec, register_model_spec
+from areal.experimental.models.archon.pipeline_parallel import pipeline_llm
 
 # Model spec definition for Qwen3.5
 # Note: This does NOT auto-register to avoid conflicts with the areal/ implementation.
@@ -64,7 +65,12 @@ QWEN35_CUSTOM_SPEC = ModelSpec(
     state_dict_adapter_class=Qwen35StateDictAdapter,
     parallelize_fn=parallelize_qwen35,
     supported_model_types=frozenset(
-        {"qwen3_5_custom", "qwen3_5_custom_text", "qwen3_5_custom_moe", "qwen3_5_custom_moe_text"}
+        {
+            "qwen3_5_custom",
+            "qwen3_5_custom_text",
+            "qwen3_5_custom_moe",
+            "qwen3_5_custom_moe_text",
+        }
     ),
     pipelining_fn=pipeline_llm,
 )

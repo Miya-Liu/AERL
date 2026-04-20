@@ -27,28 +27,27 @@ Example
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import aiohttp
 
-from areal.utils import logging
 from areal.experimental.openai.proxy.client_session import (
     OpenAIProxyClient as BaseOpenAIProxyClient,
+)
+from areal.experimental.openai.proxy.client_session import (
     post_json_with_retry,
 )
-from areal.infra.utils.http import ensure_end_with_slash
+from areal.utils import logging
 
 from .server import (
-    RL_SET_TOKEN_REWARDS_PATHNAME,
-    RL_SET_POSITION_REWARDS_PATHNAME,
-    RL_COMPUTE_ENTROPY_PATHNAME,
     EXPORT_TRAJECTORIES_PATHNAME,
-    SetTokenRewardsRequest,
-    SetPositionRewardsRequest,
+    RL_COMPUTE_ENTROPY_PATHNAME,
+    RL_SET_POSITION_REWARDS_PATHNAME,
+    RL_SET_TOKEN_REWARDS_PATHNAME,
     ComputeEntropyRequest,
-    ComputeEntropyResponse,
     PositionRewardInfo,
+    SetPositionRewardsRequest,
+    SetTokenRewardsRequest,
 )
 
 logger = logging.getLogger("OpenAIProxyClient")

@@ -20,10 +20,8 @@ import asyncio
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 import aiohttp
-import httpx
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent.parent.absolute()
@@ -54,21 +52,25 @@ class HistorySavingAgent:
         conversation = []
 
         # Turn 1: Initial query
-        messages = [{"role": "user", "content": data.get("prompt", "Hello, how are you?")}]
-        conversation.append({"turn": 1, "role": "user", "content": messages[0]["content"]})
+        messages = [
+            {"role": "user", "content": data.get("prompt", "Hello, how are you?")}
+        ]
+        conversation.append(
+            {"turn": 1, "role": "user", "content": messages[0]["content"]}
+        )
 
         # Call proxy API (simulate chat completion)
         async with aiohttp.ClientSession() as session:
             headers = {
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
 
             # Simulate getting a completion
             completion_data = {
                 "model": "test-model",
                 "messages": messages,
-                "max_tokens": 50
+                "max_tokens": 50,
             }
 
             # Try to get real completion or simulate
@@ -77,7 +79,7 @@ class HistorySavingAgent:
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=completion_data,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -97,26 +99,28 @@ class HistorySavingAgent:
         # Turn 2: Follow-up
         messages.append({"role": "assistant", "content": assistant_msg})
         messages.append({"role": "user", "content": "What can you help me with?"})
-        conversation.append({"turn": 2, "role": "user", "content": "What can you help me with?"})
+        conversation.append(
+            {"turn": 2, "role": "user", "content": "What can you help me with?"}
+        )
 
         # Another completion
         try:
             async with aiohttp.ClientSession() as session:
                 headers = {
                     "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 }
                 completion_data = {
                     "model": "test-model",
                     "messages": messages,
-                    "max_tokens": 50
+                    "max_tokens": 50,
                 }
 
                 async with session.post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=completion_data,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -127,18 +131,22 @@ class HistorySavingAgent:
                         completion_id2 = f"test-completion-{int(time.time() * 1000)}"
         except Exception as e:
             logger.warning(f"Second proxy call failed, using simulated response: {e}")
-            assistant_msg2 = "I can help with many tasks including coding, writing, and analysis."
+            assistant_msg2 = (
+                "I can help with many tasks including coding, writing, and analysis."
+            )
             completion_id2 = f"test-completion-{int(time.time() * 1000)}"
 
         conversation.append({"turn": 2, "role": "assistant", "content": assistant_msg2})
 
         # Save agent's own history record
-        self.saved_histories.append({
-            "session_id": api_key.split("-")[-1] if api_key else "unknown",
-            "conversation": conversation,
-            "completion_ids": [completion_id, completion_id2],
-            "data_prompt": data.get("prompt"),
-        })
+        self.saved_histories.append(
+            {
+                "session_id": api_key.split("-")[-1] if api_key else "unknown",
+                "conversation": conversation,
+                "completion_ids": [completion_id, completion_id2],
+                "data_prompt": data.get("prompt"),
+            }
+        )
 
         logger.info(f"Agent saved history with {len(conversation)} messages")
 
@@ -172,8 +180,7 @@ class MockInferenceEngine:
 
 
 async def run_test(
-    proxy_addr: str = "http://localhost:8000",
-    admin_api_key: str = "test-admin-key"
+    proxy_addr: str = "http://localhost:8000", admin_api_key: str = "test-admin-key"
 ) -> bool:
     """Run the history consistency test.
 
@@ -189,7 +196,6 @@ async def run_test(
     logger.info("=" * 70)
 
     # Import workflow here to ensure patch is applied
-    from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
     from customized_areal.on_policy_distill.proxy.workflow import OpenAIProxyWorkflow
 
     # Create agent
@@ -219,7 +225,9 @@ async def run_test(
         logger.error(f"Workflow failed: {e}")
         return False
 
-    logger.info(f"\n2. Workflow completed, exported {len(interactions) if interactions else 0} interactions")
+    logger.info(
+        f"\n2. Workflow completed, exported {len(interactions) if interactions else 0} interactions"
+    )
 
     if not interactions:
         logger.error("No interactions returned from proxy!")
@@ -232,73 +240,77 @@ async def run_test(
         logger.error("Agent did not save any history!")
         return False
 
-    logger.info(f"\n3. Agent saved history:")
+    logger.info("\n3. Agent saved history:")
     logger.info(f"   - Session ID: {agent_history['session_id'][:20]}...")
     logger.info(f"   - Conversation turns: {len(agent_history['conversation'])}")
     logger.info(f"   - Completion IDs: {agent_history['completion_ids']}")
 
     # Get proxy exported history
-    logger.info(f"\n4. Proxy exported interactions:")
+    logger.info("\n4. Proxy exported interactions:")
     for idx, (interaction_id, interaction) in enumerate(interactions.items()):
         logger.info(f"   Interaction {idx + 1}: {interaction_id}")
-        logger.info(f"   - Messages: {len(interaction.messages) if hasattr(interaction, 'messages') else 'N/A'}")
+        logger.info(
+            f"   - Messages: {len(interaction.messages) if hasattr(interaction, 'messages') else 'N/A'}"
+        )
         logger.info(f"   - Reward: {interaction.reward}")
-        if hasattr(interaction, 'token_rewards') and interaction.token_rewards:
+        if hasattr(interaction, "token_rewards") and interaction.token_rewards:
             logger.info(f"   - Token rewards: {interaction.token_rewards}")
 
     # Compare histories
-    logger.info(f"\n5. COMPARING HISTORIES:")
+    logger.info("\n5. COMPARING HISTORIES:")
     logger.info("-" * 70)
 
     # Check number of completions match
-    agent_completion_count = len(agent_history['completion_ids'])
+    agent_completion_count = len(agent_history["completion_ids"])
     proxy_completion_count = len(interactions)
 
     logger.info(f"Agent recorded {agent_completion_count} completions")
     logger.info(f"Proxy exported {proxy_completion_count} interactions")
 
     if agent_completion_count != proxy_completion_count:
-        logger.error(f"MISMATCH: Completion counts differ!")
+        logger.error("MISMATCH: Completion counts differ!")
         return False
 
     # Check completion IDs match
-    agent_ids = set(agent_history['completion_ids'])
+    agent_ids = set(agent_history["completion_ids"])
     proxy_ids = set(interactions.keys())
 
     logger.info(f"Agent completion IDs: {agent_ids}")
     logger.info(f"Proxy interaction IDs: {proxy_ids}")
 
     if agent_ids != proxy_ids:
-        logger.error(f"MISMATCH: Completion IDs don't match!")
+        logger.error("MISMATCH: Completion IDs don't match!")
         logger.error(f"  Only in agent: {agent_ids - proxy_ids}")
         logger.error(f"  Only in proxy: {proxy_ids - agent_ids}")
         return False
 
     # Check token rewards are consistent
-    logger.info(f"\n6. CHECKING TOKEN REWARDS:")
+    logger.info("\n6. CHECKING TOKEN REWARDS:")
     logger.info("-" * 70)
 
     all_rewards_match = True
-    for completion_id in agent_history['completion_ids']:
+    for completion_id in agent_history["completion_ids"]:
         if completion_id in interactions:
             interaction = interactions[completion_id]
             agent_rewards = agent_history.get(completion_id, [])
 
-            if hasattr(interaction, 'token_rewards') and interaction.token_rewards:
+            if hasattr(interaction, "token_rewards") and interaction.token_rewards:
                 proxy_rewards = interaction.token_rewards
                 logger.info(f"{completion_id}:")
                 logger.info(f"  Agent rewards: {agent_rewards}")
                 logger.info(f"  Proxy rewards: {proxy_rewards}")
 
                 if agent_rewards and agent_rewards != proxy_rewards:
-                    logger.warning(f"  Token rewards differ (this may be OK if agent stored differently)")
+                    logger.warning(
+                        "  Token rewards differ (this may be OK if agent stored differently)"
+                    )
                 else:
-                    logger.info(f"  ✓ Token rewards match")
+                    logger.info("  ✓ Token rewards match")
             else:
                 logger.info(f"{completion_id}: No token rewards in proxy (scalar only)")
 
     # Check reward values
-    logger.info(f"\n7. CHECKING REWARD VALUES:")
+    logger.info("\n7. CHECKING REWARD VALUES:")
     logger.info("-" * 70)
 
     for completion_id, interaction in interactions.items():
@@ -310,11 +322,11 @@ async def run_test(
         logger.info(f"  Actual (proxy scalar): {actual_reward}")
 
         if abs(expected_reward - actual_reward) > 0.01:
-            logger.warning(f"  Reward values differ slightly (may be due to rounding)")
+            logger.warning("  Reward values differ slightly (may be due to rounding)")
         else:
-            logger.info(f"  ✓ Rewards match")
+            logger.info("  ✓ Rewards match")
 
-    logger.info(f"\n" + "=" * 70)
+    logger.info("\n" + "=" * 70)
     logger.info("TEST PASSED: Agent history and proxy export are consistent!")
     logger.info("=" * 70)
 
@@ -327,14 +339,10 @@ def main():
 
     parser = argparse.ArgumentParser(description="Test proxy history consistency")
     parser.add_argument(
-        "--proxy-addr",
-        default="http://localhost:8000",
-        help="Proxy server address"
+        "--proxy-addr", default="http://localhost:8000", help="Proxy server address"
     )
     parser.add_argument(
-        "--admin-api-key",
-        default="test-admin-key",
-        help="Admin API key"
+        "--admin-api-key", default="test-admin-key", help="Admin API key"
     )
 
     args = parser.parse_args()
@@ -349,6 +357,7 @@ def main():
     except Exception as e:
         logger.error(f"Test failed with exception: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

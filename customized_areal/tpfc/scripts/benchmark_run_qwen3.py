@@ -111,7 +111,9 @@ class BenchmarkEvaluator(ABC):
         self.get_log_dir()
         print("Initializing pipeline components...")
 
-        print(f"Pipeline components initialized successfully! Using pass@{self.pass_at_k}")
+        print(
+            f"Pipeline components initialized successfully! Using pass@{self.pass_at_k}"
+        )
 
     @abstractmethod
     def load_tasks(self) -> list[BenchmarkTask]:
@@ -175,22 +177,29 @@ class BenchmarkEvaluator(ABC):
                     TaskStatus.RUN_FAILED,
                 ):
                     try:
-                        (response, final_boxed_answer, log_file_path, _trace) = await run_backend(
+                        (
+                            response,
+                            final_boxed_answer,
+                            log_file_path,
+                            _trace,
+                        ) = await run_backend(
                             task_file_path=task_file_path,
                             task_description=task_description,
-                            log_path=self.output_dir / f"{task.task_id}_attempt_{attempt}",
+                            log_path=self.output_dir
+                            / f"{task.task_id}_attempt_{attempt}",
                             tags=self.cfg.tags,
                             task_id=task.task_id,
                             gt=task.ground_truth,
                             base_url=base_url,
                             api_key=api_key,
-                            model_name=cfg.llm.model_name
+                            model_name=cfg.llm.model_name,
                         )
 
                         attempt_result["model_response"] = response if response else ""
 
                         # Save response data to log file
                         import time
+
                         timestamp = int(time.time())
                         log_file_path = (
                             self.output_dir
@@ -249,7 +258,9 @@ class BenchmarkEvaluator(ABC):
                             print(f"    ✅ Attempt {attempt}: CORRECT!")
                             found_correct_answer = True
                         else:
-                            print(f"    ❌ Attempt {attempt}: INCORRECT ({evaluation_result})")
+                            print(
+                                f"    ❌ Attempt {attempt}: INCORRECT ({evaluation_result})"
+                            )
 
                     except Exception as e:
                         print(f"    Error verifying attempt {attempt}: {e}")
@@ -282,7 +293,9 @@ class BenchmarkEvaluator(ABC):
 
                 # Early stopping: if we found a correct answer, we can stop
                 if found_correct_answer:
-                    print(f"    🎯 Found correct answer! Stopping early after {attempt} attempts.")
+                    print(
+                        f"    🎯 Found correct answer! Stopping early after {attempt} attempts."
+                    )
                     break
 
         except Exception as e:
@@ -337,16 +350,24 @@ class BenchmarkEvaluator(ABC):
                 # Check if we already have LLM judge result in log
                 if log_data.get("llm_as_judge_result"):
                     attempt_result["status"] = TaskStatus.RESULT_JUDGED
-                    attempt_result["llm_as_judge_result"] = log_data["llm_as_judge_result"]
-                    attempt_result["is_correct"] = log_data["llm_as_judge_result"] == "CORRECT"
-                print(f"    Loaded existing result: {attempt_result['model_boxed_answer']}")
+                    attempt_result["llm_as_judge_result"] = log_data[
+                        "llm_as_judge_result"
+                    ]
+                    attempt_result["is_correct"] = (
+                        log_data["llm_as_judge_result"] == "CORRECT"
+                    )
+                print(
+                    f"    Loaded existing result: {attempt_result['model_boxed_answer']}"
+                )
         return attempt_result
 
     async def run_parallel_inference(
         self, tasks: list[BenchmarkTask], max_concurrent: int = 3, cfg=None
     ) -> list[BenchmarkResult]:
         """Run inference on multiple tasks in parallel"""
-        print(f"Running inference on {len(tasks)} tasks with max_concurrent={max_concurrent}")
+        print(
+            f"Running inference on {len(tasks)} tasks with max_concurrent={max_concurrent}"
+        )
 
         semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -399,7 +420,9 @@ class BenchmarkEvaluator(ABC):
             print("No results to evaluate")
             return 0.0
 
-        print(f"Calculating pass@{self.pass_at_k} accuracy for {len(self.results)} results...")
+        print(
+            f"Calculating pass@{self.pass_at_k} accuracy for {len(self.results)} results..."
+        )
 
         correct_count = 0
         total_count = 0
@@ -420,7 +443,11 @@ class BenchmarkEvaluator(ABC):
                 judge_result = attempt.get("llm_as_judge_result", "NOT_VERIFIED")
                 is_correct = attempt.get("is_correct", False)
                 status_icon = (
-                    "✅" if is_correct else "❌" if judge_result != "NOT_VERIFIED" else "⚠️"
+                    "✅"
+                    if is_correct
+                    else "❌"
+                    if judge_result != "NOT_VERIFIED"
+                    else "⚠️"
                 )
                 print(f"    Attempt {attempt_num}: {status_icon} {judge_result}")
                 if attempt.get("model_boxed_answer"):
@@ -442,7 +469,11 @@ class BenchmarkEvaluator(ABC):
         return pass_at_k_accuracy
 
     async def _update_log_file_with_evaluation(
-        self, log_file_path: Path, evaluation_result: str, ground_truth: str, is_correct: bool
+        self,
+        log_file_path: Path,
+        evaluation_result: str,
+        ground_truth: str,
+        is_correct: bool,
     ):
         """Helper method to update log file with evaluation result"""
         try:
@@ -593,7 +624,7 @@ async def entrypoint(cfg, data_dir="") -> float:
 
     runned_ = [i.split(cfg.output_dir + "/")[1].split("_attempt_1")[0] for i in runned]
     # tasks = [t for t in tasks if t.Level == level and t.task_id not in runned_]
-    tasks = [t for t in tasks if t.Level == 1 and t.task_id not in runned_ ]
+    tasks = [t for t in tasks if t.Level == 1 and t.task_id not in runned_]
 
     if len(evaluator.tasks) == 0:
         print("No tasks loaded. Exiting.")
@@ -624,7 +655,8 @@ async def entrypoint(cfg, data_dir="") -> float:
     print(f"\nEvaluation completed! Results saved to {results_path}")
     # save accuracy to a file
     accuracy_file = (
-        results_path.parent / f"{results_path.stem}_pass_at_{evaluator.pass_at_k}_accuracy.txt"
+        results_path.parent
+        / f"{results_path.stem}_pass_at_{evaluator.pass_at_k}_accuracy.txt"
     )
     with open(accuracy_file, "w") as f:
         f.write(f"{accuracy:.2%}")
@@ -663,7 +695,7 @@ def main():
             "agent_id": os.environ.get("main_agent_id") or None,
             "backend_mode": True,
             "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "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",   # Set your API key here or via CLI
+            "api_key": "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",  # Set your API key here or via CLI
             # "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
             # "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
         }

@@ -1,7 +1,8 @@
 """Shared fixtures for proxy module tests."""
 
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, MagicMock, patch
 
 # Mock areal modules before importing proxy modules
 with patch.dict(

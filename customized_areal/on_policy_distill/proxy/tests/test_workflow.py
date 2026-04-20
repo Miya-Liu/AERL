@@ -5,15 +5,25 @@ actor.prepare_batch() in the AReaL training loop.
 """
 
 import sys
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+
 
 # Create a real base class that our workflow can inherit from
 class MockBaseOpenAIProxyWorkflow:
     """Mock base class for OpenAIProxyWorkflow."""
 
-    def __init__(self, mode=None, agent=None, proxy_addr=None, admin_api_key=None,
-                 discount=1.0, export_style="individual", **kwargs):
+    def __init__(
+        self,
+        mode=None,
+        agent=None,
+        proxy_addr=None,
+        admin_api_key=None,
+        discount=1.0,
+        export_style="individual",
+        **kwargs,
+    ):
         self.mode = mode
         self.agent = agent
         self.proxy_addr = proxy_addr
@@ -25,12 +35,17 @@ class MockBaseOpenAIProxyWorkflow:
         pass
 
     async def _run_agent(self, session_api_key, data, proxy_client=None):
-        return await self.agent.run(data, base_url=self.proxy_addr,
-                                    api_key=session_api_key, proxy_client=proxy_client)
+        return await self.agent.run(
+            data,
+            base_url=self.proxy_addr,
+            api_key=session_api_key,
+            proxy_client=proxy_client,
+        )
 
 
 class MockInteractionWithTokenLogpReward:
     """Mock base class for InteractionWithTokenLogpReward."""
+
     pass
 
 
@@ -59,8 +74,12 @@ for name, module in _mock_modules.items():
     sys.modules[name] = module
 
 # Set up specific mock classes
-_mock_modules["areal.experimental.openai.proxy.workflow"].OpenAIProxyWorkflow = MockBaseOpenAIProxyWorkflow
-_mock_modules["areal.experimental.openai.types"].InteractionWithTokenLogpReward = MockInteractionWithTokenLogpReward
+_mock_modules[
+    "areal.experimental.openai.proxy.workflow"
+].OpenAIProxyWorkflow = MockBaseOpenAIProxyWorkflow
+_mock_modules[
+    "areal.experimental.openai.types"
+].InteractionWithTokenLogpReward = MockInteractionWithTokenLogpReward
 _mock_modules["areal.experimental.openai.types"].ApiType = Mock()
 _mock_modules["areal.experimental.openai.types"].InputName = Mock()
 
@@ -70,25 +89,33 @@ _mock_modules["areal.infra.workflow_context"].get = Mock(return_value=Mock(task_
 # Create proper async mocks for coroutine functions
 async_mock_get_session = AsyncMock()
 async_mock_get_session.return_value = AsyncMock()
-_mock_modules["areal.infra.workflow_context"].get_aiohttp_session = async_mock_get_session
+_mock_modules[
+    "areal.infra.workflow_context"
+].get_aiohttp_session = async_mock_get_session
 
 async_mock_get_httpx = AsyncMock()
 async_mock_get_httpx.return_value = AsyncMock()
 _mock_modules["areal.infra.workflow_context"].get_httpx_client = async_mock_get_httpx
 
+
 # Mock perf_tracer decorators
 def mock_session_context():
     def decorator(f):
         return f
+
     return decorator
+
 
 def mock_trace_session(name):
     def decorator(f):
         return f
+
     return decorator
+
 
 _mock_modules["areal.utils.perf_tracer"].session_context = mock_session_context
 _mock_modules["areal.utils.perf_tracer"].trace_session = mock_trace_session
+
 
 # Mock the proxy client
 class MockOpenAIProxyClient:
@@ -124,12 +151,15 @@ class MockOpenAIProxyClient:
     async def export_interactions(self, discount=1.0, style="individual"):
         return {}
 
+
 _mock_modules["customized_areal"] = Mock()
 _mock_modules["customized.areal"] = Mock()
 _mock_modules["customized_areal.on_policy_distill"] = Mock()
 _mock_modules["customized_areal.on_policy_distill.proxy"] = Mock()
 _mock_modules["customized_areal.on_policy_distill.proxy.client"] = Mock()
-_mock_modules["customized_areal.on_policy_distill.proxy.client"].OpenAIProxyClient = MockOpenAIProxyClient
+_mock_modules[
+    "customized_areal.on_policy_distill.proxy.client"
+].OpenAIProxyClient = MockOpenAIProxyClient
 _mock_modules["customized_areal.on_policy_distill.proxy.types"] = Mock()
 
 # Now import after setting up mocks
@@ -218,10 +248,14 @@ class TestWorkflowProcessRewards:
     async def test_process_rewards_invalid_type(self, workflow, mock_proxy_client):
         """Test _process_rewards with invalid reward type raises error."""
         with pytest.raises(ValueError, match="Invalid reward type"):
-            await workflow._process_rewards(mock_proxy_client, [1, 2, 3])  # list instead of dict
+            await workflow._process_rewards(
+                mock_proxy_client, [1, 2, 3]
+            )  # list instead of dict
 
     @pytest.mark.asyncio
-    async def test_process_rewards_invalid_value_type(self, workflow, mock_proxy_client):
+    async def test_process_rewards_invalid_value_type(
+        self, workflow, mock_proxy_client
+    ):
         """Test _process_rewards with invalid value type raises error."""
         with pytest.raises(ValueError, match="Invalid reward value type"):
             await workflow._process_rewards(mock_proxy_client, {"comp-1": "invalid"})
@@ -324,10 +358,14 @@ class TestWorkflowArunEpisode:
             mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
 
             with patch.object(workflow, "_grant_capacity", new_callable=AsyncMock):
-                with patch.object(workflow, "_run_agent", new_callable=AsyncMock) as mock_run:
+                with patch.object(
+                    workflow, "_run_agent", new_callable=AsyncMock
+                ) as mock_run:
                     mock_run.return_value = 1.0  # Scalar reward
 
-                    with patch.object(workflow, "_process_rewards", new_callable=AsyncMock):
+                    with patch.object(
+                        workflow, "_process_rewards", new_callable=AsyncMock
+                    ):
                         mock_proxy_client.export_interactions.return_value = {
                             "comp-1": Mock(reward=1.0)
                         }
@@ -356,13 +394,19 @@ class TestWorkflowArunEpisode:
             mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
 
             with patch.object(workflow, "_grant_capacity", new_callable=AsyncMock):
-                with patch.object(workflow, "_run_agent", new_callable=AsyncMock) as mock_run:
+                with patch.object(
+                    workflow, "_run_agent", new_callable=AsyncMock
+                ) as mock_run:
                     mock_run.return_value = {"comp-1": [0.0, 0.5, 1.0, 0.5]}
 
-                    with patch.object(workflow, "_process_rewards", new_callable=AsyncMock) as mock_process:
+                    with patch.object(
+                        workflow, "_process_rewards", new_callable=AsyncMock
+                    ) as mock_process:
                         mock_interaction = Mock()
                         mock_interaction.reward = 2.0
-                        mock_proxy_client.export_interactions.return_value = {"comp-1": mock_interaction}
+                        mock_proxy_client.export_interactions.return_value = {
+                            "comp-1": mock_interaction
+                        }
 
                         with patch(
                             "customized_areal.on_policy_distill.proxy.workflow.OpenAIProxyClient",
@@ -371,7 +415,9 @@ class TestWorkflowArunEpisode:
                             result = await workflow.arun_episode(mock_engine, data)
 
                             assert result is not None
-                            mock_process.assert_called_once_with(mock_proxy_client, {"comp-1": [0.0, 0.5, 1.0, 0.5]})
+                            mock_process.assert_called_once_with(
+                                mock_proxy_client, {"comp-1": [0.0, 0.5, 1.0, 0.5]}
+                            )
 
     @pytest.mark.asyncio
     async def test_arun_episode_agent_failure(
@@ -387,7 +433,9 @@ class TestWorkflowArunEpisode:
             mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
 
             with patch.object(workflow, "_grant_capacity", new_callable=AsyncMock):
-                with patch.object(workflow, "_run_agent", new_callable=AsyncMock) as mock_run:
+                with patch.object(
+                    workflow, "_run_agent", new_callable=AsyncMock
+                ) as mock_run:
                     mock_run.side_effect = ValueError("Agent failed")
 
                     with patch(
@@ -411,10 +459,14 @@ class TestWorkflowArunEpisode:
             mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
 
             with patch.object(workflow, "_grant_capacity", new_callable=AsyncMock):
-                with patch.object(workflow, "_run_agent", new_callable=AsyncMock) as mock_run:
+                with patch.object(
+                    workflow, "_run_agent", new_callable=AsyncMock
+                ) as mock_run:
                     mock_run.return_value = None
 
-                    with patch.object(workflow, "_process_rewards", new_callable=AsyncMock):
+                    with patch.object(
+                        workflow, "_process_rewards", new_callable=AsyncMock
+                    ):
                         mock_proxy_client.export_interactions.return_value = {}
 
                         with patch(
@@ -438,10 +490,14 @@ class TestWorkflowWithPrepareBatchPattern:
         """Create mock dataloader simulating training data."""
         dataloader = Mock()
         dataloader.batch_size = 2
-        dataloader.__iter__ = Mock(return_value=iter([
-            [{"prompt": "prompt 1"}, {"prompt": "prompt 2"}],
-            [{"prompt": "prompt 3"}, {"prompt": "prompt 4"}],
-        ]))
+        dataloader.__iter__ = Mock(
+            return_value=iter(
+                [
+                    [{"prompt": "prompt 1"}, {"prompt": "prompt 2"}],
+                    [{"prompt": "prompt 3"}, {"prompt": "prompt 4"}],
+                ]
+            )
+        )
         return dataloader
 
     @pytest.fixture
@@ -465,9 +521,13 @@ class TestWorkflowWithPrepareBatchPattern:
         and collects the results into a batch.
         """
         workflow = Mock()
-        workflow.arun_episode = AsyncMock(return_value={
-            "comp-1": Mock(reward=1.0, to_tensor_dict=Mock(return_value={"input_ids": Mock()}))
-        })
+        workflow.arun_episode = AsyncMock(
+            return_value={
+                "comp-1": Mock(
+                    reward=1.0, to_tensor_dict=Mock(return_value={"input_ids": Mock()})
+                )
+            }
+        )
 
         # Simulate the prepare_batch behavior
         results = []
@@ -500,8 +560,12 @@ class TestWorkflowWithPrepareBatchPattern:
                     mock_ctx.get.return_value = Mock(task_id=123)
                     mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
 
-                    with patch.object(workflow, "_grant_capacity", new_callable=AsyncMock):
-                        with patch.object(workflow, "_run_agent", new_callable=AsyncMock) as mock_run:
+                    with patch.object(
+                        workflow, "_grant_capacity", new_callable=AsyncMock
+                    ):
+                        with patch.object(
+                            workflow, "_run_agent", new_callable=AsyncMock
+                        ) as mock_run:
                             mock_run.return_value = 1.0
 
                             mock_client = AsyncMock()
@@ -516,7 +580,9 @@ class TestWorkflowWithPrepareBatchPattern:
                                 "customized_areal.on_policy_distill.proxy.workflow.OpenAIProxyClient",
                                 return_value=mock_client,
                             ):
-                                with patch.object(workflow, "_process_rewards", new_callable=AsyncMock):
+                                with patch.object(
+                                    workflow, "_process_rewards", new_callable=AsyncMock
+                                ):
                                     result = await workflow.arun_episode(Mock(), item)
                                     if result:
                                         processed += 1
