@@ -4,6 +4,11 @@ Combines MCTS tree backup advantages with on-policy distillation loss
 and rollout caching in a single training step.
 """
 
-from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
+from customized_areal.tree_search_distilling.agent import TreeDistillAgent
 
-__all__ = ["TreeDistillPPOTrainer"]
+try:
+    from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
+except ModuleNotFoundError:
+    TreeDistillPPOTrainer = None  # type: ignore[assignment,misc]
+
+__all__ = ["TreeDistillAgent", "TreeDistillPPOTrainer"]
