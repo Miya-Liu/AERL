@@ -8,7 +8,7 @@ A combined trainer that merges MCTS tree backup advantages with on-policy distil
 
 ### Class: `TreeDistillPPOTrainer(CacheAwarePPOTrainer)`
 
-Located at: `customized_areal/tree_distill/trainer.py`
+Located at: `customized_areal/tree_search_distilling/trainer.py`
 
 **Inheritance chain:**
 ```
@@ -68,22 +68,22 @@ Tree backup uses rewards in step 6 (`insert_batch`), distill loss removes them i
 ## File Structure
 
 ```
-customized_areal/tree_distill/
+customized_areal/tree_search_distilling/
 ├── __init__.py                          # Export TreeDistillPPOTrainer
 ├── trainer.py                           # TreeDistillPPOTrainer class
 ├── scripts/
-│   └── train_tree_distill.py           # Entry point script
+│   └── train_tree_search_distilling.py  # Entry point script
 └── configs/
-    └── config_tree_distill.yaml         # Training config
+    └── config_tree_search_distilling.yaml # Training config
 ```
 
 ## Entry Point Script
 
 ```python
-# customized_areal/tree_distill/scripts/train_tree_distill.py
+# customized_areal/tree_search_distilling/scripts/train_tree_search_distilling.py
 from customized_areal.on_policy_distill.core.config import OnPolicyDistillConfig
 from customized_areal.tree_search.config import RolloutCacheConfig, TreeBackupConfig, TreeBackupMode
-from customized_areal.tree_distill.trainer import TreeDistillPPOTrainer
+from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
 from areal.utils.config import load_expr_config
 
 def main():
