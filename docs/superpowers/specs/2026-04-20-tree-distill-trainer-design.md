@@ -4,6 +4,10 @@
 
 A combined trainer that merges MCTS tree backup advantages with on-policy distillation loss and rollout caching in a single training step. Inherits from `CacheAwarePPOTrainer`, adds distillation components from `OnPolicyDistillationTrainer`.
 
+**Two operating modes:**
+- **With teacher** (`teacher_base_url` configured): Uses `grpo_distill_loss_fn` with position-level rewards and `MultiCandidateFSDPPPOActor`.
+- **Without teacher** (no `teacher_base_url`): Uses standard `grpo_loss_fn` with tree-backed advantages only, equivalent to `CacheAwarePPOTrainer`.
+
 ## Architecture
 
 ### Class: `TreeDistillPPOTrainer(CacheAwarePPOTrainer)`
@@ -17,8 +21,10 @@ PPOTrainer → CacheAwarePPOTrainer → TreeDistillPPOTrainer
 
 ### Initialization Order
 
-1. Patch `PPOActor._ppo_update` with `grpo_distill_loss_fn` (before super init)
-2. Initialize distillation workflow/agent (`OpenAIProxyWorkflow` + agent)
+1. Check if teacher is configured (`teacher_base_url` in config)
+2. If teacher configured:
+   - Patch `PPOActor._ppo_update` with `grpo_distill_loss_fn` (before super init)
+   - Initialize distillation workflow/agent (`OpenAIProxyWorkflow` + agent)
 3. Call `CacheAwarePPOTrainer.__init__()` which:
    - Calls `PPOTrainer.__init__()` (creates actor via `_create_actor` override)
    - Sets up MCTS tree store, advantage computer, checkpoint manager
@@ -26,7 +32,7 @@ PPOTrainer → CacheAwarePPOTrainer → TreeDistillPPOTrainer
 
 ### Key Overrides
 
-- **`_create_actor(actor_config)`** → returns `MultiCandidateFSDPPPOActor` instead of default `FSDPPPOActor`. Enables multi-candidate logprob gathering for position-level distillation loss.
+- **`_create_actor(actor_config)`** → returns `MultiCandidateFSDPPPOActor` if teacher configured, otherwise returns default actor from `CacheAwarePPOTrainer`. `MultiCandidateFSDPPPOActor` enables multi-candidate logprob gathering for position-level distillation loss.
 - **`close()`** → No override needed. `CacheAwarePPOTrainer.close()` unpatches `compute_advantages`; distill loss patch has no unpatch (one-time global).
 
 ### Config
@@ -52,10 +58,13 @@ Step 6: Compute advantages [TREE BACKUP PATCHED]
   → tree_advantage_computer.compute() — overwrites advantages/returns with MCTS Q-values
   → kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
 
-Step 7: PPO update [DISTILL LOSS PATCHED]
-  grpo_distill_loss_fn computes:
-    total_loss = rl_loss_weight * GRPO_loss(tree_advantages, chosen_logprobs)
-               + distill_loss_weight * position_GRPO_loss(position_rewards, multi_candidate_logprobs)
+Step 7: PPO update [DISTILL LOSS PATCHED if teacher configured]
+  If teacher configured:
+    grpo_distill_loss_fn computes:
+      total_loss = rl_loss_weight * GRPO_loss(tree_advantages, chosen_logprobs)
+                 + distill_loss_weight * position_GRPO_loss(position_rewards, multi_candidate_logprobs)
+  If no teacher:
+    Standard grpo_loss_fn with tree-backed advantages (same as CacheAwarePPOTrainer)
 
 Step 8: Mark trajectories as trained (CacheAwarePPOTrainer logic)
 Step 9: Save checkpoints (model weights + MCTS tree state)
@@ -120,5 +129,5 @@ Based on existing `config_on_policy_distill.yaml` with added cache/tree fields:
 - Both monkey-patches target different PPOActor methods (`compute_advantages` vs `_ppo_update`), so they compose without conflict.
 - The distill loss patch has a global `_patch_applied` guard preventing double-patching.
 - The tree backup patch preserves original via `_original_compute_advantages` for safe restore.
-- `MultiCandidateFSDPPPOActor` is required for multi-candidate logprob gathering; standard `FSDPPPOActor` cannot produce the 2D logprobs `[seq_len, num_candidates]` that `grpo_distill_loss_fn` expects when `position_rewards` are present.
-- Only FSDP backend is supported (same constraint as `OnPolicyDistillationTrainer`).
+- `MultiCandidateFSDPPPOActor` is required for multi-candidate logprob gathering when teacher is configured; standard `FSDPPPOActor` cannot produce the 2D logprobs `[seq_len, num_candidates]` that `grpo_distill_loss_fn` expects when `position_rewards` are present. When no teacher is configured, the default `FSDPPPOActor` is used.
+- Only FSDP backend is supported when teacher is configured (same constraint as `OnPolicyDistillationTrainer`).
