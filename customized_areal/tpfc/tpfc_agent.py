@@ -106,6 +106,8 @@ class TPFCAgent:
         self,
         agent_id: str | None = None,
         user_id: str | None = None,
+        train_id: str | None = None,
+        trial_name: str | None = None,
         model_name: str | None = None,
         judge_model_name: str | None = None,
         judge_base_url: str | None = None,
@@ -118,6 +120,8 @@ class TPFCAgent:
         Args:
             agent_id: Optional agent ID to use. Falls back to default_agent_id.
             user_id: Optional user ID for authentication.
+            train_id: Optional training run ID to tag agent runs with.
+            trial_name: Optional AReaL trial name to tag agent runs with.
             model_name: Optional model name for LLM calls.
             judge_model_name: Model name for the judge LLM (default: gpt-4o).
             judge_base_url: Base URL for the judge LLM API.
@@ -126,6 +130,8 @@ class TPFCAgent:
         """
         self.agent_id = agent_id or self.default_agent_id
         self.user_id = user_id
+        self.train_id = train_id
+        self.trial_name = trial_name
         self.model_name = model_name
         self.judge_model_name = judge_model_name
         self.judge_base_url = judge_base_url
@@ -188,6 +194,15 @@ class TPFCAgent:
             len(task_file_path),
         )
 
+        # Build tags for traceability
+        tags = []
+        if self.trial_name:
+            tags.extend(self.trial_name.split("&"))
+        if self.train_id:
+            tags.append(f"train_id={self.train_id}")
+        if self.user_id:
+            tags.append(f"user_id={self.user_id}")
+
         # Execute the backend run
         completion_messages, _final_answer, _log_path, _trace = await run_backend(
             task_description=task_description,
@@ -195,7 +210,7 @@ class TPFCAgent:
             log_path="./log.json",
             task_id="",
             gt=gt,
-            tags=[],
+            tags=tags,
             user_id=self.user_id,
             model_name=self.model_name,
             agent_id=self.agent_id,

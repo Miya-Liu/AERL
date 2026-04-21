@@ -22,7 +22,10 @@ from customized_areal.tree_search.config import (
     TreeBackupConfig,
     TreeBackupMode,
 )
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+from customized_areal.tree_search.mcts_tree_store import (
+    MCTSTreeStore,
+    get_query_id_from_messages,
+)
 from customized_areal.tree_search.turn_splitter import make_turn_splitter
 
 from areal import PPOTrainer
@@ -30,6 +33,23 @@ from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
 
 logger = logging.getLogger("TreeBackupPPOTrainer")
+
+
+def _mark_batch_trained(
+    tree_store: MCTSTreeStore, trajectories: list[dict[str, Any]]
+) -> None:
+    """Mark all trajectories in a batch as trained after tree backup."""
+    for traj in trajectories:
+        query_id = traj.get("_mcts_query_id")
+        if query_id is None:
+            continue
+        seq_id = traj.get("_mcts_seq_id")
+        if seq_id is not None:
+            tree_store.set_trained(query_id, seq_id, True)
+        seq_ids = traj.get("_mcts_seq_ids")
+        if seq_ids is not None:
+            for sid in seq_ids:
+                tree_store.set_trained(query_id, sid, True)
 
 
 def patch_ppo_actor_for_tree_backup(
@@ -41,6 +61,7 @@ def patch_ppo_actor_for_tree_backup(
     1. Calls the original compute_advantages (full GAE pipeline)
     2. Inserts trajectories into the tree with raw rewards
     3. Overwrites advantages/returns with tree Q-values
+    4. Marks trajectories as trained
 
     The original method's kl_rewards, tot_rewards, loss_mask, logprobs
     are preserved for logging and downstream use.
@@ -61,7 +82,10 @@ def patch_ppo_actor_for_tree_backup(
         tree_store.insert_batch(result)
         tree_advantage_computer.compute(result)
 
-        # 3. advantages/returns already overwritten by compute()
+        # 3. Mark trajectories as trained so they won't be loaded from cache again
+        _mark_batch_trained(tree_store, result)
+
+        # advantages/returns already overwritten by compute()
         # kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
         return result
 
@@ -83,65 +107,71 @@ def _merge_cached_and_new(
 ) -> list[dict[str, Any]]:
     """Merge cached and newly-generated trajectory dicts.
 
-    Both are lists of trajectory dicts with shape [1, seq_len].
-    Returns a list with a single concatenated dict of shape [total, max_seqlen].
+    Returns a list of trajectory dicts (not merged into a single dict).
+    Cached trajectories have shape [1, seq_len] each. New trajectories
+    may be grouped (shape [group_size, seq_len]) or individual.
 
-    Note: cached_trajs come from tree store with shape [1, seq_len] each.
-    new_trajs come from GroupedRolloutWorkflow as a single dict with shape
-    [group_size, max_seqlen] or as individual [1, seq_len] dicts.
+    We avoid merging everything via concat_padded_tensors because
+    non-tensor keys like _mcts_seq_id and _mcts_query_id would be
+    lost (concat_padded_tensors keeps only the first dict's value
+    for non-tensor, non-list keys). Keeping them as separate items
+    in the list preserves per-trajectory metadata.
     """
-    from areal.utils.data import concat_padded_tensors
-
     all_trajs = list(cached_trajs)
 
-    # new_trajs might be a single grouped dict or individual dicts
-    if len(new_trajs) == 1:
-        new_dict = new_trajs[0]
-        batch_size = new_dict["input_ids"].shape[0]
-        if batch_size > 1:
-            # Already grouped — split into individual, then concat all
+    for traj in new_trajs:
+        batch_size = traj["input_ids"].shape[0]
+        if batch_size == 1:
+            all_trajs.append(traj)
+        else:
+            # Split grouped trajectory into individual items to
+            # preserve per-sample _mcts_seq_ids metadata
             for i in range(batch_size):
                 single = {}
-                for k, v in new_dict.items():
+                for k, v in traj.items():
                     if isinstance(v, torch.Tensor) and v.dim() >= 1:
                         single[k] = v[i : i + 1]
+                    elif isinstance(v, list) and k == "_mcts_seq_ids":
+                        single["_mcts_seq_id"] = v[i]
+                        single["_mcts_query_id"] = traj.get("_mcts_query_id")
                     else:
                         single[k] = v
                 all_trajs.append(single)
-        else:
-            all_trajs.append(new_dict)
-    else:
-        all_trajs.extend(new_trajs)
 
-    if not all_trajs:
-        return []
-
-    # Concatenate all into one grouped dict
-    merged = concat_padded_tensors(all_trajs)
-    return [merged]
+    return all_trajs
 
 
 class _CacheAwareBatchBuilder:
     """Splits prompts into cached/partially-cached/not-cached groups."""
 
-    def __init__(self, tree_store: MCTSTreeStore, n_samples: int):
+    def __init__(self, tree_store: MCTSTreeStore, n_samples: int, tokenizer: Any):
         self.tree_store = tree_store
         self.n_samples = n_samples
+        self.tokenizer = tokenizer
 
     def split_prompts(
         self, prompts: list[dict[str, Any]]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Split prompts into cached and needs-generation groups.
 
+        Derives _mcts_query_id from the messages in each prompt using
+        the tokenizer, then checks the tree store for cached rollouts.
+
         Returns:
-            cached: list of dicts with keys: prompt, cached_count, need_gen_count
-            need_gen: list of dicts with keys: prompt
+            cached: list of dicts with keys: prompt, query_id, cached_count, need_gen_count
+            need_gen: list of dicts with keys: prompt, query_id
         """
         cached = []
         need_gen = []
 
         for prompt in prompts:
-            query_id = prompt.get("_mcts_query_id", "")
+            # Derive query_id from messages via tokenizer
+            messages = prompt.get("messages", [])
+            if messages:
+                query_id = get_query_id_from_messages(messages, self.tokenizer)
+            else:
+                query_id = prompt.get("_mcts_query_id", "")
+
             untrained_count = (
                 self.tree_store.get_untrained_count(query_id) if query_id else 0
             )
@@ -150,6 +180,7 @@ class _CacheAwareBatchBuilder:
                 cached.append(
                     {
                         "prompt": prompt,
+                        "query_id": query_id,
                         "cached_count": self.n_samples,
                         "need_gen_count": 0,
                     }
@@ -158,30 +189,31 @@ class _CacheAwareBatchBuilder:
                 cached.append(
                     {
                         "prompt": prompt,
+                        "query_id": query_id,
                         "cached_count": untrained_count,
                         "need_gen_count": self.n_samples - untrained_count,
                     }
                 )
             else:
-                need_gen.append({"prompt": prompt})
+                need_gen.append({"prompt": prompt, "query_id": query_id})
 
         return cached, need_gen
 
     def load_cached_trajectories(
         self, cached_prompts: list[dict[str, Any]]
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Load cached trajectories for each prompt.
+    ) -> list[dict[str, Any]]:
+        """Load cached trajectories for prompts with available rollouts.
 
-        Returns: dict mapping query_id -> list of trajectory dicts
+        Returns: flat list of trajectory dicts (shape [1, seq_len] each)
         """
-        result = {}
+        all_trajs = []
         for item in cached_prompts:
-            query_id = item["prompt"].get("_mcts_query_id", "")
-            if not query_id:
+            query_id = item["query_id"]
+            if not query_id or item["cached_count"] == 0:
                 continue
             trajs = self.tree_store.load_trajectories(query_id, item["cached_count"])
-            result[query_id] = trajs
-        return result
+            all_trajs.extend(trajs)
+        return all_trajs
 
 
 class CacheAwarePPOTrainer(PPOTrainer):
@@ -235,7 +267,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
             # Set up batch builder
             self._batch_builder = _CacheAwareBatchBuilder(
-                self.tree_store, self.cache_config.n_samples
+                self.tree_store, self.cache_config.n_samples, self.tokenizer
             )
 
             # Patch PPOActor for tree backup
@@ -261,14 +293,144 @@ class CacheAwarePPOTrainer(PPOTrainer):
             logger.info("Saved MCTS tree checkpoint with rollout cache")
 
     def _mark_trajectories_trained(self, rollout_batch: list[dict[str, Any]]) -> None:
-        """Mark all trajectories in the batch as trained."""
+        """Mark all trajectories in the batch as trained.
+
+        Handles both single trajectories (with _mcts_seq_id) and grouped
+        trajectories (with _mcts_seq_ids list).
+        """
         if not self.cache_config.enabled:
             return
         for traj in rollout_batch:
             query_id = traj.get("_mcts_query_id")
+            if query_id is None:
+                continue
+            # Single trajectory
             seq_id = traj.get("_mcts_seq_id")
-            if query_id is not None and seq_id is not None:
+            if seq_id is not None:
                 self.tree_store.set_trained(query_id, seq_id, True)
+                continue
+            # Grouped trajectory
+            seq_ids = traj.get("_mcts_seq_ids")
+            if seq_ids is not None:
+                for sid in seq_ids:
+                    self.tree_store.set_trained(query_id, sid, True)
+
+    def _cache_aware_prepare_batch(
+        self,
+        dataloader,
+        workflow,
+        workflow_kwargs=None,
+        should_accept_fn=None,
+        group_size=1,
+        dynamic_bs=False,
+    ):
+        """Cache-aware replacement for prepare_batch.
+
+        1. Pulls a batch from the dataloader
+        2. Derives query IDs from prompt messages
+        3. Splits prompts into cached / needs-generation
+        4. Loads cached trajectories from tree store
+        5. Generates missing trajectories via rollout_batch
+        6. Merges and returns combined list
+        """
+        from areal.utils.data import cycle_dataloader
+
+        # Lazily initialize the dataloader iterator
+        if not hasattr(self, "_cache_dataloader_iter"):
+            self._cache_dataloader_iter = iter(cycle_dataloader(dataloader))
+
+        # Pull a batch of raw data items from the dataloader
+        raw_batch = next(self._cache_dataloader_iter)
+
+        # Split into cached / needs-generation
+        cached_items, need_gen_items = self._batch_builder.split_prompts(raw_batch)
+
+        # Load cached trajectories
+        cached_trajs = self._batch_builder.load_cached_trajectories(cached_items)
+
+        # Generate missing trajectories
+        need_gen_prompts = [item["prompt"] for item in need_gen_items]
+        if need_gen_prompts:
+            # Use rollout_batch to generate with distributed coordination
+            new_trajs = self.actor.rollout_batch(
+                need_gen_prompts,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                group_size=group_size,
+            )
+        else:
+            new_trajs = []
+
+        n_cached = len(cached_trajs)
+        n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
+        logger.info(f"Cache-aware rollout: {n_cached} cached, {n_new} newly generated")
+
+        # Merge cached and new trajectories
+        return _merge_cached_and_new(cached_trajs, new_trajs)
+
+    def train(
+        self,
+        workflow=None,
+        eval_workflow=None,
+        workflow_kwargs=None,
+        eval_workflow_kwargs=None,
+        dynamic_filter_fn=None,
+        total_epochs=None,
+    ):
+        """Train with cache-aware rollout generation.
+
+        Temporarily monkey-patches ``self.actor.prepare_batch`` with a
+        cache-aware version that loads cached trajectories and only
+        generates missing ones. After training completes (or on error),
+        the original prepare_batch is restored.
+        """
+        if not self.cache_config.enabled:
+            return super().train(
+                workflow=workflow,
+                eval_workflow=eval_workflow,
+                workflow_kwargs=workflow_kwargs,
+                eval_workflow_kwargs=eval_workflow_kwargs,
+                dynamic_filter_fn=dynamic_filter_fn,
+                total_epochs=total_epochs,
+            )
+
+        # Monkey-patch prepare_batch with cache-aware version
+        original_prepare_batch = self.actor.prepare_batch
+
+        def _patched_prepare_batch(
+            dataloader,
+            workflow_arg,
+            workflow_kwargs_arg=None,
+            should_accept_fn=None,
+            group_size=1,
+            dynamic_bs=False,
+        ):
+            return self._cache_aware_prepare_batch(
+                dataloader=dataloader,
+                workflow=workflow_arg,
+                workflow_kwargs=workflow_kwargs_arg,
+                should_accept_fn=should_accept_fn,
+                group_size=group_size,
+                dynamic_bs=dynamic_bs,
+            )
+
+        self.actor.prepare_batch = _patched_prepare_batch
+
+        try:
+            return super().train(
+                workflow=workflow,
+                eval_workflow=eval_workflow,
+                workflow_kwargs=workflow_kwargs,
+                eval_workflow_kwargs=eval_workflow_kwargs,
+                dynamic_filter_fn=dynamic_filter_fn,
+                total_epochs=total_epochs,
+            )
+        finally:
+            # Always restore original prepare_batch
+            self.actor.prepare_batch = original_prepare_batch
+            # Clean up the dataloader iterator
+            if hasattr(self, "_cache_dataloader_iter"):
+                del self._cache_dataloader_iter
 
     def close(self) -> None:
         if (

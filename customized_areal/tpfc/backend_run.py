@@ -215,17 +215,16 @@ def _prepare_form_data(
         "task_id": task_id,
         "prompt": task_description,
         "agent_id": agent_id,
-        "model_name": model_name,
-        "is_sub_agent": "false",
-        "stream": "false",
     }
+    if model_name is not None:
+        form_data["model_name"] = model_name
 
     if base_url is not None:
         form_data["proxy_base_url"] = base_url
     if api_key is not None:
         form_data["proxy_api_key"] = api_key
-    if tags:
-        form_data.setdefault("tags", [])
+    if tags is not None:
+        form_data["tags"] = json.dumps(list(tags))
 
     return form_data
 
@@ -236,7 +235,7 @@ async def _resolve_agent_id(client, user_id: str, agent_id: str | None) -> str:
         return agent_id
 
     agent_service = AgentService(client)
-    from customized_areal.db_service.builtin import TPFC_CONFIG
+    from customized_areal.tpfc.config.builtin import TPFC_CONFIG
 
     created_agent = await agent_service.create_agent(
         user_id,
@@ -297,9 +296,13 @@ async def _start_agent_run(
         return response.json()
 
 
+TERMINAL_SSE_EVENTS = {"task_end", "error"}
+
+
 async def _wait_for_agent_run(
     client,
-    agent_run_id: str,
+    task_id: str,
+    agent_run_id: str | None,
     api_base_url: str | None = None,
     auth_token: str | None = None,
     timeout: int = 3000,
@@ -307,9 +310,9 @@ async def _wait_for_agent_run(
     """Wait until the agent run reaches a terminal state.
 
     If *api_base_url* and *auth_token* are provided, attempts to consume the
-    SSE stream from the backend first with auto-reconnect. Falls back to
-    database polling if the stream endpoint is unavailable or the stream ends
-    without a terminal status.
+    task-level SSE stream from the backend first with auto-reconnect. Falls
+    back to database polling if the stream endpoint is unavailable or the
+    stream ends without a terminal status.
     """
     start_time = time.time()
     status = "pending"
@@ -321,7 +324,7 @@ async def _wait_for_agent_run(
 
     if api_base_url and auth_token:
         stream_url = (
-            f"{api_base_url}/api/agent-runs/{agent_run_id}/stream?token={auth_token}"
+            f"{api_base_url}/api/tasks/{task_id}/stream?token={auth_token}"
         )
         sse_retry_delay = 1.0
 
@@ -351,6 +354,9 @@ async def _wait_for_agent_run(
                                     break
 
                                 line = raw_line.strip()
+                                # SSE comment (e.g. keepalive) — ignore
+                                if line.startswith(":"):
+                                    continue
                                 if line.startswith("id:"):
                                     last_event_id = line[3:].strip() or last_event_id
                                     continue
@@ -360,6 +366,7 @@ async def _wait_for_agent_run(
                                 if line.startswith("data:"):
                                     current_data_parts.append(line[5:].strip())
                                     continue
+                                # Empty line = end of SSE message
                                 if line == "":
                                     if current_data_parts:
                                         data_str = "\n".join(current_data_parts)
@@ -369,33 +376,38 @@ async def _wait_for_agent_run(
                                         except json.JSONDecodeError:
                                             event = {}
 
-                                        if current_event in {"task_end", "error"}:
-                                            status = event.get("status", status)
-                                        else:
-                                            status = event.get("status", status)
+                                        # Derive status from event data when available
+                                        event_status = event.get("status")
+                                        if event_status:
+                                            status = event_status
+
+                                        # Terminal event types close the stream
+                                        if current_event in TERMINAL_SSE_EVENTS:
+                                            # task_end carries status; error is a failure
+                                            if current_event == "error":
+                                                status = "failed"
+                                            break
 
                                         logger.debug(
-                                            "SSE event: type=%s status=%s agent_run_id=%s",
+                                            "SSE event: type=%s status=%s task_id=%s",
                                             current_event,
                                             status,
-                                            agent_run_id,
+                                            task_id,
                                         )
-
-                                        if status in {"completed", "failed", "stopped"}:
-                                            break
                                     current_event = "message"
 
                             if status in {"completed", "failed", "stopped"}:
                                 break
-
-                            logger.warning(
-                                "SSE stream ended for agent_run_id=%s, reconnecting in %.1fs",
-                                agent_run_id,
-                                sse_retry_delay,
-                            )
-                            await asyncio.sleep(min(sse_retry_delay, _time_left()))
-                            sse_retry_delay = min(sse_retry_delay * 2, 30.0)
-                            continue
+                            # Stream ended without terminal event — may need reconnect
+                            if current_event not in TERMINAL_SSE_EVENTS:
+                                logger.warning(
+                                    "SSE stream ended for task_id=%s, reconnecting in %.1fs",
+                                    task_id,
+                                    sse_retry_delay,
+                                )
+                                await asyncio.sleep(min(sse_retry_delay, _time_left()))
+                                sse_retry_delay = min(sse_retry_delay * 2, 30.0)
+                                continue
                         else:
                             logger.warning(
                                 "SSE stream endpoint returned %s, falling back to polling: %s",
@@ -405,8 +417,8 @@ async def _wait_for_agent_run(
                             break
             except httpx.ConnectError as exc:
                 logger.warning(
-                    "SSE connect error for agent_run_id=%s, retrying in %.1fs: %s",
-                    agent_run_id,
+                    "SSE connect error for task_id=%s, retrying in %.1fs: %s",
+                    task_id,
                     sse_retry_delay,
                     exc,
                 )
@@ -415,8 +427,8 @@ async def _wait_for_agent_run(
                 continue
             except Exception as exc:
                 logger.warning(
-                    "SSE error for agent_run_id=%s, retrying in %.1fs: %s",
-                    agent_run_id,
+                    "SSE error for task_id=%s, retrying in %.1fs: %s",
+                    task_id,
                     sse_retry_delay,
                     exc,
                 )

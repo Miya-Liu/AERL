@@ -2,13 +2,23 @@ experiment_name: tpfc-grpo
 trial_name: trial0
 
 seed: 1
-enable_offload: false
+enable_offload: true
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
 # TPFC Agent workflow
 workflow: customized_areal.tpfc_agent.TPFCAgent
 eval_workflow: ${workflow}
+
+agent:
+  _target_: customized_areal.tpfc.tpfc_agent.TPFCAgent
+  trial_name: ${trial_name}
+  train_id: ""
+  user_id: ""
+  model_name: null
+  judge_model_name: null
+  judge_base_url: null
+  judge_api_key: null
 
 cluster:
   n_nodes: 1
@@ -67,9 +77,11 @@ actor:
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
+  ac_mode: memory_budget
+  ac_memory_budget: 0.2
   dtype: bfloat16
   mb_spec:
-    max_tokens_per_mb: 81920
+    max_tokens_per_mb: 40960
   optimizer:
     type: adam
     lr: 1.70e-5
@@ -151,7 +163,7 @@ train_dataset:
   num_workers: 2
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
-  max_length: 2048
+  max_length: 20000
 
 valid_dataset:
   batch_size: 2

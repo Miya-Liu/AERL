@@ -158,16 +158,16 @@ train_dataset:
   shuffle: true
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k
-  type: rl
-  max_length: 1024
+  path: customized_areal/tpfc/data/generated_training_final_update.parquet
+  type: tpfc_rl
+  max_length: 4096
 
 valid_dataset:
   batch_size: 2
   pin_memory: true
   num_workers: 4
-  path: openai/gsm8k
-  type: rl
+  path: customized_areal/tpfc/data/generated_training_final_update.parquet
+  type: tpfc_rl
 
 # Utilities
 saver:

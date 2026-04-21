@@ -39,6 +39,9 @@ from areal.experimental.openai.proxy.client_session import (
 )
 from areal.utils import logging
 
+from .proxy_rollout_server import (
+    deserialize_interactions_with_position_rewards,
+)
 from .server import (
     EXPORT_TRAJECTORIES_PATHNAME,
     RL_COMPUTE_ENTROPY_PATHNAME,
@@ -305,6 +308,31 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
             return await self.compute_entropy(completion_id)
         except Exception:
             return None
+
+    async def export_interactions(
+        self,
+        discount: float = 1.0,
+        style: str = "individual",
+    ) -> dict:
+        """Export interactions with position_rewards support.
+
+        Overrides the base class method to use custom deserialization
+        that reconstructs position_rewards for the distillation loss.
+        """
+        if self.session_id is None:
+            raise ValueError("session_id must be set before exporting interactions")
+
+        url = f"{self.base_url}{EXPORT_TRAJECTORIES_PATHNAME}"
+        payload = {
+            "session_id": self.session_id,
+            "discount": discount,
+            "style": style,
+        }
+        headers = self._admin_auth_headers()
+        async with self._session.post(url, json=payload, headers=headers) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            return deserialize_interactions_with_position_rewards(data["interactions"])
 
     async def get_last_interaction(self) -> Any:
         """Get the most recent interaction from the proxy server.

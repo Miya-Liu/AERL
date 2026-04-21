@@ -399,6 +399,11 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         """Internal version of set_position_rewards without lock acquisition.
 
         Assumes caller already holds self._lock.
+
+        Position-level rewards are stored separately for distillation loss.
+        The scalar (trajectory-level) reward is NOT overwritten — it should
+        be set independently via set_reward(). This separation ensures tree
+        backup advantage computation uses only trajectory-level rewards.
         """
         if completion_id not in self:
             raise KeyError(f"Completion {completion_id} not found in cache")
@@ -411,15 +416,25 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         # Store the full position-wise reward info
         interaction.position_rewards = position_rewards  # type: ignore
 
-        # Extract chosen token rewards for simple token-wise storage
+        # Extract chosen token rewards for token-level storage on the
+        # interaction object (used by to_tensor_dict's token_rewards key).
         chosen_rewards = [
             pr.rewards[pr.chosen_index] if pr.rewards else 0.0
             for pr in position_rewards
         ]
 
-        # Also set as token-wise rewards for compatibility
-        # Use internal method to avoid double lock acquisition
-        self._set_rewards_internal(completion_id, chosen_rewards)
+        # Set token-level rewards on the interaction object without
+        # overwriting the trajectory-level scalar reward.
+        interaction.token_rewards_list = chosen_rewards  # type: ignore
+        if hasattr(interaction, "token_rewards"):
+            try:
+                interaction.set_token_rewards(chosen_rewards)
+            except (ValueError, AttributeError) as e:
+                logger.warning(f"Could not set token_rewards: {e}")
+
+        # Do NOT call _set_rewards_internal here — it would overwrite
+        # interaction.reward with sum(chosen_rewards), corrupting the
+        # trajectory-level scalar reward used by tree backup.
 
         logger.info(
             f"Set position-wise rewards for {completion_id}: "

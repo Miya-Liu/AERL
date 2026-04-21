@@ -112,6 +112,12 @@ class TokenRewardSessionData(SessionData):
         """
         Set token-wise rewards for an interaction.
 
+        Token-level rewards are stored separately for distillation loss.
+        The scalar (trajectory-level) reward is NOT overwritten here — it
+        should be set independently via set_reward(). This separation ensures
+        tree backup advantage computation uses only trajectory-level rewards,
+        while token-level rewards are used only for distillation.
+
         Parameters
         ----------
         interaction_id : str
@@ -121,16 +127,21 @@ class TokenRewardSessionData(SessionData):
         """
         with self._lock:
             self._token_rewards[interaction_id] = token_rewards
-            # Also update scalar reward as sum of token rewards
-            scalar_reward = sum(token_rewards)
-            if interaction_id in self.completions:
-                self.completions.set_reward(interaction_id, scalar_reward)
+            # Do NOT overwrite scalar reward here. The scalar reward
+            # (trajectory-level) is set via set_reward() and must be
+            # preserved for tree backup advantage computation.
 
     def set_position_rewards(
         self, interaction_id: str, position_rewards: list[PositionRewardInfo]
     ) -> None:
         """
         Set position-wise rewards for an interaction.
+
+        Position-level rewards are stored separately for distillation loss.
+        The scalar (trajectory-level) reward is NOT overwritten here — it
+        should be set independently via set_reward(). This separation ensures
+        tree backup advantage computation uses only trajectory-level rewards,
+        while position-level rewards are used only for distillation.
 
         Parameters
         ----------
@@ -147,10 +158,9 @@ class TokenRewardSessionData(SessionData):
                 for pr in position_rewards
             ]
             self._token_rewards[interaction_id] = chosen_rewards
-            # Update scalar reward
-            scalar_reward = sum(chosen_rewards)
-            if interaction_id in self.completions:
-                self.completions.set_reward(interaction_id, scalar_reward)
+            # Do NOT overwrite scalar reward here. The scalar reward
+            # (trajectory-level) is set via set_reward() and must be
+            # preserved for tree backup advantage computation.
 
     def compute_entropy(self, interaction_id: str) -> tuple[list[float], float]:
         """
@@ -201,6 +211,9 @@ class TokenRewardSessionData(SessionData):
         Export interactions with token-level rewards applied.
 
         Overrides base method to apply token-level rewards before export.
+        The scalar (trajectory-level) reward is preserved for use by
+        tree backup advantage computation; position-level rewards are
+        stored separately for distillation loss only.
         """
         # Apply token-level rewards to interactions before export
         with self._lock:
@@ -210,8 +223,21 @@ class TokenRewardSessionData(SessionData):
                     # Set token rewards on the interaction object
                     if hasattr(interaction, "token_rewards"):
                         interaction.token_rewards = token_rewards
-                    # Ensure scalar reward is set
-                    interaction.reward = sum(token_rewards)
+                    # Preserve the scalar reward (set via set_reward) as the
+                    # trajectory-level reward. Do NOT overwrite it with
+                    # sum(token_rewards) — that conflates position-level
+                    # distillation rewards with trajectory-level rewards
+                    # used by tree backup advantage computation.
+                    if interaction.reward is None:
+                        interaction.reward = sum(token_rewards)
+
+            # Attach position-level rewards to interaction objects for
+            # distillation loss. These are stored as a Python attribute
+            # (not in to_tensor_dict) and flow through to mb_input.
+            for interaction_id, pos_rewards in self._position_rewards.items():
+                if interaction_id in self.completions:
+                    interaction = self.completions[interaction_id]
+                    interaction.position_rewards = pos_rewards  # type: ignore[attr-defined]
 
         # Call base export
         return super().export_interactions(discount, style)

@@ -14,6 +14,8 @@ Usage:
         cache_dir=/path/to/cache
 """
 
+# ruff: noqa: E402
+
 import pathlib
 import sys
 
@@ -74,7 +76,7 @@ def main(args: list[str] | None = None) -> None:
         cache_config=cache_config,
         tree_backup_config=tree_backup_config,
     )
-    trainer.train()
+    trainer.train(workflow=trainer.workflow)
 
     logger.info("Tree search distilling training completed")
 

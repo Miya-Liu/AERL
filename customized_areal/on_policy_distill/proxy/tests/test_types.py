@@ -98,11 +98,14 @@ class TestInteractionWithTokenLevelReward:
         tensor_dict = interaction.to_tensor_dict()
 
         assert "rewards" in tensor_dict
+        assert "token_rewards" in tensor_dict
         assert "token_reward_mask" in tensor_dict
 
-        # Check shapes
+        # rewards is the trajectory-level scalar (not overwritten by token rewards)
+        assert tensor_dict["rewards"].shape == (1,)
+        # token_rewards is per-token position-level rewards
         seq_len = tensor_dict["input_ids"].shape[1]
-        assert tensor_dict["rewards"].shape == (1, seq_len)
+        assert tensor_dict["token_rewards"].shape == (1, seq_len)
         assert tensor_dict["token_reward_mask"].shape == (1, seq_len)
 
     def test_get_reward_stats_without_token_rewards(self, interaction):

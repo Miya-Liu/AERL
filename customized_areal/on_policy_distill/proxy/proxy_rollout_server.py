@@ -16,7 +16,6 @@ import argparse
 import asyncio
 import secrets
 import threading
-import time
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -35,7 +34,6 @@ from areal.experimental.openai.proxy.server import (
     SetRewardRequest,
     StartSessionRequest,
     StartSessionResponse,
-    serialize_interactions,
 )
 from areal.utils.logging import getLogger
 
@@ -52,6 +50,97 @@ from .server import (
 )
 
 logger = getLogger("TokenRewardProxyServer")
+
+
+# =============================================================================
+# Custom Serialization with position_rewards Support
+# =============================================================================
+
+
+def serialize_interactions_with_position_rewards(
+    interactions: dict,
+) -> dict:
+    """Serialize interactions including position_rewards for distillation.
+
+    Extends the base serialize_interactions to include position_rewards
+    so they can flow through HTTP transport to the training pipeline.
+    """
+    from areal.infra.rpc.serialization import serialize_value
+
+    result = {}
+    for key, interaction in interactions.items():
+        entry = {
+            "tensor_dict": interaction.to_tensor_dict(),
+            "reward": interaction.reward,
+            "interaction_id": interaction.interaction_id,
+        }
+        # Include position_rewards if available (set by
+        # TokenRewardSessionData.set_position_rewards)
+        pos_rewards = getattr(interaction, "position_rewards", None)
+        if pos_rewards is not None:
+            entry["position_rewards"] = [
+                {
+                    "position": pr.position,
+                    "candidates": pr.candidates,
+                    "candidate_token_ids": pr.candidate_token_ids,
+                    "logprobs": pr.logprobs,
+                    "rewards": pr.rewards,
+                    "chosen_index": pr.chosen_index,
+                }
+                for pr in pos_rewards
+            ]
+        result[key] = entry
+    return serialize_value(result)
+
+
+def deserialize_interactions_with_position_rewards(
+    data: dict,
+) -> dict:
+    """Deserialize interactions including position_rewards for distillation.
+
+    Extends the base deserialize_interactions to reconstruct position_rewards
+    from the serialized data and inject them into the cached tensor dict so
+    they flow through concat_padded_tensors to the distillation loss.
+    """
+    from areal.experimental.openai.types import InteractionWithTokenLogpReward
+    from areal.infra.rpc.serialization import deserialize_value
+
+    data = deserialize_value(data)
+    result = {}
+    for key, item in data.items():
+        interaction = InteractionWithTokenLogpReward()
+        interaction._cache = item["tensor_dict"]
+        interaction.reward = item["reward"]
+        interaction.interaction_id = item["interaction_id"]
+
+        # Reconstruct position_rewards if available and inject into the
+        # cached tensor dict so they flow through the data pipeline to
+        # the distillation loss function.
+        pos_rewards_data = item.get("position_rewards")
+        if pos_rewards_data is not None:
+            from .server import PositionRewardInfo as PRI
+
+            pos_rewards = [
+                PRI(
+                    position=pr["position"],
+                    candidates=pr["candidates"],
+                    candidate_token_ids=pr["candidate_token_ids"],
+                    logprobs=pr["logprobs"],
+                    rewards=pr["rewards"],
+                    chosen_index=pr["chosen_index"],
+                )
+                for pr in pos_rewards_data
+            ]
+            # Store as a Python attribute — the workflow extracts it after
+            # to_tensor_dict() conversion and attaches it to the tensor dict.
+            # We do NOT inject it into _cache to avoid concat_padded_tensors
+            # key consistency issues when some interactions have position_rewards
+            # and others don't (e.g., multi-turn conversations).
+            interaction.position_rewards = pos_rewards  # type: ignore
+
+        result[key] = interaction
+    return result
+
 
 # =============================================================================
 # Module-Level Globals
@@ -187,8 +276,8 @@ def export_trajectories(
         style=request.style,
     )
 
-    # Serialize for HTTP response
-    serialized = serialize_interactions(interactions)
+    # Serialize for HTTP response (includes position_rewards)
+    serialized = serialize_interactions_with_position_rewards(interactions)
 
     logger.info(f"Exported {len(serialized)} interactions from session {session_id}")
     return ExportTrajectoriesResponse(interactions=serialized)
@@ -392,7 +481,6 @@ async def _cleanup_stale_sessions():
     while True:
         await asyncio.sleep(60)  # Check every minute
 
-        current_time = time.time()
         with _lock:
             stale_sessions = [
                 sid

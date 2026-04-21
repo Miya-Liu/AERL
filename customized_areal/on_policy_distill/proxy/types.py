@@ -29,6 +29,11 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
     - Base class: reward is a scalar float applied to all tokens
     - This class: token_rewards is a list of floats, one per output token
 
+    The ``rewards`` key in the tensor dict is always the trajectory-level
+    scalar reward (used by tree backup and GAE). Per-token position-level
+    rewards are stored in the separate ``token_rewards`` key (used for
+    distillation).
+
     Attributes
     ----------
     token_rewards : list[float] | None
@@ -37,17 +42,6 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
     token_reward_mask : list[int] | None
         Binary mask indicating which tokens have rewards (1 = has reward, 0 = no reward).
         Useful for sparse token-level rewards.
-
-    Example
-    -------
-    >>> interaction = InteractionWithTokenLevelReward(
-    ...     model_response=model_resp,
-    ...     messages=messages,
-    ...     completion=completion,
-    ...     token_rewards=[0.0, 0.0, 0.5, 1.0, 1.0],  # Reward last 3 tokens
-    ... )
-    >>> tensor_dict = interaction.to_tensor_dict()
-    >>> # tensor_dict["rewards"] will have per-token rewards broadcast to sequence
     """
 
     # Token-level rewards - one reward per output token
@@ -129,8 +123,10 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
         Convert to tensor dictionary with token-level reward support.
 
         Overrides the parent method to support token-level rewards.
-        When token_rewards is set, it broadcasts them to the full sequence.
-        When token_rewards is None, falls back to scalar reward behavior.
+        When token_rewards is set, token-level rewards are stored in a
+        separate ``token_rewards`` key. The ``rewards`` key is always the
+        trajectory-level scalar reward so that tree backup advantage
+        computation uses only trajectory-level rewards.
 
         Returns
         -------
@@ -141,7 +137,8 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
             - logprobs: Log probabilities (0 for input, actual for output)
             - versions: Weight versions (-1 for input, actual for output)
             - attention_mask: All ones
-            - rewards: Token-level rewards broadcast to sequence length
+            - rewards: Trajectory-level scalar reward (for tree backup / GAE)
+            - token_rewards: Per-token position-level rewards (for distillation)
             - token_reward_mask: Mask indicating which positions have token-level rewards
         """
         # Use parent implementation for base tensors
@@ -176,7 +173,7 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
             token_rewards = token_rewards[:output_len]
 
         # Full sequence: 0 for input, token_rewards for output
-        full_rewards = [0.0] * input_len + token_rewards
+        full_token_rewards = [0.0] * input_len + token_rewards
 
         # Build token reward mask
         if self.token_reward_mask is not None:
@@ -190,9 +187,11 @@ class InteractionWithTokenLevelReward(InteractionWithTokenLogpReward):
             # All output tokens have rewards
             full_mask = [0] * input_len + [1] * output_len
 
-        # Update rewards tensor with token-level values
-        base_result["rewards"] = torch.tensor(
-            full_rewards, dtype=torch.float32
+        # Store token-level rewards separately — do NOT overwrite the
+        # trajectory-level scalar ``rewards`` which is used by tree backup
+        # advantage computation and GAE.
+        base_result["token_rewards"] = torch.tensor(
+            full_token_rewards, dtype=torch.float32
         ).unsqueeze(0)
         base_result["token_reward_mask"] = torch.tensor(
             full_mask, dtype=torch.int32

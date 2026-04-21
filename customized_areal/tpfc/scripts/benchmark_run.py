@@ -176,25 +176,47 @@ class BenchmarkEvaluator(ABC):
                     TaskStatus.PENDING,
                     TaskStatus.RUN_FAILED,
                 ):
-                    try:
-                        (
-                            response,
-                            final_boxed_answer,
-                            log_file_path,
-                            _trace,
-                        ) = await run_backend(
-                            task_file_path=task_file_path,
-                            task_description=task_description,
-                            log_path=self.output_dir
-                            / f"{task.task_id}_attempt_{attempt}",
-                            tags=self.cfg.tags,
-                            task_id=task.task_id,
-                            gt=task.ground_truth,
-                            base_url=base_url,
-                            api_key=api_key,
-                            model_name=cfg.llm.model_name,
-                        )
+                    final_boxed_answer = ""
+                    response = ""
+                    max_retries = 6
+                    retry_count = 0
+                    while final_boxed_answer == "" and retry_count < max_retries:
+                        try:
+                            (
+                                response,
+                                final_boxed_answer,
+                                log_file_path,
+                                _trace,
+                            ) = await run_backend(
+                                task_file_path=task_file_path,
+                                task_description=task_description,
+                                log_path=self.output_dir
+                                / f"{task.task_id}_attempt_{attempt}",
+                                tags=[
+                                    *self.cfg.tags,
+                                    f"query_id_{task.task_id}",
+                                    f"retry_{retry_count}",
+                                ],
+                                task_id=task.task_id,
+                                gt=task.ground_truth,
+                                base_url=base_url,
+                                api_key=api_key,
+                                model_name=cfg.llm.model_name,
+                            )
+                            retry_count += 1
+                            if final_boxed_answer == "" and retry_count < max_retries:
+                                print(
+                                    f"    Empty boxed answer, retrying ({retry_count}/{max_retries})..."
+                                )
+                        except Exception as e:
+                            attempt_result["status"] = TaskStatus.RUN_FAILED
+                            attempt_result["error_message"] = str(e)
+                            print(f"    Error in attempt {attempt}: {e}")
+                            break
 
+                    if attempt_result.get("error_message"):
+                        pass  # Exception occurred, skip processing
+                    else:
                         attempt_result["model_response"] = response if response else ""
 
                         # Save response data to log file
@@ -222,11 +244,6 @@ class BenchmarkEvaluator(ABC):
                         else:
                             attempt_result["model_boxed_answer"] = final_boxed_answer
                             attempt_result["status"] = TaskStatus.RUN_FAILED
-
-                    except Exception as e:
-                        attempt_result["status"] = TaskStatus.RUN_FAILED
-                        attempt_result["error_message"] = str(e)
-                        print(f"    Error in attempt {attempt}: {e}")
 
                 # Perform LLM verification if we have an answer and haven't verified yet
                 if attempt_result["status"] == TaskStatus.RUN_COMPLETED:
@@ -677,13 +694,14 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 4, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 20, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
                 # "model_name": "openrouter/gpt-5",
                 # "model_name": "openai-compatible/gpt-5",
-                "model_name": "openrouter/qwen/qwen3.5-9b",
+                # "model_name": "openrouter/qwen/qwen3.5-9b",
+                "model_name": "openrouter/qwen/qwen3-vl-8b-thinking",
                 # "model_name": "openrouter/qwen/qwen3-32b",
                 "enable_thinking": False,
                 "reasoning_effort": "low",
@@ -705,10 +723,11 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_retry_reasoning",
+        "base_retry_think_fixtool_0420",
         # "compression_1w",
         f"level_{cfg.level}",
     ]
+    
     cfg.output_dir = f"logs/{'-'.join(cfg.tags[:-1])}/{cfg.tags[-1]}"
 
     asyncio.run(entrypoint(cfg))

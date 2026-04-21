@@ -121,6 +121,16 @@ def _get_custom_dataset(
             max_length=max_length,
             **kwargs,
         )
+    elif type == "tpfc_rl":
+        from customized_areal.dataset.tpfc import get_tpfc_rl_dataset
+
+        return get_tpfc_rl_dataset(
+            path=path,
+            split=split,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            **kwargs,
+        )
     else:
         # Fallback: try loading as a generic HuggingFace dataset from disk.
         # This supports arbitrary datasets saved via dataset.save_to_disk().

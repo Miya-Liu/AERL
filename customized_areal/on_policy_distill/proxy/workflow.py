@@ -20,7 +20,6 @@ from areal.utils import logging, stats_tracker
 from areal.utils.perf_tracer import session_context, trace_session
 
 from .client import OpenAIProxyClient
-from .types import TokenRewardInteractions
 
 if TYPE_CHECKING:
     from areal.experimental.openai.client import TRolloutEngine
@@ -48,6 +47,8 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
     - float: Scalar reward (backward compatible)
     - dict[str, float]: Completion ID -> scalar reward
     - dict[str, list[float]]: Completion ID -> token-level rewards
+    - dict[str, dict]: Completion ID -> dict with "position_rewards" and
+      "scalar_reward" keys (for distillation workflows)
 
     Example Agent
     -------------
@@ -174,6 +175,8 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
         - float: Scalar reward for last completion
         - dict[str, float]: Map of completion ID to scalar reward
         - dict[str, list[float]]: Map of completion ID to token-level rewards
+        - dict[str, dict]: Map of completion ID to dict with "position_rewards"
+          and "scalar_reward" keys (for distillation workflows)
 
         Parameters
         ----------
@@ -199,20 +202,35 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
             elif isinstance(reward_value, float):
                 # Scalar reward
                 await client.set_reward(completion_id, float(reward_value))
+            elif isinstance(reward_value, dict):
+                # Position-level rewards with scalar reward
+                # Used by distillation workflows (OnPolicyDistillAgent, TreeDistillAgent)
+                position_rewards = reward_value.get("position_rewards")
+                scalar_reward = reward_value.get("scalar_reward")
+
+                if position_rewards is not None:
+                    await client.set_position_rewards(completion_id, position_rewards)
+                if scalar_reward is not None:
+                    await client.set_reward(completion_id, float(scalar_reward))
             else:
                 raise ValueError(
                     f"Invalid reward value type for {completion_id}: {type(reward_value)}. "
-                    "Expected float or list[float]"
+                    "Expected float, list[float], or dict"
                 )
 
     @session_context()
     async def arun_episode(
         self, engine: TRolloutEngine, data: dict[str, Any]
-    ) -> TokenRewardInteractions | None:
+    ) -> dict[str, Any] | None:
         """
         Run a single episode with token-level reward support via HTTP API.
 
         This is the main entry point called by AReaL's training loop.
+
+        Converts interactions to a concatenated tensor dict and attaches
+        position_rewards separately, avoiding concat_padded_tensors key
+        consistency issues when some interactions have position_rewards
+        and others don't (e.g., multi-turn conversations).
 
         Parameters
         ----------
@@ -223,9 +241,11 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
 
         Returns
         -------
-        TokenRewardInteractions | None
-            Dictionary of interactions with token-level rewards, or None if rejected.
+        dict[str, Any] | None
+            Concatenated tensor dict with position_rewards attached, or None.
         """
+        from areal.utils.data import concat_padded_tensors
+
         task_id = workflow_context.get().task_id
         http_session = await workflow_context.get_aiohttp_session()
 
@@ -274,4 +294,26 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
         last_reward = interactions[last_id].reward
         stats_tracker.get(workflow_context.stat_scope()).scalar(reward=last_reward)
 
-        return interactions
+        # Convert interactions to tensor dict here (instead of letting
+        # workflow_executor do it) so we can attach position_rewards
+        # separately. This avoids concat_padded_tensors key consistency
+        # issues when some interactions have position_rewards and others
+        # don't (e.g., in multi-turn conversations).
+        tensor_dict = concat_padded_tensors(
+            [v.to_tensor_dict() for v in interactions.values()]
+        )
+
+        # Collect position_rewards from all interactions that have them.
+        # position_rewards is a Python attribute set during server-side
+        # export or client-side deserialization. It flows as a list
+        # (flat-concatenated across interactions) to the distillation loss.
+        all_position_rewards = []
+        for interaction in interactions.values():
+            pr = getattr(interaction, "position_rewards", None)
+            if pr is not None:
+                all_position_rewards.extend(pr)
+
+        if all_position_rewards:
+            tensor_dict["position_rewards"] = all_position_rewards
+
+        return tensor_dict

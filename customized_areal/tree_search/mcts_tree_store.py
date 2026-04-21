@@ -20,6 +20,25 @@ def _get_query_id(traj: dict[str, Any]) -> str:
     return hashlib.md5(prompt_str.encode()).hexdigest()
 
 
+def get_query_id_from_messages(
+    messages: list[dict[str, str]],
+    tokenizer: Any,
+) -> str:
+    """Derive a query ID from prompt messages by tokenizing them.
+
+    This produces the same query ID as ``_get_query_id`` would produce
+    after rollout, because the proxy server tokenizes the same messages
+    with the same tokenizer to produce ``input_ids``.
+    """
+    # Build the prompt text the same way the chat template does
+    prompt_text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    prompt_tokens = tokenizer.encode(prompt_text)
+    prompt_str = ",".join(str(t) for t in prompt_tokens)
+    return hashlib.md5(prompt_str.encode()).hexdigest()
+
+
 class MCTSTreeStore:
     """Trie-backed MCTS tree store with cursor-based API.
 
@@ -126,30 +145,69 @@ class MCTSTreeStore:
         return seq_id
 
     def insert_batch(self, trajectories: list[dict[str, Any]]) -> None:
-        """Batch version -- group trajectories by query, insert each group."""
+        """Batch version -- insert each trajectory, handling grouped dicts.
+
+        When a trajectory dict has batch_size > 1 (grouped via
+        GroupedRolloutWorkflow), it is split into individual samples and
+        each is inserted separately. The resulting seq_ids are stored as
+        ``_mcts_seq_ids`` (list[int]) on the grouped dict.
+
+        Trajectories that already carry ``_mcts_seq_id`` or
+        ``_mcts_seq_ids`` are skipped (they were loaded from cache).
+        """
         for traj in trajectories:
-            query_id = _get_query_id(traj)
-            input_ids = traj["input_ids"].tolist()
-            reward = (
-                traj["rewards"].item()
-                if traj["rewards"].dim() > 0
-                else traj["rewards"].item()
-            )
+            # Skip already-inserted cached trajectories
+            if "_mcts_seq_id" in traj or "_mcts_seq_ids" in traj:
+                continue
 
-            logprobs = traj["logprobs"].tolist() if "logprobs" in traj else None
-            # Handle 2D logprobs [batch, seq_len] -> take first row
-            if logprobs is not None and isinstance(logprobs[0], list):
-                logprobs = logprobs[0]
+            input_ids = traj["input_ids"]
+            rewards = traj["rewards"]
+            batch_size = input_ids.shape[0]
 
-            versions = traj["versions"].tolist() if "versions" in traj else None
-            if versions is not None and isinstance(versions[0], list):
-                versions = versions[0]
+            if batch_size == 1:
+                # Single trajectory — insert directly
+                query_id = _get_query_id(traj)
+                ids_flat = input_ids[0].tolist()
+                reward = rewards.item() if rewards.dim() > 0 else rewards.item()
 
-            seq_id = self.insert_trajectory(
-                query_id, input_ids, reward, logprobs=logprobs, versions=versions
-            )
-            traj["_mcts_seq_id"] = seq_id
-            traj["_mcts_query_id"] = query_id
+                logprobs = traj["logprobs"][0].tolist() if "logprobs" in traj else None
+                versions = traj["versions"][0].tolist() if "versions" in traj else None
+
+                seq_id = self.insert_trajectory(
+                    query_id, ids_flat, reward, logprobs=logprobs, versions=versions
+                )
+                traj["_mcts_seq_id"] = seq_id
+                traj["_mcts_query_id"] = query_id
+            else:
+                # Grouped trajectory — insert each sample separately
+                seq_ids = []
+                query_id = None
+                for i in range(batch_size):
+                    single = {
+                        "input_ids": input_ids[i : i + 1],
+                        "loss_mask": traj["loss_mask"][i : i + 1],
+                        "rewards": rewards[i : i + 1],
+                    }
+                    qid = _get_query_id(single)
+                    if query_id is None:
+                        query_id = qid
+                    ids_flat = input_ids[i].tolist()
+                    reward = rewards[i].item() if rewards.dim() > 0 else rewards.item()
+
+                    logprobs = (
+                        traj["logprobs"][i].tolist() if "logprobs" in traj else None
+                    )
+                    versions = (
+                        traj["versions"][i].tolist() if "versions" in traj else None
+                    )
+
+                    seq_id = self.insert_trajectory(
+                        qid, ids_flat, reward, logprobs=logprobs, versions=versions
+                    )
+                    seq_ids.append(seq_id)
+
+                traj["_mcts_seq_ids"] = seq_ids
+                traj["_mcts_query_id"] = query_id
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Get Q-values per turn, expand to per-token advantages."""

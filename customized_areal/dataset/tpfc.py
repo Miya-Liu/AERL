@@ -47,9 +47,11 @@ def get_tpfc_rl_dataset(
             "messages": messages,
             "answer": ground_truth,  # AReaL expects 'answer' column for ground truth
             "style": style,
+            "files_path": [],  # Always include for consistent schema
+            "extra_info": {},  # Always include for consistent schema
         }
 
-        # Include files_path if present
+        # Populate files_path if images present
         images = sample.get("images")
         if images is not None and len(images) > 0:
             result["files_path"] = [
@@ -61,7 +63,7 @@ def get_tpfc_rl_dataset(
                 for img in images
             ]
 
-        # Include extra_info if needed for debugging
+        # Populate extra_info if present
         extra_info = sample.get("extra_info")
         if extra_info is not None:
             result["extra_info"] = extra_info

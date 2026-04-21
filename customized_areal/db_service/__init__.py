@@ -9,7 +9,6 @@ This module provides:
 - AgentService: Service class for agent CRUD operations
 - AgentFilters: Dataclass for agent query filters
 - PaginationParams: Dataclass for pagination parameters
-- TPFC_CONFIG: Builtin configuration for TPFC agent
 - Agent schemas: Pydantic models for agent requests/responses
 - AgentLoader: Unified agent loading service
 - get_agent_loader: Get the global AgentLoader instance
@@ -17,7 +16,6 @@ This module provides:
 
 from .agent_loader import AgentConfig, AgentData, AgentLoader, get_agent_loader
 from .agent_service import AgentFilters, AgentService, get_agent_service
-from .builtin import TPFC_CONFIG
 from .connection import DBConnection, SyncDBConnection
 from .messages import add_message, get_llm_messages
 from .pagination import PaginationParams
@@ -34,7 +32,6 @@ __all__ = [
     "cleanup_sandbox_for_task",
     "delete_sandbox",
     "TaskStatus",
-    "TPFC_CONFIG",
     "AgentCreateRequest",
     "AgentResponse",
     "AgentUpdateRequest",
