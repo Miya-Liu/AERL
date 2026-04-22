@@ -307,10 +307,19 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
         # position_rewards is a Python attribute set during server-side
         # export or client-side deserialization. It flows as a list
         # (flat-concatenated across interactions) to the distillation loss.
+        # Each PositionRewardInfo gets a sample_index indicating which
+        # batch item it belongs to, so that minibatch splitting can
+        # correctly partition position_rewards across minibatches.
+        # NOTE: This assumes export_style="individual" where each
+        # interaction becomes a separate batch item. For "concat" style,
+        # positions from subsequent interactions would need cumulative
+        # offset adjustment based on prior interactions' output lengths.
         all_position_rewards = []
-        for interaction in interactions.values():
+        for sample_idx, interaction in enumerate(interactions.values()):
             pr = getattr(interaction, "position_rewards", None)
             if pr is not None:
+                for p in pr:
+                    p.sample_index = sample_idx
                 all_position_rewards.extend(pr)
 
         if all_position_rewards:

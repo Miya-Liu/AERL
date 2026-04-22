@@ -74,6 +74,9 @@ class PositionRewardInfo:
     logprobs: list[float] | None = None  # logp_model for each candidate
     rewards: list[float] = field(default_factory=list)
     chosen_index: int = 0
+    sample_index: int = (
+        0  # Index of the sample this position belongs to within the batch
+    )
 
     def __post_init__(self):
         n = len(self.candidates)

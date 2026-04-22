@@ -224,7 +224,7 @@ def _prepare_form_data(
     if api_key is not None:
         form_data["proxy_api_key"] = api_key
     if tags is not None:
-        form_data["tags"] = json.dumps(list(tags))
+        form_data["tags"] = ",".join(tags)
 
     return form_data
 
@@ -440,21 +440,34 @@ async def _wait_for_agent_run(
         retry_delay = 1.0
         while _time_left() > 0:
             try:
-                agent_run = (
-                    await client.table("agent_runs")
-                    .select("status, error, completed_at")
-                    .eq("id", agent_run_id)
-                    .single()
-                    .execute()
-                )
-                status = agent_run.data["status"]
+                if agent_run_id:
+                    agent_run = (
+                        await client.table("agent_runs")
+                        .select("status, error, completed_at")
+                        .eq("id", agent_run_id)
+                        .single()
+                        .execute()
+                    )
+                    status = agent_run.data["status"]
+                else:
+                    # No agent_run_id (queued status) — poll task for active run
+                    task_row = (
+                        await client.table("tasks")
+                        .select("status")
+                        .eq("task_id", task_id)
+                        .single()
+                        .execute()
+                    )
+                    task_status = task_row.data["status"]
+                    if task_status in {"completed", "failed", "stopped"}:
+                        status = task_status
             except Exception as exc:
                 if _time_left() <= 0:
                     break
                 sleep_for = min(retry_delay, _time_left())
                 logger.warning(
-                    "DB poll failed for agent_run_id=%s, retrying in %.1fs: %s",
-                    agent_run_id,
+                    "DB poll failed for task_id=%s, retrying in %.1fs: %s",
+                    task_id,
                     sleep_for,
                     exc,
                 )
@@ -471,8 +484,8 @@ async def _wait_for_agent_run(
             retry_delay = 1.0
         else:
             logger.error(
-                "Timeout waiting for agent run to complete: agent_run_id=%s",
-                agent_run_id,
+                "Timeout waiting for agent run to complete: task_id=%s",
+                task_id,
             )
             raise TimeoutError(
                 f"Agent run {agent_run_id} did not complete within {timeout} seconds"
@@ -557,10 +570,19 @@ async def run_backend(
     )
     logger.info("Agent run started via API: %s", result)
 
-    agent_run_id = result["agent_run_id"]
+    agent_run_id = result.get("agent_run_id")
+    start_status = result.get("status")
+
+    if start_status == "queued" and not agent_run_id:
+        logger.warning(
+            "Agent run queued (slot occupied) for task_id=%s, waiting via task stream",
+            task_id,
+        )
+
     status = await _wait_for_agent_run(
         client,
-        agent_run_id,
+        task_id=task_id,
+        agent_run_id=agent_run_id,
         api_base_url=LE_AGENT_API_URL,
         auth_token=auth_token,
     )
@@ -575,13 +597,21 @@ async def run_backend(
 
 
 if __name__ == "__main__":
-    task_description = "今天北京天气怎么样"
+    task_description = (
+        "The attached spreadsheet shows the inventory for a movie and video game rental store in Seattle, Washington. "
+        "What is the title of the oldest Blu-Ray recorded in this spreadsheet? Return it as appearing in the spreadsheet."
+    )
+    task_file_path = [
+        "/dfs/share-groups/letrain/zhoujie/AReaL-main/customized_areal/dataset/gaia-benchmark/gaia/2023/validation/32102e3e-d12a-4209-9163-7b3a104efe5d.xlsx"
+    ]
+    gt = "Time-Parking 2: Parallel Universe"
 
     messages, final_answer, log_path, _trace = asyncio.run(
         run_backend(
             task_description=task_description,
-            task_file_path=[],
-            tags=["debug"],
+            task_file_path=task_file_path,
+            gt=gt,
+            tags=["debug", "0421"],
             user_id=DEFAULT_USER_ID,
             model_name="openrouter/qwen/qwen3-235b-a22b",
             api_key="",

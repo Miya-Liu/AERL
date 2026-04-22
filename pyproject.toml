@@ -137,6 +137,8 @@ dependencies = [
     "supabase>=2.28.3",
     "sglang[tracing]==0.5.9",
     "daytona>=0.166.0",
+    "pipx>=1.11.1",
+    "claude-code>=0.0.1",
 ]
 
 [project.optional-dependencies]

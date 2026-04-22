@@ -113,21 +113,22 @@ def grpo_distill_loss_fn(
         rl_loss_weight = input_data.get("rl_loss_weight", 1.0)
         distill_loss_weight = input_data.get("distill_loss_weight", 0.005)
 
-        # Determine output length from loss_mask
-        loss_mask_list = (
-            loss_mask.squeeze(0).tolist() if loss_mask.dim() > 1 else loss_mask.tolist()
-        )
-        try:
-            first_one_idx = loss_mask_list.index(1)
-            output_len = len(loss_mask_list) - first_one_idx
-        except ValueError:
-            output_len = chosen_logprobs.shape[-1]
+        # Determine prompt length from loss_mask (0 = prompt, 1 = output)
+        # PositionRewardInfo.position is 0-indexed from the first output token,
+        # but logprobs[seq_len, num_candidates] includes prompt tokens.
+        # We need prompt_len to offset positions correctly.
+        loss_mask_flat = loss_mask.squeeze(0) if loss_mask.dim() > 1 else loss_mask
+        prompt_len = 0
+        for i in range(loss_mask_flat.shape[0]):
+            if loss_mask_flat[i]:
+                prompt_len = i
+                break
 
         position_grpo_loss = _compute_position_level_grpo_loss(
             position_rewards=position_rewards,
             logprobs=logprobs,
             loss_mask=loss_mask,
-            output_len=output_len,
+            prompt_len=prompt_len,
         )
 
         loss = rl_loss_weight * loss + distill_loss_weight * position_grpo_loss
@@ -219,7 +220,7 @@ def _compute_position_level_grpo_loss(
     position_rewards: list,
     logprobs: torch.Tensor,
     loss_mask: torch.Tensor,
-    output_len: int,
+    prompt_len: int,
 ) -> torch.Tensor:
     """Compute position-level GRPO loss using pre-computed multi-candidate logprobs.
 
@@ -238,8 +239,10 @@ def _compute_position_level_grpo_loss(
         These are computed by the engine and have gradient information.
     loss_mask : torch.Tensor
         Mask indicating which tokens to compute loss on.
-    output_len : int
-        Number of output tokens.
+    prompt_len : int
+        Number of prompt tokens. PositionRewardInfo.position is 0-indexed
+        from the first output token, so we add prompt_len to get the
+        absolute position in the logprobs tensor.
 
     Returns
     -------
@@ -259,7 +262,9 @@ def _compute_position_level_grpo_loss(
     for pr in position_rewards:
         if not pr.rewards:
             continue
-        position = pr.position
+        # Offset position: PositionRewardInfo.position is 0-indexed from
+        # the first output token, but logprobs includes prompt tokens.
+        position = pr.position + prompt_len
         if position >= logprobs.shape[0]:
             continue
         num_candidates = min(len(pr.rewards), max_candidates)
@@ -333,13 +338,18 @@ def _compute_position_level_grpo_loss(
         total_weight > 0, loss_per_position / total_weight, loss_per_position
     )
 
-    # Pad or truncate to output_len
+    # Pad or truncate to match loss_mask output length
+    output_len = loss_mask.sum().item()
+    if output_len <= 0:
+        output_len = 1
     n_loss = loss_per_position.shape[0]
     if n_loss < output_len:
-        padding = torch.zeros(output_len - n_loss, dtype=torch.float32, device=device)
+        padding = torch.zeros(
+            int(output_len) - n_loss, dtype=torch.float32, device=device
+        )
         loss_per_position = torch.cat([loss_per_position, padding])
     elif n_loss > output_len:
-        loss_per_position = loss_per_position[:output_len]
+        loss_per_position = loss_per_position[: int(output_len)]
 
     grpo_loss = loss_per_position.sum() / loss_mask.sum().clamp(min=1)
     return grpo_loss

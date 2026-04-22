@@ -48,6 +48,17 @@ class TreeCheckpointManager:
         with open(os.path.join(self.save_dir, "metadata.json")) as f:
             metadata = json.load(f)
         store._next_seq_id = metadata["next_seq_id"]
+
+        # Restore trained flags and rewards
+        trained_data = metadata.get("trained", {})
+        rewards_data = metadata.get("rewards", {})
+        for key_str, trained in trained_data.items():
+            qid, sid = key_str.rsplit(":", 1)
+            store._trained[(qid, int(sid))] = trained
+        for key_str, reward in rewards_data.items():
+            qid, sid = key_str.rsplit(":", 1)
+            store._rewards[(qid, int(sid))] = reward
+
         for filename in os.listdir(self.save_dir):
             if not filename.startswith("query_") or not filename.endswith(".json"):
                 continue
@@ -60,6 +71,13 @@ class TreeCheckpointManager:
             )
             root.sequence_ids = list(root.sequence_ids)
             store.trees[query_id] = root
+
+        # Rebuild MCTS statistics from stored rewards.  After deserialization
+        # the node objects have new id() values, so _backup must be re-run to
+        # populate _visit_counts / _total_values / _q_values with keys that
+        # reference the current objects.
+        store.rebuild_mcts_stats()
+
         return store
 
     def _serialize_node(self, node: TrieNode) -> dict:

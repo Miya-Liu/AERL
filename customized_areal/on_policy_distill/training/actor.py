@@ -39,7 +39,8 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
     if _patch_applied:
         return
 
-    original_ppo_update = PPOActor._ppo_update
+    # Store original for potential future restoration
+    _original_ppo_update = PPOActor._ppo_update  # noqa: F841
 
     def _ppo_update_with_distill_loss(self, data: dict[str, Any]) -> None:
         """PPO update using grpo_distill_loss_fn."""
@@ -48,12 +49,25 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
         for key in ["rewards", "tot_rewards", "kl_rewards"]:
             data.pop(key, None)
 
+        # Extract position_rewards before splitting so we can distribute
+        # the correct subset to each minibatch.  position_rewards is a
+        # Python list and cannot be split by the generic tensor-based
+        # minibatch splitter.
+        position_rewards = data.pop("position_rewards", None)
+
         self.engine.train()
 
         mb_inputs = split_padded_tensor_dict_into_mb_list(
             data,
             mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
         )
+
+        # Distribute position_rewards to minibatches based on sample_index.
+        # Each PositionRewardInfo.sample_index indicates which batch item
+        # it belongs to.  We use the forward_indices from the minibatch
+        # split to determine which samples are in which minibatch.
+        if position_rewards is not None:
+            _distribute_position_rewards(mb_inputs, position_rewards)
 
         with stats_tracker.scope("update"):
             current_version = self.engine.get_version()
@@ -86,3 +100,41 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
     PPOActor._ppo_update = _ppo_update_with_distill_loss
     _patch_applied = True
     logger.info("PPOActor class patched to use grpo_distill_loss_fn")
+
+
+def _distribute_position_rewards(mb_inputs, position_rewards: list) -> None:
+    """Distribute position_rewards to minibatches based on sample_index.
+
+    Each PositionRewardInfo has a sample_index indicating which batch item
+    it belongs to.  The MicroBatchList.forward_indices maps batch items to
+    their position in the reordered minibatch sequence.  We use this to
+    determine which position_rewards belong to which minibatch.
+    """
+    if not position_rewards:
+        return
+
+    forward_indices = mb_inputs.forward_indices
+    # Build mapping: original batch index -> minibatch index
+    batch_size = len(forward_indices)
+    mb_assignment: list[int | None] = [None] * batch_size
+    offset = 0
+    for i, mb in enumerate(mb_inputs.mbs):
+        mb_bs = mb["attention_mask"].shape[0]
+        for j in range(mb_bs):
+            orig_idx = forward_indices[offset + j]
+            mb_assignment[orig_idx] = i
+        offset += mb_bs
+
+    # Group position_rewards by minibatch
+    per_mb_prs: dict[int, list] = {}
+    for pr in position_rewards:
+        mb_i = mb_assignment[pr.sample_index]
+        if mb_i is not None:
+            per_mb_prs.setdefault(mb_i, []).append(pr)
+
+    # Attach to minibatches
+    for i, mb in enumerate(mb_inputs.mbs):
+        if i in per_mb_prs:
+            mb["position_rewards"] = per_mb_prs[i]
+        else:
+            mb["position_rewards"] = []

@@ -337,6 +337,24 @@ class MCTSTreeStore:
         for key in self._trained:
             self._trained[key] = False
 
+    def rebuild_mcts_stats(self) -> None:
+        """Rebuild MCTS statistics from stored trajectories after checkpoint load.
+
+        After deserialization, node objects have new ``id()`` values, so the
+        ``_visit_counts``, ``_total_values``, and ``_q_values`` dicts (keyed by
+        ``id(node)``) are stale.  This method re-runs MCTS backup for every
+        stored trajectory using the current node objects, restoring correct
+        Q-values.  ``_rewards`` must already be populated (it is serialized
+        in the checkpoint metadata).
+        """
+        # Clear stale stats (keys reference old id() values)
+        self._visit_counts.clear()
+        self._total_values.clear()
+        self._q_values.clear()
+
+        for (query_id, seq_id), reward in self._rewards.items():
+            self._backup(query_id, seq_id, reward)
+
     def clear(self) -> None:
         """Reset all trees, stats, and cursors."""
         self.trees.clear()

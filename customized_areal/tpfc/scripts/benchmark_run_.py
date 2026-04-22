@@ -4,7 +4,7 @@ import os
 import dotenv
 from omegaconf import OmegaConf
 
-from .benchmark_run import entrypoint
+from customized_areal.tpfc.scripts.benchmark_run import entrypoint
 
 def main():
     dotenv.load_dotenv()
@@ -19,7 +19,7 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 20, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 10, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",

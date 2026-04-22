@@ -180,6 +180,7 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         ----------
         model_inputs : dict[str, Any]
             Standard model inputs (for fallback to single-candidate).
+            Must contain "loss_mask" to determine prompt length.
         position_rewards : list
             List of PositionRewardInfo with candidate_token_ids.
         seq_len : int
@@ -201,6 +202,18 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         if not has_candidates:
             return None
 
+        # Determine prompt length from loss_mask (0=prompt, 1=output)
+        # PositionRewardInfo.position is 0-indexed from the first output token,
+        # but labels[seq_len, max_candidates] includes prompt token positions.
+        loss_mask = model_inputs.get("loss_mask")
+        prompt_len = 0
+        if loss_mask is not None:
+            lm_flat = loss_mask.squeeze(0) if loss_mask.dim() > 1 else loss_mask
+            for i in range(lm_flat.shape[0]):
+                if lm_flat[i]:
+                    prompt_len = i
+                    break
+
         # Find max number of candidates across positions
         max_candidates = max(
             len(pr.candidate_token_ids)
@@ -215,7 +228,9 @@ class MultiCandidateFSDPEngine(FSDPEngine):
 
         # Fill in candidate token IDs for each position
         for pr in position_rewards:
-            position = pr.position
+            # Offset position: PositionRewardInfo.position is 0-indexed from
+            # the first output token, but labels includes prompt positions.
+            position = pr.position + prompt_len
             if position >= seq_len:
                 continue
             if hasattr(pr, "candidate_token_ids") and pr.candidate_token_ids:
