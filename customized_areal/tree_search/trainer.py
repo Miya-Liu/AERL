@@ -463,9 +463,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
         cache-aware version that loads cached trajectories and only
         generates missing ones. After training completes (or on error),
         the original prepare_batch is restored.
-
-        This override also tracks the global step for training history
-        recording.
         """
         if not self.cache_config.enabled:
             return super().train(
@@ -477,9 +474,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 total_epochs=total_epochs,
             )
 
-        # Track global step internally
-        self._global_step = 0
-
         # Monkey-patch prepare_batch with cache-aware or replay version
         original_prepare_batch = self.actor.prepare_batch
 
@@ -489,23 +483,20 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
             def _prepare_batch_fn(
                 dataloader,
-                workflow_arg,
-                workflow_kwargs_arg=None,
+                workflow,
+                workflow_kwargs=None,
                 should_accept_fn=None,
                 group_size=1,
                 dynamic_bs=False,
             ):
-                batch = self._cache_aware_prepare_batch(
+                return self._cache_aware_prepare_batch(
                     dataloader=dataloader,
-                    workflow=workflow_arg,
-                    workflow_kwargs=workflow_kwargs_arg,
+                    workflow=workflow,
+                    workflow_kwargs=workflow_kwargs,
                     should_accept_fn=should_accept_fn,
                     group_size=group_size,
                     dynamic_bs=dynamic_bs,
                 )
-                # Call record_training_step with the current global step
-                self.tree_store.record_training_step(self._global_step, batch)
-                return batch
 
         self.actor.prepare_batch = _prepare_batch_fn
 
