@@ -694,7 +694,7 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 20, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 1, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
@@ -712,10 +712,10 @@ def main():
             "user_id": "62ec5137-d121-4c8c-b175-ee165bdf38e4",
             "agent_id": os.environ.get("main_agent_id", ""),
             "backend_mode": True,
-            "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "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",  # Set your API key here or via CLI
-            # "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
-            # "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
+            # "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
+            # "api_key": "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",  # Set your API key here or via CLI
+            "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
+            "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
         }
     )
 
@@ -723,7 +723,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_retry_think_fixtool_0420",
+        "base_retry_think_fixtool_0422",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

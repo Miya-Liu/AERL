@@ -13,6 +13,50 @@ from areal.api.cli_args import PPOConfig
 
 
 @dataclass
+class AgentConfig:
+    """Configuration for the agent used by OpenAIProxyWorkflow.
+
+    Attributes:
+        trial_name: AReaL trial name to tag agent runs with.
+        train_id: Training run ID to tag agent runs with.
+        user_id: User ID for authentication.
+        model_name: Model name for LLM calls. None uses the agent default.
+        judge_model_name: Model name for the judge LLM.
+        judge_base_url: Base URL for the judge LLM API.
+        judge_api_key: API key for the judge LLM.
+    """
+
+    trial_name: str = field(
+        default="",
+        metadata={"help": "AReaL trial name to tag agent runs with."},
+    )
+    train_id: str = field(
+        default="",
+        metadata={"help": "Training run ID to tag agent runs with."},
+    )
+    user_id: str = field(
+        default="",
+        metadata={"help": "User ID for authentication."},
+    )
+    model_name: str | None = field(
+        default=None,
+        metadata={"help": "Model name for LLM calls. None uses the agent default."},
+    )
+    judge_model_name: str | None = field(
+        default=None,
+        metadata={"help": "Model name for the judge LLM."},
+    )
+    judge_base_url: str | None = field(
+        default=None,
+        metadata={"help": "Base URL for the judge LLM API."},
+    )
+    judge_api_key: str | None = field(
+        default=None,
+        metadata={"help": "API key for the judge LLM."},
+    )
+
+
+@dataclass
 class OnPolicyDistillConfig(PPOConfig):
     """Configuration for On-Policy Distillation training experiments.
 
@@ -39,6 +83,11 @@ class OnPolicyDistillConfig(PPOConfig):
     eval_workflow: str = field(
         default="${workflow}",
         metadata={"help": "Path to the eval workflow class."},
+    )
+
+    agent: AgentConfig = field(
+        default_factory=AgentConfig,
+        metadata={"help": "Agent configuration passed to the workflow."},
     )
 
     # Cache configuration

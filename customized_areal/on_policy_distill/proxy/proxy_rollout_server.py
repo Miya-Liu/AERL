@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
+import os
 import secrets
 import threading
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -50,6 +53,27 @@ from .server import (
 )
 
 logger = getLogger("TokenRewardProxyServer")
+
+
+# =============================================================================
+# Warning Deduplication
+# =============================================================================
+
+_warn_once_enabled = os.environ.get("AREAL_PROXY_WARN_ONCE", "0") == "1"
+_warned_messages: set[str] = set()
+_warn_lock = threading.Lock()
+
+
+def _warn_once(msg: str) -> None:
+    """Log a warning message, optionally only once if AREAL_PROXY_WARN_ONCE=1."""
+    if not _warn_once_enabled:
+        logger.warning(msg)
+        return
+
+    with _warn_lock:
+        if msg not in _warned_messages:
+            _warned_messages.add(msg)
+            logger.warning(msg)
 
 
 # =============================================================================
@@ -160,10 +184,28 @@ _server_port: int = 8000
 
 
 # =============================================================================
-# FastAPI App
+# FastAPI App with Lifespan
 # =============================================================================
 
-app = FastAPI(title="Token Reward Proxy Server")
+_cleanup_task: asyncio.Task | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage background tasks with proper lifecycle."""
+    global _cleanup_task
+    _cleanup_task = asyncio.create_task(_cleanup_stale_sessions())
+    logger.info(f"Token Reward Proxy Server started on {_server_host}:{_server_port}")
+    yield
+    if _cleanup_task is not None:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Token Reward Proxy Server", lifespan=lifespan)
 
 
 # =============================================================================
@@ -171,37 +213,58 @@ app = FastAPI(title="Token Reward Proxy Server")
 # =============================================================================
 
 
+def _extract_bearer_token(request: Request) -> str:
+    """Extract API token from Authorization header or x-api-key header.
+
+    Supports both 'Authorization: Bearer <token>' (OpenAI SDK, case-insensitive
+    per RFC 6750) and 'x-api-key: <token>' (Anthropic SDK) for cross-SDK
+    compatibility.
+    """
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+    x_api_key = request.headers.get("x-api-key", "")
+    if x_api_key:
+        return x_api_key
+    raise HTTPException(
+        status_code=401,
+        detail="Missing or malformed Authorization header. Expected 'Bearer <token>' or 'x-api-key: <token>'.",
+    )
+
+
 def _require_admin_key(request: Request) -> str:
-    """Validate admin API key from Authorization header."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="Missing or invalid Authorization header"
-        )
-    token = auth[7:]  # Remove "Bearer "
-    if token != _admin_api_key:
-        raise HTTPException(status_code=403, detail="Invalid admin API key")
+    """Validate admin API key using constant-time comparison."""
+    token = _extract_bearer_token(request)
+    if not hmac.compare_digest(token, _admin_api_key):
+        raise HTTPException(status_code=403, detail="Invalid admin API key.")
     return token
 
 
 def _require_session_key(request: Request) -> str:
-    """Validate session API key and return session_id."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401, detail="Missing or invalid Authorization header"
-        )
-    token = auth[7:]  # Remove "Bearer "
-
+    """Resolve session_id from the session API key."""
+    token = _extract_bearer_token(request)
     with _lock:
-        if token not in _api_key_to_session:
-            raise HTTPException(status_code=403, detail="Invalid session API key")
-        return _api_key_to_session[token]
+        session_id = _api_key_to_session.get(token)
+    if session_id is None:
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired session API key."
+        )
+    return session_id
 
 
 def _generate_api_key() -> str:
     """Generate a unique session API key."""
     return f"tr-session-{secrets.token_urlsafe(32)}"
+
+
+def _remove_api_keys_for_session(session_id: str) -> None:
+    """Remove the API key mapping for the given session.
+
+    Must be called with _lock held.
+    """
+    api_key = _session_to_api_key.pop(session_id, None)
+    if api_key:
+        _api_key_to_session.pop(api_key, None)
 
 
 # =============================================================================
@@ -213,49 +276,92 @@ def _generate_api_key() -> str:
 def start_session(
     request: StartSessionRequest, admin_key: str = Depends(_require_admin_key)
 ) -> StartSessionResponse:
-    """Start a new RL session with token-level reward support."""
+    """Start a new RL session with token-level reward support.
+
+    If ``request.api_key`` is provided, reuse that key instead of generating
+    a new one.  When the key already maps to a *finished* session on this
+    worker, the stale mapping is cleaned up first.  If it maps to an
+    *active* (unfinished) session, the request is rejected with HTTP 409.
+    """
     import uuid
 
-    session_id = f"tr-{uuid.uuid4().hex[:16]}"
-    api_key = _generate_api_key()
+    global _capacity
+    task_id = request.task_id
 
     with _lock:
-        _session_cache[session_id] = TokenRewardSessionData(session_id)
-        _api_key_to_session[api_key] = session_id
-        _session_to_api_key[session_id] = api_key
+        if _capacity <= 0:
+            raise HTTPException(
+                status_code=429,
+                detail="No available capacity to start a new session",
+            )
 
-    logger.info(f"Started session {session_id} for task {request.task_id}")
-    return StartSessionResponse(session_id=session_id, api_key=api_key)
+        session_id = f"tr-{uuid.uuid4().hex[:16]}"
+
+        # Resolve session API key
+        if request.api_key:
+            session_api_key = request.api_key
+            if session_api_key == _admin_api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot use the admin API key as a session key.",
+                )
+            existing_sid = _api_key_to_session.get(session_api_key)
+            if existing_sid is not None:
+                existing_session = _session_cache.get(existing_sid)
+                if existing_session is not None and not existing_session.is_completed:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"API key is already bound to active session {existing_sid}.",
+                    )
+                _remove_api_keys_for_session(existing_sid)
+        else:
+            session_api_key = _generate_api_key()
+
+        _capacity -= 1
+        _session_cache[session_id] = TokenRewardSessionData(session_id)
+        _api_key_to_session[session_api_key] = session_id
+        _session_to_api_key[session_id] = session_api_key
+
+    logger.info(f"Started session {session_id} for task {task_id}")
+    return StartSessionResponse(session_id=session_id, api_key=session_api_key)
 
 
 @app.post(f"/{RL_END_SESSION_PATHNAME}")
 def end_session(session_id: str = Depends(_require_session_key)):
-    """End an RL session."""
+    """End an RL session.
+
+    Returns the number of recorded interactions so callers (e.g. the proxy
+    gateway refresh path) can decide whether meaningful trajectory data
+    exists.
+    """
     with _lock:
         if session_id not in _session_cache:
             raise HTTPException(
                 status_code=410, detail="Session already ended or expired"
             )
         session_data = _session_cache[session_id]
+        interaction_count = len(session_data.completions)
 
+    # finish() outside lock to avoid holding lock during potential I/O
     session_data.finish()
 
     # Clean up mappings
     with _lock:
-        if session_id in _session_to_api_key:
-            api_key = _session_to_api_key[session_id]
-            del _api_key_to_session[api_key]
-            del _session_to_api_key[session_id]
+        _remove_api_keys_for_session(session_id)
 
     logger.info(f"Ended session {session_id}")
-    return {"message": "success"}
+    return {"message": "success", "interaction_count": interaction_count}
 
 
 @app.post(f"/{EXPORT_TRAJECTORIES_PATHNAME}")
-def export_trajectories(
+async def export_trajectories(
     request: ExportTrajectoriesRequest, admin_key: str = Depends(_require_admin_key)
 ) -> ExportTrajectoriesResponse:
-    """Export trajectories for a session with token-level rewards."""
+    """Export trajectories for a session with token-level rewards.
+
+    Waits for the session to complete before exporting, then removes the
+    session from cache and cleans up API key mappings.
+    """
     session_id = request.session_id
 
     with _lock:
@@ -265,10 +371,8 @@ def export_trajectories(
             )
         session_data = _session_cache[session_id]
 
-    # Wait for session to complete
-    if not session_data.is_completed:
-        # Return empty response - client should retry
-        return ExportTrajectoriesResponse(interactions={})
+    # Wait for session to complete (non-blocking, outside lock)
+    await session_data.wait_for_finish()
 
     # Export with token-level rewards applied
     interactions = session_data.export_interactions(
@@ -278,6 +382,11 @@ def export_trajectories(
 
     # Serialize for HTTP response (includes position_rewards)
     serialized = serialize_interactions_with_position_rewards(interactions)
+
+    # Remove session from cache and clean up API key mapping
+    with _lock:
+        _session_cache.pop(session_id, None)
+        _remove_api_keys_for_session(session_id)
 
     logger.info(f"Exported {len(serialized)} interactions from session {session_id}")
     return ExportTrajectoriesResponse(interactions=serialized)
@@ -477,7 +586,7 @@ def compute_entropy(
 
 
 async def _cleanup_stale_sessions():
-    """Periodically clean up stale sessions."""
+    """Periodically clean up stale sessions and orphaned API key mappings."""
     while True:
         await asyncio.sleep(60)  # Check every minute
 
@@ -490,28 +599,22 @@ async def _cleanup_stale_sessions():
 
             for sid in stale_sessions:
                 logger.warning(f"Cleaning up stale session {sid}")
-                session_data = _session_cache[sid]
-                session_data.finish()
+                session_data = _session_cache.pop(sid, None)
+                if session_data is not None:
+                    session_data.finish()
+                _remove_api_keys_for_session(sid)
 
-                # Clean up mappings
-                if sid in _session_to_api_key:
-                    api_key = _session_to_api_key[sid]
-                    del _api_key_to_session[api_key]
-                    del _session_to_api_key[sid]
+            if stale_sessions:
+                logger.info(f"Cleaned up {len(stale_sessions)} stale sessions")
 
-                del _session_cache[sid]
-
-
-# =============================================================================
-# Server Startup
-# =============================================================================
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background tasks on server startup."""
-    asyncio.create_task(_cleanup_stale_sessions())
-    logger.info(f"Token Reward Proxy Server started on {_server_host}:{_server_port}")
+            # Sweep orphaned API key mappings whose session_id is no longer
+            # in cache. Handles edge case where client crashes after
+            # end_session but before export_trajectories.
+            orphaned_sids = [sid for sid in _session_to_api_key if sid not in _session_cache]
+            for sid in orphaned_sids:
+                _remove_api_keys_for_session(sid)
+            if orphaned_sids:
+                logger.info(f"Cleaned up {len(orphaned_sids)} orphaned API key mappings")
 
 
 # =============================================================================

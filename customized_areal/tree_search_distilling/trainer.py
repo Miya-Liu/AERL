@@ -74,6 +74,7 @@ class TreeDistillPPOTrainer(CacheAwarePPOTrainer):
         # is created during PPOTrainer initialization.
         patch_ppo_actor_class_to_use_distill_loss()
 
+        self.config = config
         self.workflow = workflow
         self.agent = agent
 

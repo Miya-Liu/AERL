@@ -13,6 +13,40 @@ from areal.api.cli_args import PPOConfig
 
 
 @dataclass
+class AgentConfig:
+    """Configuration for the TPFC agent."""
+
+    trial_name: str = field(
+        default="",
+        metadata={"help": "Trial name for the agent."},
+    )
+    train_id: str = field(
+        default="",
+        metadata={"help": "Training run identifier."},
+    )
+    user_id: str = field(
+        default="",
+        metadata={"help": "User identifier."},
+    )
+    model_name: str | None = field(
+        default=None,
+        metadata={"help": "Name of the model to use."},
+    )
+    judge_model_name: str | None = field(
+        default=None,
+        metadata={"help": "Name of the judge model."},
+    )
+    judge_base_url: str | None = field(
+        default=None,
+        metadata={"help": "Base URL for the judge API."},
+    )
+    judge_api_key: str | None = field(
+        default=None,
+        metadata={"help": "API key for the judge model."},
+    )
+
+
+@dataclass
 class TPFCConfig(PPOConfig):
     """Configuration for TPFC Agent training experiments.
 
@@ -28,3 +62,4 @@ class TPFCConfig(PPOConfig):
         default="${workflow}",
         metadata={"help": "Path to the TPFC workflow class for evaluation."},
     )
+    agent: AgentConfig = field(default_factory=AgentConfig)

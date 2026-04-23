@@ -1,4 +1,4 @@
-experiment_name: tpfc-grpo
+experiment_name: tpfc-tree-distill
 trial_name: trial0
 
 seed: 1
@@ -6,36 +6,27 @@ enable_offload: true
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
-# TPFC Agent workflow
-workflow: customized_areal.tpfc_agent.TPFCAgent
+# TPFC Agent workflow — resolved to agent instance at runtime by train script
+workflow: customized_areal.tpfc.tpfc_agent.TPFCAgent
 eval_workflow: ${workflow}
-
-agent:
-  trial_name: ${trial_name}
-  train_id: ""
-  user_id: ""
-  model_name: null
-  judge_model_name: null
-  judge_base_url: null
-  judge_api_key: null
 
 cluster:
   n_nodes: 1
-  n_gpus_per_node: 6
+  n_gpus_per_node: 3
   fileroot: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/experiments
   name_resolve:
     type: nfs
     nfs_record_root: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/name_resolve
 
-# 6 A800 GPUs: 3 for inference (sglang DP), 3 for training (fsdp DP)
-# train_dataset.batch_size must be divisible by fsdp DP size (3)
-allocation_mode: sglang:d3+fsdp:d3
+# 3 GPUs: 1 for inference (sglang DP), 2 for training (fsdp DP)
+# train_dataset.batch_size must be divisible by fsdp DP size (2)
+allocation_mode: sglang:d1+fsdp:d2
 
 scheduler:
   type: local
 
 rollout:
-  backend: sglang:d3
+  backend: sglang:d1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
@@ -49,8 +40,6 @@ rollout:
   dump_to_file: true
   openai:
     mode: inline
-    # Qwen3.5-9B uses qwen25 tool call parser (same format as Qwen2.5)
-    # and qwen3 reasoning parser for <think> tag detection
     tool_call_parser: qwen25
     reasoning_parser: qwen3
     export_style: individual
@@ -66,16 +55,17 @@ gconfig:
   temperature: 1.0
 
 actor:
-  backend: fsdp:d3
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   attn_impl: flash_attention_2
-  # path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
   path: /dfs/share-groups/letrain/ckpt/Qwen3-VL-8B-Instruct
-  # path: /dfs/share-groups/letrain/ckpt/Qwen3.5-9B
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
+  archon:
+    ac_mode: memory_budget
+    ac_memory_budget: 0.2
   dtype: bfloat16
   mb_spec:
     max_tokens_per_mb: 40960
@@ -116,7 +106,7 @@ actor:
         PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 ref:
-  backend: fsdp:d3
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${actor.path}
@@ -150,11 +140,37 @@ vllm:
   max_model_len: 65536
   gpu_memory_utilization: 0.8
 
-# datasets
-# TPFC dataset configuration - uses generated_training_final.parquet
-# NOTE: All samples have ~1034-1366 tokens due to long system prompts
+# On-Policy Distillation settings
+cache_size: 1000
+proxy_base_url: http://localhost:8000
+proxy_api_key: ""
+proxy_model: qwen/qwen3-vl-8b-instruct
+proxy_temperature: 1.0
+proxy_max_tokens: 1024
+proxy_top_p: 1.0
+turn_discount: 1.0
+export_style: individual
+use_reward_scaling: true
+reward_scaling_factor: 10.0
+reward_bias: -0.5
+
+# Teacher model configuration
+teacher_base_url: http://localhost:8001
+teacher_model_name: ""
+teacher_top_k: 10
+teacher_max_retries: 3
+teacher_timeout: 60.0
+teacher_missing_logprob: -23.0
+
+# Tree Search Distilling specific settings
+# cache_dir: set via command line +cache_dir=/path/to/cache
+cache_dir: ""
+assistant_marker: ""
+student_top_k: 10
+
+# Datasets
 train_dataset:
-  batch_size: 3
+  batch_size: 2
   shuffle: true
   pin_memory: true
   num_workers: 2
@@ -202,10 +218,10 @@ stats_logger:
   fileroot: ${cluster.fileroot}
   wandb:
     mode: disabled
-  swanlab:
-    project: tpfc-grpo
-    mode: cloud
-    api_key: WVB9KhdtDjWVAozYQgHu5
+  # swanlab:
+  #   project: tpfc-tree-distill
+  #   mode: cloud
+  #   api_key: WVB9KhdtDjWVAozYQgHu5
 
 perf_tracer:
   experiment_name: ${experiment_name}

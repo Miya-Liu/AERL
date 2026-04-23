@@ -1,9 +1,9 @@
-experiment_name: tpfc-grpo
-trial_name: trial0
+experiment_name: tpfc-grpo-debug
+trial_name: debug0
 
 seed: 1
 enable_offload: true
-total_train_epochs: 10
+total_train_epochs: 2
 tokenizer_path: ${actor.path}
 
 # TPFC Agent workflow
@@ -21,26 +21,26 @@ agent:
 
 cluster:
   n_nodes: 1
-  n_gpus_per_node: 6
+  n_gpus_per_node: 3
   fileroot: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/experiments
   name_resolve:
     type: nfs
     nfs_record_root: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/name_resolve
 
-# 6 A800 GPUs: 3 for inference (sglang DP), 3 for training (fsdp DP)
-# train_dataset.batch_size must be divisible by fsdp DP size (3)
-allocation_mode: sglang:d3+fsdp:d3
+# 3 H20 GPUs: 1 for inference (sglang DP), 2 for training (fsdp DP)
+# train_dataset.batch_size must be divisible by fsdp DP size (2)
+allocation_mode: sglang:d1+fsdp:d2
 
 scheduler:
   type: local
 
 rollout:
-  backend: sglang:d3
+  backend: sglang:d1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   tokenizer_path: ${tokenizer_path}
-  max_concurrent_rollouts: 40
+  max_concurrent_rollouts: 10
   queue_size: null
   consumer_batch_size: ${train_dataset.batch_size}
   max_head_offpolicyness: 6
@@ -49,30 +49,26 @@ rollout:
   dump_to_file: true
   openai:
     mode: inline
-    # Qwen3.5-9B uses qwen25 tool call parser (same format as Qwen2.5)
-    # and qwen3 reasoning parser for <think> tag detection
     tool_call_parser: qwen25
     reasoning_parser: qwen3
     export_style: individual
     turn_discount: 1.0
-    engine_max_tokens: 20000
+    engine_max_tokens: 8192
 
 gconfig:
-  n_samples: 8
+  n_samples: 2
   min_new_tokens: 0
-  max_new_tokens: 1024
-  max_tokens: 20000
+  max_new_tokens: 512
+  max_tokens: 8192
   greedy: false
   temperature: 1.0
 
 actor:
-  backend: fsdp:d3
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   attn_impl: flash_attention_2
-  # path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
   path: /dfs/share-groups/letrain/ckpt/Qwen3-VL-8B-Instruct
-  # path: /dfs/share-groups/letrain/ckpt/Qwen3.5-9B
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
@@ -94,7 +90,7 @@ actor:
   reward_scaling: 10.0
   reward_bias: -0.5
   kl_ctl: 0.0
-  ppo_n_minibatches: 4
+  ppo_n_minibatches: 2
   recompute_logprob: true
   use_decoupled_loss: true
   behave_imp_weight_cap: 5.0
@@ -110,13 +106,13 @@ actor:
       gpu: 1
       cmd: python3 -m areal.infra.rpc.rpc_server
       env_vars:
-        NCCL_DEBUG: "WARN"
+        NCCL_DEBUG: "INFO"
         NCCL_IB_DISABLE: "1"
         NCCL_SOCKET_IFNAME: "eth0"
         PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 ref:
-  backend: fsdp:d3
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${actor.path}
@@ -138,7 +134,7 @@ sglang:
   skip_tokenizer_init: true
   dtype: ${actor.dtype}
   max_running_requests: null
-  context_length: 40960
+  context_length: 16384
   mem_fraction_static: 0.80
   enable_multimodal: true
 
@@ -147,25 +143,23 @@ vllm:
   seed: ${seed}
   skip_tokenizer_init: false
   dtype: ${actor.dtype}
-  max_model_len: 65536
+  max_model_len: 16384
   gpu_memory_utilization: 0.8
 
-# datasets
-# TPFC dataset configuration - uses generated_training_final.parquet
-# NOTE: All samples have ~1034-1366 tokens due to long system prompts
+# datasets - reduced for debug
 train_dataset:
-  batch_size: 3
+  batch_size: 2
   shuffle: true
   pin_memory: true
-  num_workers: 2
+  num_workers: 1
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
-  max_length: 20000
+  max_length: 8192
 
 valid_dataset:
   batch_size: 2
   pin_memory: true
-  num_workers: 2
+  num_workers: 1
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
   max_length: 2048
@@ -203,14 +197,12 @@ stats_logger:
   wandb:
     mode: disabled
   swanlab:
-    project: tpfc-grpo
-    mode: cloud
-    api_key: WVB9KhdtDjWVAozYQgHu5
+    mode: disabled
 
 perf_tracer:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  enabled: true
+  enabled: false
   session_tracer:
-    enabled: true
+    enabled: false

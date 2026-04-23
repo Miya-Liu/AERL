@@ -85,9 +85,15 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
         Parameters
         ----------
         agent : Any
-            Agent object with async run() method.
+            Agent object with async run() method, or a string import path
+            (e.g., ``"customized_areal.on_policy_distill.core.agent.OnPolicyDistillAgent"``).
+            When a string is provided, the agent class is imported and instantiated
+            on the engine worker. This enables the agent to be passed via
+            ``workflow_kwargs`` over RPC serialization.
         proxy_addr : str
-            Address of the OpenAI proxy server.
+            Address of the OpenAI proxy server. When using the rollout
+            controller's proxy infrastructure, this is injected per-worker
+            by ``TokenRewardRolloutController._create_submit_callback``.
         admin_api_key : str
             Admin API key for proxy server.
         discount : float
@@ -95,6 +101,13 @@ class OpenAIProxyWorkflow(BaseOpenAIProxyWorkflow):
         export_style : str
             Export style ("individual" or "concat").
         """
+        # Resolve string import path to agent instance
+        if isinstance(agent, str):
+            from areal.utils.dynamic_import import import_from_string
+
+            agent_cls = import_from_string(agent)
+            agent = agent_cls()
+
         super().__init__(
             mode="inline",
             agent=agent,

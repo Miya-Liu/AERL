@@ -45,11 +45,14 @@ except ImportError:
     logger = logging.getLogger("BackendRun")
 
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
-DEFAULT_AGENT_ID = "b11faebe-8d6a-4467-8609-10323d9444d6"
-# DEFAULT_AGENT_ID = None
+# DEFAULT_AGENT_ID = '137bf867-4e75-461b-a9c7-e7a05c64ede0'
+DEFAULT_AGENT_ID = None
+
 DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
 LE_AGENT_API_URL = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
 TOKEN_REFRESH_MARGIN = 60  # seconds — refresh 1 min before expiry, not 5
+_REFRESH_WAIT_TIMEOUT = 30  # seconds to wait for another process to finish refreshing
+_REFRESH_WAIT_INTERVAL = 1  # seconds between token re-reads while waiting
 
 _SHARED_TOKEN_FILE = Path(__file__).parent / ".shared_auth_token.json"
 
@@ -98,9 +101,13 @@ class SharedTokenManager:
     it refreshes the token via _refresh_access_token and writes the new
     token back to the file.
 
-    Uses fcntl file locking to prevent race conditions between processes,
-    and asyncio.Lock to prevent race conditions between tasks in the same
-    process. The fcntl lock is NEVER held across an await.
+    Three-layer locking:
+    - asyncio.Lock: serializes within a single process (intra-process coroutines)
+    - Refresh-in-progress lock file (.refresh.lock): serializes the full refresh
+      lifecycle across processes, preventing refresh storms and single-use
+      refresh-token failures
+    - Shared/exclusive fcntl on the token file: guards reads/writes of the
+      token file itself (atomic via os.replace, so readers never see partial writes)
     """
 
     _async_lock: asyncio.Lock | None = None
@@ -126,18 +133,24 @@ class SharedTokenManager:
             return None
 
     def write_token(self, access_token: str) -> None:
-        """Write the access token to the shared file."""
+        """Write the access token to the shared file atomically."""
         self.token_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_file, "w") as f, _FileLock(f, fcntl.LOCK_EX):
-            json.dump({"access_token": access_token, "updated_at": time.time()}, f)
+        payload = {"access_token": access_token, "updated_at": time.time()}
+        tmp = self.token_file.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.token_file)
         logger.info("Shared auth token updated in file: %s", self.token_file)
 
     async def get_valid_token(self) -> str:
         """Get a valid access token, refreshing if necessary.
 
-        Reads the shared token file. If the token is expired or missing,
-        acquires locks so only one coroutine/process refreshes the token.
-        The fcntl lock is never held across an await.
+        Uses a refresh-in-progress lock file to serialize the full refresh
+        lifecycle across processes. If another process holds the lock, this
+        process waits and re-reads the token file (the other process likely
+        just refreshed it).
         """
         auth_token = self.read_token()
         if auth_token and _is_token_valid(auth_token):
@@ -151,27 +164,74 @@ class SharedTokenManager:
 
             logger.info("Shared auth token expired or about to expire, refreshing...")
 
-            # Re-read under fcntl lock in case another process refreshed.
-            self.token_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.token_file, "a+") as f, _FileLock(f, fcntl.LOCK_EX):
-                try:
-                    f.seek(0)
-                    data = json.load(f)
-                    auth_token = data.get("access_token")
-                except (json.JSONDecodeError, KeyError):
-                    auth_token = None
+            # Acquire refresh-in-progress lock; wait if another process is refreshing.
+            lock_fd = self._try_acquire_refresh_lock()
+            if lock_fd is None:
+                # Another process is refreshing — wait for it to finish, then re-read.
+                auth_token = await self._wait_for_valid_token()
+                if auth_token:
+                    return auth_token
+                # Still invalid after waiting — try acquiring lock again.
+                lock_fd = self._try_acquire_refresh_lock()
+                if lock_fd is None:
+                    auth_token = await self._wait_for_valid_token()
+                    if auth_token:
+                        return auth_token
+                    raise RuntimeError(
+                        "Failed to acquire refresh lock and no valid token available"
+                    )
 
+            try:
+                # Re-read under refresh lock — another process may have refreshed
+                # between our first read and lock acquisition.
+                auth_token = self.read_token()
                 if auth_token and _is_token_valid(auth_token):
                     return auth_token
 
-            # Refresh token WITHOUT holding the file lock (avoids blocking the event loop).
-            new_token = await _refresh_access_token(self.refresh_token)
+                new_token = await _refresh_access_token(self.refresh_token)
+                self.write_token(new_token)
+                return new_token
+            finally:
+                self._release_refresh_lock(lock_fd)
 
-            # Write the new token under fcntl lock.
-            with open(self.token_file, "w") as f, _FileLock(f, fcntl.LOCK_EX):
-                json.dump({"access_token": new_token, "updated_at": time.time()}, f)
-            logger.info("Shared auth token updated in file: %s", self.token_file)
-            return new_token
+    @property
+    def _refresh_lock_file(self) -> Path:
+        return self.token_file.with_suffix(".refresh.lock")
+
+    def _try_acquire_refresh_lock(self) -> int | None:
+        """Non-blocking acquire of the refresh-in-progress lock file.
+
+        Returns the fd on success, or None if another process holds the lock.
+        """
+        self.token_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(self._refresh_lock_file, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except (OSError, BlockingIOError):
+            return None
+
+    def _release_refresh_lock(self, fd: int) -> None:
+        """Release and remove the refresh-in-progress lock."""
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            self._refresh_lock_file.unlink()
+        except FileNotFoundError:
+            pass
+
+    async def _wait_for_valid_token(self) -> str | None:
+        """Poll the token file until a valid token appears or timeout."""
+        deadline = time.monotonic() + _REFRESH_WAIT_TIMEOUT
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_REFRESH_WAIT_INTERVAL)
+            auth_token = self.read_token()
+            if auth_token and _is_token_valid(auth_token):
+                return auth_token
+        return None
 
 
 async def _refresh_access_token(refresh_token: str) -> str:
@@ -215,6 +275,7 @@ def _prepare_form_data(
         "task_id": task_id,
         "prompt": task_description,
         "agent_id": agent_id,
+        "training_mode": True
     }
     if model_name is not None:
         form_data["model_name"] = model_name

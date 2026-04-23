@@ -6,273 +6,356 @@
 | ---------------- | ------------------------------------- | ---------------------------------------------- |
 | **Purpose**      | Standard proxy server for RL training | Extended proxy with token-level reward support |
 | **Reward Types** | Scalar only                           | Scalar + Token-wise + Position-wise            |
-| **Cache Design** | Server-side cache                     | Server-side cache with token-level storage     |
+| **Cache Design** | Server-side cache only                | Server-side cache + local `InteractionCache`   |
 | **API**          | HTTP REST API                         | Extended HTTP REST API                         |
-| **Local Cache**  | No                                    | **No** - Token rewards via HTTP API            |
+| **Local Cache**  | No                                    | Yes (`InteractionCache` in `cache.py`)         |
+| **Gateway**      | Yes (`proxy_gateway.py`)              | No standalone gateway                          |
+| **Online Agent** | Yes (`online_agent.py`)               | No                                             |
+| **Types Module** | Uses base `InteractionWithTokenLogpReward` | Dedicated `types.py` with `InteractionWithTokenLevelReward` |
+
+______________________________________________________________________
+
+## File Structure Comparison
+
+| File                  | `areal/.../proxy/`                            | `customized_areal/.../proxy/`                          |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------ |
+| `__init__.py`         | Exports `OpenAIProxyClient`, `OpenAIProxyWorkflow` | (not present)                                          |
+| `client_session.py`   | `OpenAIProxyClient` + retry helpers           | —                                                      |
+| `client.py`           | —                                             | `OpenAIProxyClient` (extends base)                     |
+| `online_agent.py`     | `_OnlineAgent` (wait for external session)    | —                                                      |
+| `proxy_gateway.py`    | `create_proxy_gateway_app()` + `CompletedSessionInfo` | —                                                      |
+| `proxy_rollout_server.py` | FastAPI server (base endpoints)          | FastAPI server (base + token-level endpoints)          |
+| `server.py`           | `SessionData`, request/response models        | `TokenRewardSessionData` (extends `SessionData`), new models |
+| `workflow.py`         | `OpenAIProxyWorkflow` (3 modes)               | `OpenAIProxyWorkflow` (extended with `_process_rewards`) |
+| `types.py`            | —                                             | `InteractionWithTokenLevelReward`, `TokenRewardInteractions` |
+| `cache.py`            | —                                             | `InteractionCache`, `PositionRewardInfo` (dataclass)   |
+| `tests/`              | —                                             | 11 test files                                          |
+
+______________________________________________________________________
+
+## Class-by-Class Comparison
+
+### Client: `OpenAIProxyClient`
+
+| Method                    | Base (`client_session.py`) | Extended (`client.py`) | Notes                                      |
+| ------------------------- | -------------------------- | ---------------------- | ------------------------------------------ |
+| `__init__`                | `(session, base_url, task_id, admin_api_key)` | Same signature | Extended inherits from base                |
+| `session_api_key`         | property                   | inherited              |                                            |
+| `set_reward`              | `async (completion_id, reward)` | inherited          | Scalar reward                              |
+| `set_last_reward`         | `async (reward)`           | inherited              |                                            |
+| `set_rewards`             | —                          | `async (completion_id, token_rewards)` | **NEW** - Token-wise rewards via HTTP  |
+| `set_last_rewards`        | —                          | `async (token_rewards)` | **NEW** - Token rewards for last completion |
+| `set_position_rewards`    | —                          | `async (completion_id, position_rewards)` | **NEW** - Position-wise rewards via HTTP |
+| `set_last_position_rewards` | —                        | `async (position_rewards)` | **NEW**                                    |
+| `compute_entropy`         | —                          | `async (completion_id) -> list[float]` | **NEW**                             |
+| `get_entropies`           | —                          | `async (completion_id) -> list[float] \| None` | **NEW**                      |
+| `export_interactions`     | `async (discount, style) -> dict` | `async (discount, style) -> dict` | Same signature, extended serialization |
+| `get_last_interaction`    | —                          | `async () -> Any`      | **NEW**                                    |
+| `__aenter__` / `__aexit__`| Yes                        | inherited              |                                            |
+
+### Standalone helper functions (base only)
+
+| Function                  | Base | Extended | Notes                           |
+| ------------------------- | ---- | -------- | ------------------------------- |
+| `post_json`               | Yes  | —        | Low-level HTTP POST             |
+| `post_json_with_retry`    | Yes  | —        | POST with tenacity retry        |
+| `should_retry`            | Yes  | —        | Retry decision for HTTP errors  |
+| `log_retry`               | Yes  | —        | Retry logging callback          |
+| `get_retry_strategy`      | Yes  | —        | Create tenacity retry config    |
+| `_set_reward`             | Yes  | —        | Internal reward setter          |
+| `set_interaction_reward`  | Yes  | —        | Set reward by interaction_id    |
+| `set_last_interaction_reward` | Yes | —      | Set reward for last interaction |
+| `_start_session`          | Yes  | —        | Start session with retry        |
+
+### Server: Session Data
+
+| Method / Field                | `SessionData` (base) | `TokenRewardSessionData` (extended) |
+| ----------------------------- | -------------------- | ----------------------------------- |
+| `session_id`                  | Yes                  | inherited                           |
+| `interactions`                | `dict[str, InteractionWithTokenLogpReward]` | inherited                  |
+| `_token_rewards`              | —                    | `dict[str, list[float]]` **NEW**    |
+| `_position_rewards`           | —                    | `dict[str, list[PositionRewardInfo]]` **NEW** |
+| `_entropies`                  | —                    | `dict[str, list[float]]` **NEW**    |
+| `set_token_rewards`           | —                    | **NEW**                             |
+| `set_position_rewards`        | —                    | **NEW**                             |
+| `compute_entropy`             | —                    | **NEW**                             |
+| `export_interactions`         | Yes                  | **Override** - applies token rewards before export |
+
+### Server: Pydantic Models
+
+| Model                      | Base | Extended | Notes                                  |
+| -------------------------- | ---- | -------- | -------------------------------------- |
+| `StartSessionRequest`      | Yes  | inherited |                                       |
+| `StartSessionResponse`     | Yes  | inherited |                                       |
+| `SetRewardRequest`         | Yes  | inherited |                                       |
+| `ExportTrajectoriesRequest`| Yes  | inherited |                                       |
+| `ExportTrajectoriesResponse`| Yes | inherited |                                       |
+| `WaitForSessionRequest`    | Yes  | inherited |                                       |
+| `WaitForSessionResponse`   | Yes  | inherited |                                       |
+| `SetTokenRewardsRequest`   | —    | **NEW**  | `interaction_id: str \| None`, `token_rewards: list[float]` |
+| `SetPositionRewardsRequest`| —    | **NEW**  | `interaction_id: str \| None`, `position_rewards: list[PositionRewardInfo]` |
+| `ComputeEntropyRequest`    | —    | **NEW**  | `interaction_id: str`                  |
+| `ComputeEntropyResponse`   | —    | **NEW**  | `entropies: list[float]`, `avg_entropy: float` |
+| `PositionRewardInfo`       | —    | **NEW**  | `position`, `candidates`, `candidate_token_ids`, `logprobs`, `rewards`, `chosen_index` |
+
+### Workflow: `OpenAIProxyWorkflow`
+
+| Method / Field              | Base (`workflow.py`)           | Extended (`workflow.py`)                      |
+| --------------------------- | ------------------------------ | --------------------------------------------- |
+| `__init__`                  | `(mode, agent, proxy_addr, admin_api_key, discount, export_style, subproc_max_workers, proxy_gateway_addr)` | `(agent, proxy_addr, admin_api_key, discount, export_style)` - simplified |
+| `arun_episode`              | Yes                            | **Override** - adds reward processing         |
+| `_run_agent`                | —                              | **NEW** - runs agent with proxy client injection |
+| `_process_rewards`          | —                              | **NEW** - processes rewards from agent output |
+| `_wrap_run_subproc`         | —                              | **NEW** - subprocess wrapper with env vars    |
+| `_get_executor`             | —                              | **NEW** - thread pool executor singleton      |
+| `mode` (inline/subproc/online) | Yes                         | — (removed)                                   |
+| `proxy_gateway_addr`        | Yes                            | — (removed)                                   |
+
+### Unique to Base Only
+
+| Component              | Description                                                    |
+| ---------------------- | -------------------------------------------------------------- |
+| `proxy_gateway.py`     | Stateless gateway routing requests to backend workers          |
+| `create_proxy_gateway_app()` | Creates FastAPI gateway with `/health`, `/rl/start_session`, `/chat/completions`, `/responses`, `/v1/messages`, `/internal/wait_for_session` |
+| `CompletedSessionInfo` | Dataclass with `session_api_key`, `session_id`, `worker_addr` |
+| `_OnlineAgent`         | Waits for external user to complete a session (online mode)    |
+
+### Unique to Extended Only
+
+| Component               | Description                                                    |
+| ----------------------- | -------------------------------------------------------------- |
+| `types.py`              | `InteractionWithTokenLevelReward` extending base interaction   |
+| `cache.py`              | `InteractionCache` (OrderedDict-based) + `PositionRewardInfo` dataclass |
+| `InteractionWithTokenLevelReward` | Extends `InteractionWithTokenLogpReward` with `token_rewards`, `token_reward_mask` |
+| `InteractionCache`      | Local cache with `set_rewards`, `set_position_rewards`, `compute_and_store_entropy`, `export_interactions` |
+
+______________________________________________________________________
+
+## HTTP Endpoint Comparison
+
+| Endpoint                       | Base | Extended | Notes                            |
+| ------------------------------ | ---- | -------- | -------------------------------- |
+| `GET /health`                  | Yes  | Yes      |                                  |
+| `POST /alloc_ports`            | Yes  | Yes      |                                  |
+| `POST /configure`              | Yes  | Yes      |                                  |
+| `POST /set_env`                | Yes  | Yes      |                                  |
+| `POST /create_engine`          | Yes  | Yes      |                                  |
+| `POST /call`                   | Yes  | Yes      |                                  |
+| `POST /rl/start_session`       | Yes  | Yes      |                                  |
+| `POST /rl/end_session`         | Yes  | Yes      |                                  |
+| `POST /rl/set_reward`          | Yes  | Yes      | Scalar reward                    |
+| `POST /chat/completions`       | Yes  | Yes      |                                  |
+| `POST /responses`              | Yes  | Yes      |                                  |
+| `POST /v1/messages`            | Yes  | Yes      |                                  |
+| `POST /grant_capacity`         | Yes  | Yes      |                                  |
+| `POST /export_trajectories`    | Yes  | Yes      |                                  |
+| `POST /rl/set_token_rewards`   | —    | **NEW**  | Token-wise rewards               |
+| `POST /rl/set_position_rewards`| —    | **NEW**  | Position-wise candidate rewards  |
+| `POST /rl/compute_entropy`     | —    | **NEW**  | Compute entropy from logprobs    |
 
 ______________________________________________________________________
 
 ## Architecture Comparison
 
-### Before (Old Design)
+### Base Architecture (areal)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Workflow                                │
-│  ┌──────────────────┐        ┌──────────────────┐              │
-│  │  real_client     │        │  local_client    │              │
-│  │  (HTTP to server)│        │  (local cache)   │              │
-│  └────────┬─────────┘        └────────┬─────────┘              │
-│           │                           │                        │
-│           │ 1. HTTP session           │ 3. Import interactions │
-│           │    for agent LLM calls    │    from server         │
-│           │                           │                        │
-│           │ 2. End session            │ 4. Apply token rewards │
-│           │                           │    on local cache      │
-│           │                           │                        │
-│           │                           │ 5. Export from cache   │
-│           ▼                           ▼                        │
-│  ┌──────────────────────────────────────────────────────┐     │
-│  │              Proxy Server (HTTP API)                  │     │
-│  │         - Scalar rewards only                         │     │
-│  └──────────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        Workflow (3 modes)                        │
+│  ┌───────────────┐  ┌───────────────┐  ┌──────────────────┐    │
+│  │  inline mode   │  │  subproc mode │  │  online mode     │    │
+│  │  (direct call) │  │  (subprocess) │  │  (external user) │    │
+│  └───────┬───────┘  └───────┬───────┘  └────────┬─────────┘    │
+│          │                  │                    │              │
+│          └──────────────────┼────────────────────┘              │
+│                             ▼                                   │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │              OpenAIProxyClient                        │      │
+│  │  - set_reward(completion_id, reward)                 │      │
+│  │  - set_last_reward(reward)                           │      │
+│  │  - export_interactions(discount, style)              │      │
+│  └──────────────────────┬───────────────────────────────┘      │
+│                         │ HTTP                                   │
+│  ┌──────────────────────▼───────────────────────────────┐      │
+│  │         Proxy Rollout Server (SessionData)            │      │
+│  │  - Scalar rewards only                                │      │
+│  │  - serialize/deserialize_interactions                 │      │
+│  └──────────────────────────────────────────────────────┘      │
+│                                                                  │
+│  Optional: Proxy Gateway (stateless router)                     │
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │  create_proxy_gateway_app()                           │      │
+│  │  - Routes /chat/completions, /responses, /v1/messages │      │
+│  │  - /internal/wait_for_session                         │      │
+│  │  - _OnlineAgent waits for external completion         │      │
+│  └──────────────────────────────────────────────────────┘      │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### After (New Design)
+### Extended Architecture (customized_areal)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Workflow                                │
+┌──────────────────────────────────────────────────────────────────┐
+│                   OpenAIProxyWorkflow (simplified)               │
 │                         │                                       │
-│                         │ Single unified client                 │
-│                         │ (HTTP to server)                      │
+│                         │ _run_agent + _process_rewards          │
 │                         ▼                                       │
-│  ┌──────────────────────────────────────────────────────┐     │
-│  │              Token Reward Proxy Server                │     │
-│  │  ┌────────────────────────────────────────────────┐  │     │
-│  │  │  Extended HTTP API                             │  │     │
-│  │  │  - POST /rl/set_reward          (scalar)       │  │     │
-│  │  │  - POST /rl/set_token_rewards   (NEW)          │  │     │
-│  │  │  - POST /rl/set_position_rewards (NEW)         │  │     │
-│  │  │  - POST /rl/compute_entropy     (NEW)          │  │     │
-│  │  └────────────────────────────────────────────────┘  │     │
-│  │                                                          │     │
-│  │  ┌────────────────────────────────────────────────┐  │     │
-│  │  │  TokenRewardSessionData (server-side)          │  │     │
-│  │  │  - _token_rewards: dict[str, list[float]]      │  │     │
-│  │  │  - _position_rewards: dict[str, list[PR]]      │  │     │
-│  │  └────────────────────────────────────────────────┘  │     │
-│  └──────────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────┘
+│  ┌──────────────────────────────────────────────────────┐      │
+│  │         OpenAIProxyClient (extended)                  │      │
+│  │  Inherited:                                          │      │
+│  │  - set_reward, set_last_reward                       │      │
+│  │  NEW:                                                │      │
+│  │  - set_rewards(completion_id, token_rewards)         │      │
+│  │  - set_position_rewards(completion_id, pos_rewards)  │      │
+│  │  - compute_entropy(completion_id)                    │      │
+│  │  - get_entropies(completion_id)                      │      │
+│  │  - get_last_interaction()                            │      │
+│  └──────────────────────┬───────────────────────────────┘      │
+│                         │ HTTP                                   │
+│  ┌──────────────────────▼───────────────────────────────┐      │
+│  │    Token Reward Proxy Server (TokenRewardSessionData) │      │
+│  │  Inherited endpoints:                                │      │
+│  │  - /rl/set_reward (scalar)                           │      │
+│  │  NEW endpoints:                                      │      │
+│  │  - /rl/set_token_rewards                             │      │
+│  │  - /rl/set_position_rewards                          │      │
+│  │  - /rl/compute_entropy                               │      │
+│  │  NEW serialization:                                  │      │
+│  │  - serialize/deserialize_interactions_with_position_ │      │
+│  │    rewards                                           │      │
+│  └──────────────────────────────────────────────────────┘      │
+│                                                                  │
+│  Additional modules (client-side):                              │
+│  ┌──────────────────────┐  ┌───────────────────────────────┐   │
+│  │ InteractionCache     │  │ InteractionWithTokenLevelReward│   │
+│  │ (cache.py)           │  │ (types.py)                    │   │
+│  │ - set_rewards()      │  │ - token_rewards, token_reward │   │
+│  │ - set_position_      │  │   _mask                       │   │
+│  │   rewards()          │  │ - set_token_rewards()         │   │
+│  │ - compute_and_store_ │  │ - set_sparse_token_rewards()  │   │
+│  │   entropy()          │  │ - compute_entropy_from_       │   │
+│  │ - export_interactions│  │   logprobs()                  │   │
+│  └──────────────────────┘  └───────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ______________________________________________________________________
 
-## Key Changes
+## Key Differences Summary
 
-### 1. No Local Cache
+### 1. Reward Granularity
 
-| Aspect             | Before                          | After                        |
-| ------------------ | ------------------------------- | ---------------------------- |
-| **Cache Location** | Local client + Server           | Server only                  |
-| **Token Rewards**  | Applied locally after import    | Sent via HTTP during session |
-| **Import Step**    | Required `import_from_server()` | **Eliminated**               |
-| **Complexity**     | Two-phase workflow              | Single-phase workflow        |
+| Aspect             | Base                      | Extended                                 |
+| ------------------ | ------------------------- | ---------------------------------------- |
+| **Scalar reward**  | `set_reward(id, float)`   | Inherited                                |
+| **Token rewards**  | Not supported             | `set_rewards(id, list[float])` via HTTP  |
+| **Position rewards** | Not supported           | `set_position_rewards(id, list[PositionRewardInfo])` via HTTP |
+| **Entropy**        | Not supported             | `compute_entropy(id)` via HTTP           |
 
-### 2. New HTTP Endpoints
+### 2. Data Models
 
-| Endpoint                   | Method | Description                             |
-| -------------------------- | ------ | --------------------------------------- |
-| `/rl/set_reward`           | POST   | Scalar reward (inherited)               |
-| `/rl/set_token_rewards`    | POST   | **NEW** - Token-wise rewards            |
-| `/rl/set_position_rewards` | POST   | **NEW** - Position-wise rewards         |
-| `/rl/compute_entropy`      | POST   | **NEW** - Compute entropy from logprobs |
+| Aspect                   | Base                                | Extended                                              |
+| ------------------------ | ----------------------------------- | ----------------------------------------------------- |
+| **Interaction type**     | `InteractionWithTokenLogpReward`    | `InteractionWithTokenLevelReward` (extends base)      |
+| **Token reward storage** | Not supported                       | `token_rewards: list[float]`, `token_reward_mask: list[int]` |
+| **Position info**        | Not supported                       | `PositionRewardInfo` with candidates, logprobs, rewards |
+| **Serialization**        | `serialize_interactions()`          | `serialize_interactions_with_position_rewards()`      |
 
-### 3. New Data Models
+### 3. Workflow Simplification
 
-```python
-# Request model for token-wise rewards
-class SetTokenRewardsRequest(BaseModel):
-    interaction_id: str | None  # None = last interaction
-    token_rewards: list[float]  # One per output token
+| Aspect             | Base                              | Extended                                |
+| ------------------ | --------------------------------- | --------------------------------------- |
+| **Modes**          | inline, subproc, online           | Single mode (no gateway/online)         |
+| **Gateway**        | `proxy_gateway.py` routing        | Not included                            |
+| **Online agent**   | `_OnlineAgent` for external users | Not included                            |
+| **Reward handling**| Manual `set_reward()` calls       | Automatic `_process_rewards()`          |
+| **Constructor**    | 8 parameters                      | 5 parameters (simplified)              |
 
-# Request model for position-wise rewards
-class SetPositionRewardsRequest(BaseModel):
-    interaction_id: str | None
-    position_rewards: list[PositionRewardInfo]
+### 4. Local Cache (Extended Only)
 
-# Position reward info with candidates
-class PositionRewardInfo(BaseModel):
-    position: int
-    candidates: list[str]
-    candidate_token_ids: list[int]
-    logprobs: list[float] | None
-    rewards: list[float]
-    chosen_index: int
-```
+The extended version adds a local `InteractionCache` (`cache.py`) that mirrors the server-side `TokenRewardSessionData`:
 
-### 4. New Server Components
-
-```python
-# Extended session data with token-level storage
-class TokenRewardSessionData(SessionData):
-    def __init__(self, session_id: str):
-        super().__init__(session_id)
-        self._token_rewards: dict[str, list[float]] = {}
-        self._position_rewards: dict[str, list[PositionRewardInfo]] = {}
-
-    def set_token_rewards(self, interaction_id: str, token_rewards: list[float]):
-        # Store token rewards and update scalar reward as sum
-
-    def set_position_rewards(self, interaction_id: str, position_rewards: list[PositionRewardInfo]):
-        # Store position rewards, extract chosen rewards
-
-    def compute_entropy(self, interaction_id: str) -> tuple[list[float], float]:
-        # Compute entropy from position logprobs
-
-    def export_interactions(self, discount: float, style: str):
-        # Apply token rewards to interactions before export
-```
+| Cache Method                  | Server-Side Equivalent         | Purpose                          |
+| ----------------------------- | ------------------------------ | -------------------------------- |
+| `set_rewards()`               | `TokenRewardSessionData.set_token_rewards()` | Store token rewards    |
+| `set_position_rewards()`      | `TokenRewardSessionData.set_position_rewards()` | Store position rewards |
+| `compute_and_store_entropy()` | `TokenRewardSessionData.compute_entropy()` | Compute & cache entropy |
+| `export_interactions()`       | `TokenRewardSessionData.export_interactions()` | Export with rewards applied |
 
 ______________________________________________________________________
 
-## Workflow Comparison
+## Workflow Usage Comparison
 
-### Before (Two-Phase)
+### Base Workflow
 
 ```python
-# Phase 1: HTTP session for agent
+from areal.experimental.openai.proxy import OpenAIProxyClient, OpenAIProxyWorkflow
+
+# Three modes available
+workflow = OpenAIProxyWorkflow(
+    mode="inline",  # or "subproc" or "online"
+    agent=my_agent,
+    proxy_addr="http://localhost:8000",
+    admin_api_key="key",
+    discount=1.0,
+    export_style="individual",
+    proxy_gateway_addr=None,  # for online mode
+)
+
+# Scalar reward only
 async with client:
-    rewards = await agent.run(api_key=client.session_api_key)
+    await client.set_reward(completion.id, 1.0)
 
-# Phase 2: Import from server to local cache
-await client.import_from_server()
-
-# Phase 3: Apply token-level rewards
-await client.set_rewards("comp-1", [0.5, 0.3, 0.2])
-
-# Phase 4: Export from local cache
-interactions = await client.export_interactions_with_rewards()
+interactions = await client.export_interactions()
 ```
 
-### After (Single-Phase)
+### Extended Workflow
 
 ```python
-# Single phase: Everything within HTTP session
-async with client:
-    # Agent runs with session_api_key
-    rewards = await agent.run(api_key=client.session_api_key)
-    # Set token-level rewards via HTTP
-    await client.set_rewards("comp-1", [0.5, 0.3, 0.2])
+from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
+from customized_areal.on_policy_distill.proxy.workflow import OpenAIProxyWorkflow
 
-# Export after session ends
+# Simplified constructor, no mode selection
+workflow = OpenAIProxyWorkflow(
+    agent=my_agent,
+    proxy_addr="http://localhost:8000",
+    admin_api_key="key",
+    discount=1.0,
+    export_style="individual",
+)
+
+# Token-level reward support
+async with client:
+    # Scalar (inherited)
+    await client.set_reward(completion.id, 1.0)
+
+    # Token-wise (NEW)
+    await client.set_rewards(completion.id, [0.5, 0.3, 0.2])
+
+    # Position-wise (NEW)
+    await client.set_position_rewards(completion.id, [
+        PositionRewardInfo(position=0, candidates=["a", "b"],
+                          rewards=[0.1, 0.5], chosen_index=1)
+    ])
+
+    # Entropy computation (NEW)
+    entropies = await client.compute_entropy(completion.id)
+
 interactions = await client.export_interactions()
 ```
 
 ______________________________________________________________________
 
-## Usage Example
+## Migration Path
 
-### Server Startup
+From base to extended:
 
-```bash
-# Run the token reward proxy server
-python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --admin-api-key my-admin-key
-```
+1. **Client**: Replace `from areal.experimental.openai.proxy import OpenAIProxyClient` with `from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient`. Existing `set_reward()` / `export_interactions()` calls work unchanged.
 
-### Client Usage
+2. **Workflow**: Replace base `OpenAIProxyWorkflow` with extended version. Remove `mode` and `proxy_gateway_addr` params. Add `_process_rewards` hook if agent returns structured reward data.
 
-```python
-import aiohttp
-from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
+3. **Server**: Use `customized_areal.on_policy_distill.proxy.proxy_rollout_server` instead of base. All existing endpoints are preserved; 3 new endpoints are added.
 
-async with aiohttp.ClientSession() as http_session:
-    client = OpenAIProxyClient(
-        session=http_session,
-        base_url="http://localhost:8000",
-        task_id="my-task",
-        admin_api_key="my-admin-key",
-    )
+4. **No gateway/online mode**: If using `proxy_gateway.py` or `_OnlineAgent`, these are not available in the extended version.
 
-    async with client:
-        # Agent uses session_api_key for LLM calls
-        completion = await agent_llm_call(api_key=client.session_api_key)
-
-        # Set scalar reward
-        await client.set_reward(completion.id, 1.0)
-
-        # Set token-wise rewards
-        await client.set_rewards(completion.id, [0.5, 0.3, 0.2])
-
-        # Set position-wise rewards
-        from .server import PositionRewardInfo
-        await client.set_position_rewards(
-            completion.id,
-            [
-                PositionRewardInfo(
-                    position=0,
-                    candidates=["a", "b"],
-                    rewards=[0.1, 0.5],
-                    chosen_index=1,
-                )
-            ]
-        )
-
-    # Export after session ends
-    interactions = await client.export_interactions()
-```
-
-______________________________________________________________________
-
-## Benefits of New Design
-
-| Benefit        | Description                                       |
-| -------------- | ------------------------------------------------- |
-| **Simpler**    | Single client, no local cache management          |
-| **Consistent** | All rewards go through HTTP API                   |
-| **Scalable**   | Server handles all state, easier to distribute    |
-| **Cleaner**    | No need for `import_from_server()` step           |
-| **Compatible** | Still works with existing scalar reward workflows |
-
-______________________________________________________________________
-
-## Files Changed
-
-| File                            | Change                                              |
-| ------------------------------- | --------------------------------------------------- |
-| `proxy/server.py`               | **NEW** - Extended server models and session data   |
-| `proxy/proxy_rollout_server.py` | **NEW** - FastAPI server with token-level endpoints |
-| `proxy/client.py`               | **UPDATED** - Removed local cache, use HTTP API     |
-| `proxy/workflow.py`             | **UPDATED** - Simplified, no import_from_server()   |
-
-______________________________________________________________________
-
-## Migration Guide
-
-### From Old Design
-
-1. **Start new server**:
-
-   ```bash
-   python -m customized_areal.on_policy_distill.proxy.proxy_rollout_server
-   ```
-
-1. **Update client imports** (no change needed):
-
-   ```python
-   from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
-   ```
-
-1. **Remove `import_from_server()` calls** - no longer needed
-
-1. **Call `set_rewards()` within session context**:
-
-   ```python
-   async with client:
-       # ... run agent ...
-       await client.set_rewards(comp_id, token_rewards)  # HTTP call
-   ```
+5. **New types**: Use `InteractionWithTokenLevelReward` (from `types.py`) when you need token-level rewards. It's a drop-in extension of `InteractionWithTokenLogpReward`.
