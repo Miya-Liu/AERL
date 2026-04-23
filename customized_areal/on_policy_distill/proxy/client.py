@@ -318,6 +318,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
 
         Overrides the base class method to use custom deserialization
         that reconstructs position_rewards for the distillation loss.
+        Uses post_json_with_retry for resilience against transient failures.
         """
         if self.session_id is None:
             raise ValueError("session_id must be set before exporting interactions")
@@ -329,10 +330,13 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
             "style": style,
         }
         headers = self._admin_auth_headers()
-        async with self._session.post(url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            return deserialize_interactions_with_position_rewards(data["interactions"])
+        data = await post_json_with_retry(
+            self._session,
+            url=url,
+            payload=payload,
+            headers=headers,
+        )
+        return deserialize_interactions_with_position_rewards(data["interactions"])
 
     async def get_last_interaction(self) -> Any:
         """Get the most recent interaction from the proxy server.
@@ -340,11 +344,13 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
         Fetches all interactions from the server and returns the last one.
         The interaction includes model_response with output_tokens, input_tokens,
         and output_top_logprobs needed for teacher distillation.
+        Uses post_json_with_retry for resilience against transient failures.
 
         Returns
         -------
         Any
-            The last interaction object, or None if no interactions exist.
+            The last interaction object (InteractionWithTokenLogpReward),
+            or None if no interactions exist.
 
         Raises
         ------
@@ -354,15 +360,10 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
         if self.session_id is None:
             raise RuntimeError("Session not started")
 
-        url = f"{self.base_url}{EXPORT_TRAJECTORIES_PATHNAME}"
-        params = {"discount": "1.0", "style": "individual"}
-        headers = self._session_auth_headers()
+        interactions = await self.export_interactions(
+            discount=1.0, style="individual"
+        )
 
-        async with self._session.get(url, params=params, headers=headers) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-
-        interactions = data.get("interactions", {})
         if not interactions:
             return None
 

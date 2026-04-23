@@ -63,3 +63,11 @@ class TPFCConfig(PPOConfig):
         metadata={"help": "Path to the TPFC workflow class for evaluation."},
     )
     agent: AgentConfig = field(default_factory=AgentConfig)
+    cache_dir: str = field(
+        default="",
+        metadata={"help": "Directory for rollout cache storage (tree search)."},
+    )
+    assistant_marker: str = field(
+        default="",
+        metadata={"help": "Marker string identifying assistant turns in tree backup."},
+    )

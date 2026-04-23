@@ -55,6 +55,7 @@ class PositionRewardInfo(BaseModel):
     logprobs: list[float] | None = None  # logp_model for each candidate
     rewards: list[float] = []
     chosen_index: int = 0
+    sample_index: int = 0  # Index of the batch item this position belongs to
 
 
 class SetTokenRewardsRequest(BaseModel):
@@ -118,6 +119,11 @@ class TokenRewardSessionData(SessionData):
         tree backup advantage computation uses only trajectory-level rewards,
         while token-level rewards are used only for distillation.
 
+        Raises
+        ------
+        RuntimeError
+            If the session has already been finished.
+
         Parameters
         ----------
         interaction_id : str
@@ -125,6 +131,10 @@ class TokenRewardSessionData(SessionData):
         token_rewards : list[float]
             Token-wise rewards, one per output token
         """
+        if self.is_completed:
+            raise RuntimeError(
+                f"Cannot set token rewards on finished session {self.session_id}"
+            )
         with self._lock:
             self._token_rewards[interaction_id] = token_rewards
             # Do NOT overwrite scalar reward here. The scalar reward
@@ -143,6 +153,11 @@ class TokenRewardSessionData(SessionData):
         tree backup advantage computation uses only trajectory-level rewards,
         while position-level rewards are used only for distillation.
 
+        Raises
+        ------
+        RuntimeError
+            If the session has already been finished.
+
         Parameters
         ----------
         interaction_id : str
@@ -150,6 +165,10 @@ class TokenRewardSessionData(SessionData):
         position_rewards : list[PositionRewardInfo]
             Position-wise candidate rewards
         """
+        if self.is_completed:
+            raise RuntimeError(
+                f"Cannot set position rewards on finished session {self.session_id}"
+            )
         with self._lock:
             self._position_rewards[interaction_id] = position_rewards
             # Extract chosen token rewards for token-wise storage

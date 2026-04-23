@@ -48,7 +48,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "new_trained_0423_add_audio_change_doc_tool",
+        "new_trained_add_audio_video_change_doc_tool",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

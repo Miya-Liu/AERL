@@ -84,10 +84,10 @@ def _warn_once(msg: str) -> None:
 def serialize_interactions_with_position_rewards(
     interactions: dict,
 ) -> dict:
-    """Serialize interactions including position_rewards for distillation.
+    """Serialize interactions including position_rewards and token_rewards for distillation.
 
     Extends the base serialize_interactions to include position_rewards
-    so they can flow through HTTP transport to the training pipeline.
+    and token_rewards so they can flow through HTTP transport to the training pipeline.
     """
     from areal.infra.rpc.serialization import serialize_value
 
@@ -98,6 +98,11 @@ def serialize_interactions_with_position_rewards(
             "reward": interaction.reward,
             "interaction_id": interaction.interaction_id,
         }
+        # Include token_rewards if available (set by
+        # TokenRewardSessionData.set_token_rewards or export_interactions)
+        token_rewards = getattr(interaction, "token_rewards", None)
+        if token_rewards is not None:
+            entry["token_rewards"] = token_rewards
         # Include position_rewards if available (set by
         # TokenRewardSessionData.set_position_rewards)
         pos_rewards = getattr(interaction, "position_rewards", None)
@@ -110,6 +115,7 @@ def serialize_interactions_with_position_rewards(
                     "logprobs": pr.logprobs,
                     "rewards": pr.rewards,
                     "chosen_index": pr.chosen_index,
+                    "sample_index": pr.sample_index,
                 }
                 for pr in pos_rewards
             ]
@@ -120,11 +126,12 @@ def serialize_interactions_with_position_rewards(
 def deserialize_interactions_with_position_rewards(
     data: dict,
 ) -> dict:
-    """Deserialize interactions including position_rewards for distillation.
+    """Deserialize interactions including position_rewards and token_rewards for distillation.
 
     Extends the base deserialize_interactions to reconstruct position_rewards
-    from the serialized data and inject them into the cached tensor dict so
-    they flow through concat_padded_tensors to the distillation loss.
+    and token_rewards from the serialized data. Position_rewards are stored as
+    a Python attribute on the interaction object; token_rewards are also stored
+    as a Python attribute so they can be used downstream if needed.
     """
     from areal.experimental.openai.types import InteractionWithTokenLogpReward
     from areal.infra.rpc.serialization import deserialize_value
@@ -136,6 +143,11 @@ def deserialize_interactions_with_position_rewards(
         interaction._cache = item["tensor_dict"]
         interaction.reward = item["reward"]
         interaction.interaction_id = item["interaction_id"]
+
+        # Reconstruct token_rewards if available
+        token_rewards_data = item.get("token_rewards")
+        if token_rewards_data is not None:
+            interaction.token_rewards = token_rewards_data  # type: ignore
 
         # Reconstruct position_rewards if available and inject into the
         # cached tensor dict so they flow through the data pipeline to
@@ -152,6 +164,7 @@ def deserialize_interactions_with_position_rewards(
                     logprobs=pr["logprobs"],
                     rewards=pr["rewards"],
                     chosen_index=pr["chosen_index"],
+                    sample_index=pr.get("sample_index", 0),
                 )
                 for pr in pos_rewards_data
             ]
@@ -333,6 +346,11 @@ def end_session(session_id: str = Depends(_require_session_key)):
     Returns the number of recorded interactions so callers (e.g. the proxy
     gateway refresh path) can decide whether meaningful trajectory data
     exists.
+
+    Marks the session as finished and removes API key mappings so no
+    further writes are possible. The session data remains in cache for
+    export_trajectories to retrieve. The cleanup task will eventually
+    remove it if export_trajectories is never called.
     """
     with _lock:
         if session_id not in _session_cache:
@@ -345,7 +363,7 @@ def end_session(session_id: str = Depends(_require_session_key)):
     # finish() outside lock to avoid holding lock during potential I/O
     session_data.finish()
 
-    # Clean up mappings
+    # Remove API key mappings so no further authenticated writes are possible
     with _lock:
         _remove_api_keys_for_session(session_id)
 
@@ -544,6 +562,7 @@ def set_position_rewards(
                 logprobs=pr.logprobs,
                 rewards=pr.rewards,
                 chosen_index=pr.chosen_index,
+                sample_index=pr.sample_index,
             )
         )
 
