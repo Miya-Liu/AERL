@@ -440,3 +440,72 @@ class TestMCTSTreeStoreBuildTrainingHistory:
         original = store._training_history[0]
         store.build_training_history()
         assert store._training_history[0] == original
+
+
+class TestTreeCheckpointTrainingHistory:
+    def test_save_load_training_steps_and_history(self):
+        import os
+        import tempfile
+        import json
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+        trajectories = [
+            {"_mcts_query_id": "q1", "_mcts_seq_id": s0},
+            {"_mcts_query_id": "q2", "_mcts_seq_id": s1},
+        ]
+        store.record_training_step(0, trajectories)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = TreeCheckpointManager(tmpdir)
+            mgr.save(store)
+
+            loaded = mgr.load(_two_turn_splitter)
+
+            # Check _training_history preserved
+            assert 0 in loaded._training_history
+            assert loaded._training_history[0] == [("q1", s0), ("q2", s1)]
+
+            # Check leaf training_steps preserved
+            leaf0 = loaded.trees["q1"].get_path_nodes(s0)[-1]
+            assert leaf0.training_steps == [0]
+            leaf1 = loaded.trees["q2"].get_path_nodes(s1)[-1]
+            assert leaf1.training_steps == [0]
+
+    def test_load_old_checkpoint_without_history(self):
+        import os
+        import tempfile
+        import json
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = TreeCheckpointManager(tmpdir)
+            mgr.save(store)
+
+            # Manually remove training_history from metadata to simulate old checkpoint
+            metadata_path = os.path.join(tmpdir, "mcts_trees", "metadata.json")
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+            del metadata["training_history"]
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f)
+
+            loaded = mgr.load(_two_turn_splitter)
+            assert loaded._training_history == {}
+
+
+class TestRolloutCacheConfig:
+    def test_default_replay_is_false(self):
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        config = RolloutCacheConfig()
+        assert config.replay is False
+
+    def test_replay_can_be_set(self):
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        config = RolloutCacheConfig(replay=True)
+        assert config.replay is True

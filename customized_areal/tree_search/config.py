@@ -20,3 +20,4 @@ class RolloutCacheConfig:
     cache_dir: str = ""
     enabled: bool = True
     n_samples: int = 1
+    replay: bool = False

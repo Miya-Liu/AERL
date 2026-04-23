@@ -35,10 +35,16 @@ class TreeCheckpointManager:
             f"{qid}:{sid}": reward for (qid, sid), reward in tree_store._rewards.items()
         }
 
+        training_history_data = {
+            str(step): [[qid, sid] for qid, sid in pairs]
+            for step, pairs in tree_store._training_history.items()
+        }
+
         metadata = {
             "next_seq_id": tree_store._next_seq_id,
             "trained": trained_data,
             "rewards": rewards_data,
+            "training_history": training_history_data,
         }
         with open(os.path.join(self.save_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
@@ -58,6 +64,13 @@ class TreeCheckpointManager:
         for key_str, reward in rewards_data.items():
             qid, sid = key_str.rsplit(":", 1)
             store._rewards[(qid, int(sid))] = reward
+
+        # Restore training_history (absent in old checkpoints)
+        training_history_data = metadata.get("training_history", {})
+        for step_str, pairs in training_history_data.items():
+            store._training_history[int(step_str)] = [
+                (qid, sid) for qid, sid in pairs
+            ]
 
         for filename in os.listdir(self.save_dir):
             if not filename.startswith("query_") or not filename.endswith(".json"):
@@ -98,6 +111,8 @@ class TreeCheckpointManager:
             result["logprobs"] = node.logprobs
         if node.versions:
             result["versions"] = node.versions
+        if node.training_steps:
+            result["training_steps"] = node.training_steps
         return result
 
     def _deserialize_node(
@@ -112,6 +127,7 @@ class TreeCheckpointManager:
             prompt_len=data.get("prompt_len", 0),
             logprobs=data.get("logprobs", []),
             versions=data.get("versions", []),
+            training_steps=data.get("training_steps", []),
         )
         if parent is not None:
             node.ancestors = parent.ancestors + [parent]
