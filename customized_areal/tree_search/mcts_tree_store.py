@@ -378,6 +378,103 @@ class MCTSTreeStore:
 
         return result
 
+    def load_trajectory_by_seq_id(
+        self, query_id: str, seq_id: int
+    ) -> dict[str, Any] | None:
+        """Load a single trajectory by its exact seq_id.
+
+        Unlike load_trajectories, this ignores the trained flag and returns
+        the trajectory regardless. Returns None if query_id or seq_id not found.
+        """
+        if query_id not in self.trees:
+            return None
+
+        root = self.trees[query_id]
+        if seq_id not in root.sequence_ids:
+            return None
+
+        path_nodes = root.get_path_nodes(seq_id)
+
+        all_tokens = []
+        all_logprobs = []
+        all_versions = []
+        prompt_len_total = 0
+
+        for node in path_nodes:
+            all_tokens.extend(node.tokens)
+            if node.logprobs:
+                all_logprobs.extend(node.logprobs)
+            else:
+                all_logprobs.extend([0.0] * len(node.tokens))
+            if node.versions:
+                all_versions.extend(node.versions)
+            else:
+                all_versions.extend([0] * len(node.tokens))
+            prompt_len_total += node.prompt_len
+
+        seq_len = len(all_tokens)
+        if seq_len == 0:
+            return None
+
+        input_ids = torch.tensor(all_tokens, dtype=torch.int32).unsqueeze(0)
+        logprobs_t = torch.tensor(all_logprobs, dtype=torch.float32).unsqueeze(0)
+        versions_t = torch.tensor(all_versions, dtype=torch.int32).unsqueeze(0)
+        attention_mask = torch.ones(seq_len, dtype=torch.bool).unsqueeze(0)
+
+        loss_mask = torch.zeros(seq_len, dtype=torch.int32)
+        loss_mask[prompt_len_total:] = 1
+        loss_mask = loss_mask.unsqueeze(0)
+
+        reward_val = self.get_reward(query_id, seq_id)
+        rewards = torch.tensor([reward_val], dtype=torch.float32).unsqueeze(0)
+
+        return {
+            "input_ids": input_ids,
+            "logprobs": logprobs_t,
+            "loss_mask": loss_mask,
+            "attention_mask": attention_mask,
+            "rewards": rewards,
+            "versions": versions_t,
+            "_mcts_query_id": query_id,
+            "_mcts_seq_id": seq_id,
+        }
+
+    def build_training_history(self) -> None:
+        """Reconstruct _training_history from leaf node training_steps.
+
+        Fallback for old checkpoints that lack _training_history in metadata.
+        Within each global_step, order is best-effort: trajectories are ordered
+        by their seq_id position in root.sequence_ids per query_id.
+        Cross-query_id ordering is not guaranteed.
+        Does not overwrite existing _training_history entries.
+        """
+        if self._training_history:
+            return
+
+        # Collect (global_step, query_id, seq_id) from all leaves
+        step_entries: dict[int, list[tuple[str, int, int]]] = {}
+        for query_id, root in self.trees.items():
+            for seq_id in set(root.sequence_ids):
+                path_nodes = root.get_path_nodes(seq_id)
+                if not path_nodes:
+                    continue
+                leaf = path_nodes[-1]
+                for step in leaf.training_steps:
+                    if step not in step_entries:
+                        step_entries[step] = []
+                    # Use seq_id position in root.sequence_ids for ordering
+                    try:
+                        order = root.sequence_ids.index(seq_id)
+                    except ValueError:
+                        order = seq_id
+                    step_entries[step].append((query_id, seq_id, order))
+
+        # Build _training_history, sorted by seq_id order within each step
+        for step in sorted(step_entries.keys()):
+            entries = step_entries[step]
+            entries.sort(key=lambda x: x[2])
+            self._training_history[step] = [(qid, sid) for qid, sid, _ in entries]
+
     def reset_trained_flags(self) -> None:
         for key in self._trained:
             self._trained[key] = False

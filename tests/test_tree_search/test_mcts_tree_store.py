@@ -125,13 +125,13 @@ class TestMCTSTreeStoreInsertBatch:
         store = MCTSTreeStore(_two_turn_splitter)
         trajectories = [
             {
-                "input_ids": torch.tensor([1, 2, 10, 3, 4]),
-                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "input_ids": torch.tensor([[1, 2, 10, 3, 4]]),
+                "loss_mask": torch.tensor([[0, 0, 0, 1, 1]]),
                 "rewards": torch.tensor([1.0]),
             },
             {
-                "input_ids": torch.tensor([1, 2, 10, 3, 5]),
-                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "input_ids": torch.tensor([[1, 2, 10, 3, 5]]),
+                "loss_mask": torch.tensor([[0, 0, 0, 1, 1]]),
                 "rewards": torch.tensor([0.5]),
             },
         ]
@@ -281,12 +281,12 @@ class TestMCTSTreeStoreInsertBatchWithMetadata:
         store = MCTSTreeStore(_two_turn_splitter)
         trajectories = [
             {
-                "input_ids": torch.tensor([1, 2, 10, 3, 4]),
-                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "input_ids": torch.tensor([[1, 2, 10, 3, 4]]),
+                "loss_mask": torch.tensor([[0, 0, 0, 1, 1]]),
                 "rewards": torch.tensor([1.0]),
-                "logprobs": torch.tensor([-0.1, -0.2, -0.3, -0.4, -0.5]),
-                "versions": torch.tensor([0, 0, 0, 0, 0]),
-                "attention_mask": torch.tensor([1, 1, 1, 1, 1], dtype=torch.bool),
+                "logprobs": torch.tensor([[-0.1, -0.2, -0.3, -0.4, -0.5]]),
+                "versions": torch.tensor([[0, 0, 0, 0, 0]]),
+                "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
             },
         ]
         store.insert_batch(trajectories)
@@ -302,12 +302,12 @@ class TestMCTSTreeStoreInsertBatchWithMetadata:
         store = MCTSTreeStore(_two_turn_splitter)
         trajectories = [
             {
-                "input_ids": torch.tensor([1, 2, 10, 3, 4]),
-                "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
+                "input_ids": torch.tensor([[1, 2, 10, 3, 4]]),
+                "loss_mask": torch.tensor([[0, 0, 0, 1, 1]]),
                 "rewards": torch.tensor([0.75]),
-                "logprobs": torch.tensor([-0.1, -0.2, -0.3, -0.4, -0.5]),
-                "versions": torch.tensor([0, 0, 0, 0, 0]),
-                "attention_mask": torch.tensor([1, 1, 1, 1, 1], dtype=torch.bool),
+                "logprobs": torch.tensor([[-0.1, -0.2, -0.3, -0.4, -0.5]]),
+                "versions": torch.tensor([[0, 0, 0, 0, 0]]),
+                "attention_mask": torch.tensor([[1, 1, 1, 1, 1]], dtype=torch.bool),
             },
         ]
         store.insert_batch(trajectories)
@@ -374,3 +374,69 @@ class TestMCTSTreeStoreRecordTrainingStep:
         store.record_training_step(5, trajectories)
         leaf = store.trees["q1"].get_path_nodes(seq_id)[-1]
         assert leaf.training_steps == [0, 5]
+
+
+class TestMCTSTreeStoreLoadBySeqId:
+    def test_load_trajectory_by_seq_id(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        traj = store.load_trajectory_by_seq_id("q1", seq_id)
+        assert traj is not None
+        assert traj["input_ids"].shape[0] == 1
+        assert traj["rewards"].item() == 1.0
+        assert traj["_mcts_query_id"] == "q1"
+        assert traj["_mcts_seq_id"] == seq_id
+
+    def test_load_trajectory_by_seq_id_unknown(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        result = store.load_trajectory_by_seq_id("nonexistent", 0)
+        assert result is None
+
+    def test_load_trajectory_by_seq_id_matches_load_trajectories(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        store.set_trained("q1", s0, True)
+        trajs = store.load_trajectories("q1", n_samples=1)
+        assert len(trajs) == 1
+        assert trajs[0]["_mcts_seq_id"] == s1
+        # load_by_seq_id can still load s0 regardless of trained flag
+        traj = store.load_trajectory_by_seq_id("q1", s0)
+        assert traj is not None
+        assert traj["_mcts_seq_id"] == s0
+
+
+class TestMCTSTreeStoreBuildTrainingHistory:
+    def _insert_and_record(self, store, query_id, tokens, reward, step):
+        seq_id = store.insert_trajectory(query_id, tokens, reward=reward)
+        trajectories = [{"_mcts_query_id": query_id, "_mcts_seq_id": seq_id}]
+        store.record_training_step(step, trajectories)
+        return seq_id
+
+    def test_build_training_history_from_leaves(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        self._insert_and_record(store, "q1", [1, 2, 10, 3, 4], 1.0, 0)
+        self._insert_and_record(store, "q2", [5, 6, 10, 7, 8], 0.5, 0)
+        self._insert_and_record(store, "q1", [1, 2, 11, 3, 5], 0.3, 1)
+
+        # Clear history and rebuild from leaves
+        store._training_history.clear()
+        store.build_training_history()
+
+        assert 0 in store._training_history
+        assert 1 in store._training_history
+        step0_pairs = store._training_history[0]
+        assert len(step0_pairs) == 2
+        assert len(store._training_history[1]) == 1
+
+    def test_build_training_history_empty(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.build_training_history()
+        assert store._training_history == {}
+
+    def test_build_training_history_preserves_existing(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        self._insert_and_record(store, "q1", [1, 2, 10, 3, 4], 1.0, 0)
+        original = store._training_history[0]
+        store.build_training_history()
+        assert store._training_history[0] == original
