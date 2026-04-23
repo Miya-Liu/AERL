@@ -85,6 +85,10 @@ def patch_ppo_actor_for_tree_backup(
         # 3. Mark trajectories as trained so they won't be loaded from cache again
         _mark_batch_trained(tree_store, result)
 
+        # 4. Record training step order for replay
+        global_step = result[0].get("_global_step") if result else None
+        tree_store.record_training_step(global_step, result)
+
         # advantages/returns already overwritten by compute()
         # kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
         return result
@@ -242,6 +246,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Initialize base PPOTrainer first
         super().__init__(config, train_dataset, valid_dataset)
 
+        # Track global step for training history recording
+        self._global_step = 0
+
         # Set up tree backup and cache after base init
         if (
             self.cache_config.enabled
@@ -274,10 +281,24 @@ class CacheAwarePPOTrainer(PPOTrainer):
             patch_ppo_actor_for_tree_backup(
                 self.tree_store, self.tree_advantage_computer
             )
-            logger.info(
-                f"Cache-aware training enabled (mode={self.tree_backup_config.mode.value}, "
-                f"n_samples={self.cache_config.n_samples})"
-            )
+            if self.cache_config.replay:
+                if not self.tree_store._training_history:
+                    self.tree_store.build_training_history()
+                if not self.tree_store._training_history:
+                    raise ValueError(
+                        "Cannot replay: no training history found in tree "
+                        "checkpoint. Run a training session first."
+                    )
+                self._replay_global_step = 0
+                logger.info(
+                    f"Replay mode enabled: {len(self.tree_store._training_history)} "
+                    f"training steps available"
+                )
+            else:
+                logger.info(
+                    f"Cache-aware training enabled (mode={self.tree_backup_config.mode.value}, "
+                    f"n_samples={self.cache_config.n_samples})"
+                )
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -342,7 +363,24 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Pull a batch of raw data items from the dataloader
         raw_batch = next(self._cache_dataloader_iter)
 
-        # Split into cached / needs-generation
+        if self.cache_config.replay:
+            # Replay mode: load all trajectories from the tree store
+            logger.info("Replay mode enabled: loading all cached trajectories")
+            all_trajectories = []
+            # Collect all query IDs from the tree store
+            for query_id in self.tree_store.trees.keys():
+                # Load all trajectories (including trained ones) for this query
+                trajs = self.tree_store.load_trajectories(
+                    query_id, n_samples=10000  # Load a large number to get all
+                )
+                all_trajectories.extend(trajs)
+            if all_trajectories:
+                logger.info(f"Loaded {len(all_trajectories)} trajectories for replay")
+                return all_trajectories
+            else:
+                logger.warning("Replay mode enabled but no cached trajectories available")
+
+        # Normal mode: split into cached / needs-generation
         cached_items, need_gen_items = self._batch_builder.split_prompts(raw_batch)
 
         # Load cached trajectories
@@ -368,6 +406,48 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Merge cached and new trajectories
         return _merge_cached_and_new(cached_trajs, new_trajs)
 
+    def _replay_prepare_batch(
+        self,
+        dataloader,
+        workflow,
+        workflow_kwargs=None,
+        should_accept_fn=None,
+        group_size=1,
+        dynamic_bs=False,
+    ):
+        """Replay mode: load trajectories from recorded training history."""
+        global_step = self._replay_global_step
+
+        if global_step not in self.tree_store._training_history:
+            if not self.tree_store._training_history:
+                raise ValueError(
+                    "Cannot replay: no training history found in tree checkpoint. "
+                    "Run a training session first."
+                )
+            logger.warning(
+                f"Replay: no recorded trajectories for global_step {global_step}, "
+                f"skipping"
+            )
+            return []
+
+        pairs = self.tree_store._training_history[global_step]
+        trajs = []
+        for query_id, seq_id in pairs:
+            traj = self.tree_store.load_trajectory_by_seq_id(query_id, seq_id)
+            if traj is not None:
+                trajs.append(traj)
+            else:
+                logger.warning(
+                    f"Replay: trajectory (query_id={query_id}, seq_id={seq_id}) "
+                    f"not found, skipping"
+                )
+
+        self._replay_global_step += 1
+        logger.info(
+            f"Replay step {global_step}: loaded {len(trajs)} trajectories from history"
+        )
+        return trajs
+
     def train(
         self,
         workflow=None,
@@ -383,6 +463,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
         cache-aware version that loads cached trajectories and only
         generates missing ones. After training completes (or on error),
         the original prepare_batch is restored.
+
+        This override also tracks the global step for training history
+        recording.
         """
         if not self.cache_config.enabled:
             return super().train(
@@ -394,27 +477,37 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 total_epochs=total_epochs,
             )
 
-        # Monkey-patch prepare_batch with cache-aware version
+        # Track global step internally
+        self._global_step = 0
+
+        # Monkey-patch prepare_batch with cache-aware or replay version
         original_prepare_batch = self.actor.prepare_batch
 
-        def _patched_prepare_batch(
-            dataloader,
-            workflow_arg,
-            workflow_kwargs_arg=None,
-            should_accept_fn=None,
-            group_size=1,
-            dynamic_bs=False,
-        ):
-            return self._cache_aware_prepare_batch(
-                dataloader=dataloader,
-                workflow=workflow_arg,
-                workflow_kwargs=workflow_kwargs_arg,
-                should_accept_fn=should_accept_fn,
-                group_size=group_size,
-                dynamic_bs=dynamic_bs,
-            )
+        if self.cache_config.replay:
+            _prepare_batch_fn = self._replay_prepare_batch
+        else:
 
-        self.actor.prepare_batch = _patched_prepare_batch
+            def _prepare_batch_fn(
+                dataloader,
+                workflow_arg,
+                workflow_kwargs_arg=None,
+                should_accept_fn=None,
+                group_size=1,
+                dynamic_bs=False,
+            ):
+                batch = self._cache_aware_prepare_batch(
+                    dataloader=dataloader,
+                    workflow=workflow_arg,
+                    workflow_kwargs=workflow_kwargs_arg,
+                    should_accept_fn=should_accept_fn,
+                    group_size=group_size,
+                    dynamic_bs=dynamic_bs,
+                )
+                # Call record_training_step with the current global step
+                self.tree_store.record_training_step(self._global_step, batch)
+                return batch
+
+        self.actor.prepare_batch = _prepare_batch_fn
 
         try:
             return super().train(

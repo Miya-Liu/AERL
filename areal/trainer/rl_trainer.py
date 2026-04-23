@@ -639,6 +639,10 @@ class PPOTrainer:
                         traj["prox_logp"] = logp
                     self.actor.get_device_stats().log("recompute logp")
 
+            # Inject global_step into trajectories for tree backup recording
+            for traj in rollout_batch:
+                traj["_global_step"] = global_step
+
             with (
                 stats_tracker.record_timing("compute_advantage"),
                 perf_tracer.trace_scope(
