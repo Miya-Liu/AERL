@@ -314,3 +314,63 @@ class TestMCTSTreeStoreInsertBatchWithMetadata:
         query_id = trajectories[0]["_mcts_query_id"]
         seq_id = trajectories[0]["_mcts_seq_id"]
         assert store.get_reward(query_id, seq_id) == 0.75
+
+
+class TestMCTSTreeStoreRecordTrainingStep:
+    def test_record_training_step_single_trajectory(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        trajectories = [{"_mcts_query_id": "q1", "_mcts_seq_id": seq_id}]
+        store.record_training_step(0, trajectories)
+        root = store.trees["q1"]
+        leaf = root.get_path_nodes(seq_id)[-1]
+        assert leaf.training_steps == [0]
+        assert 0 in store._training_history
+        assert store._training_history[0] == [("q1", seq_id)]
+
+    def test_record_training_step_multiple_trajectories(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+        trajectories = [
+            {"_mcts_query_id": "q1", "_mcts_seq_id": s0},
+            {"_mcts_query_id": "q2", "_mcts_seq_id": s1},
+        ]
+        store.record_training_step(3, trajectories)
+        leaf0 = store.trees["q1"].get_path_nodes(s0)[-1]
+        assert leaf0.training_steps == [3]
+        leaf1 = store.trees["q2"].get_path_nodes(s1)[-1]
+        assert leaf1.training_steps == [3]
+        assert store._training_history[3] == [("q1", s0), ("q2", s1)]
+
+    def test_record_training_step_grouped_trajectory(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 11, 3, 5], reward=0.5)
+        trajectories = [
+            {"_mcts_query_id": "q1", "_mcts_seq_ids": [s0, s1]},
+        ]
+        store.record_training_step(1, trajectories)
+        leaf0 = store.trees["q1"].get_path_nodes(s0)[-1]
+        leaf1 = store.trees["q1"].get_path_nodes(s1)[-1]
+        assert leaf0.training_steps == [1]
+        assert leaf1.training_steps == [1]
+        assert store._training_history[1] == [("q1", s0), ("q1", s1)]
+
+    def test_record_training_step_skips_missing_global_step(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        trajectories = [{"_mcts_query_id": "q1", "_mcts_seq_id": seq_id}]
+        store.record_training_step(None, trajectories)
+        leaf = store.trees["q1"].get_path_nodes(seq_id)[-1]
+        assert leaf.training_steps == []
+        assert len(store._training_history) == 0
+
+    def test_record_training_step_same_trajectory_multiple_steps(self):
+        store = MCTSTreeStore(_two_turn_splitter)
+        seq_id = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        trajectories = [{"_mcts_query_id": "q1", "_mcts_seq_id": seq_id}]
+        store.record_training_step(0, trajectories)
+        store.record_training_step(5, trajectories)
+        leaf = store.trees["q1"].get_path_nodes(seq_id)[-1]
+        assert leaf.training_steps == [0, 5]

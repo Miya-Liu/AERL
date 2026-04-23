@@ -60,6 +60,7 @@ class MCTSTreeStore:
 
         self._trained: dict[tuple[str, int], bool] = {}
         self._rewards: dict[tuple[str, int], float] = {}
+        self._training_history: dict[int, list[tuple[str, int]]] = {}
 
     def start_sequence(self, query_id: str) -> int:
         """Create root if needed, assign a seq_id, set cursor at root."""
@@ -208,6 +209,50 @@ class MCTSTreeStore:
 
                 traj["_mcts_seq_ids"] = seq_ids
                 traj["_mcts_query_id"] = query_id
+
+    def record_training_step(
+        self, global_step: int | None, trajectories: list[dict[str, Any]]
+    ) -> None:
+        """Record that the given trajectories were used for training at global_step.
+
+        Appends global_step to each trajectory's leaf node training_steps list
+        and stores the ordered (query_id, seq_id) list in _training_history.
+        Skips gracefully if global_step is None.
+        """
+        if global_step is None:
+            return
+
+        ordered_pairs: list[tuple[str, int]] = []
+
+        for traj in trajectories:
+            query_id = traj.get("_mcts_query_id")
+            if query_id is None:
+                continue
+
+            # Single trajectory
+            seq_id = traj.get("_mcts_seq_id")
+            if seq_id is not None and query_id in self.trees:
+                root = self.trees[query_id]
+                path_nodes = root.get_path_nodes(seq_id)
+                if path_nodes:
+                    leaf = path_nodes[-1]
+                    leaf.training_steps.append(global_step)
+                ordered_pairs.append((query_id, seq_id))
+                continue
+
+            # Grouped trajectory
+            seq_ids = traj.get("_mcts_seq_ids")
+            if seq_ids is not None and query_id in self.trees:
+                root = self.trees[query_id]
+                for sid in seq_ids:
+                    path_nodes = root.get_path_nodes(sid)
+                    if path_nodes:
+                        leaf = path_nodes[-1]
+                        leaf.training_steps.append(global_step)
+                    ordered_pairs.append((query_id, sid))
+
+        if ordered_pairs:
+            self._training_history[global_step] = ordered_pairs
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Get Q-values per turn, expand to per-token advantages."""
@@ -365,3 +410,4 @@ class MCTSTreeStore:
         self._q_values.clear()
         self._trained.clear()
         self._rewards.clear()
+        self._training_history.clear()
