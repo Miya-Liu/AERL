@@ -85,9 +85,10 @@ def patch_ppo_actor_for_tree_backup(
         # 3. Mark trajectories as trained so they won't be loaded from cache again
         _mark_batch_trained(tree_store, result)
 
-        # 4. Record training step order for replay
-        global_step = result[0].get("_global_step") if result else None
-        tree_store.record_training_step(global_step, result)
+        # 4. Record training step order for replay (skip during replay to avoid duplicates)
+        if not getattr(tree_store, "_replay_mode", False):
+            global_step = result[0].get("_global_step") if result else None
+            tree_store.record_training_step(global_step, result)
 
         # advantages/returns already overwritten by compute()
         # kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
@@ -246,9 +247,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Initialize base PPOTrainer first
         super().__init__(config, train_dataset, valid_dataset)
 
-        # Track global step for training history recording
-        self._global_step = 0
-
         # Set up tree backup and cache after base init
         if (
             self.cache_config.enabled
@@ -282,6 +280,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 self.tree_store, self.tree_advantage_computer
             )
             if self.cache_config.replay:
+                self.tree_store._replay_mode = True
                 if not self.tree_store._training_history:
                     self.tree_store.build_training_history()
                 if not self.tree_store._training_history:
@@ -363,24 +362,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Pull a batch of raw data items from the dataloader
         raw_batch = next(self._cache_dataloader_iter)
 
-        if self.cache_config.replay:
-            # Replay mode: load all trajectories from the tree store
-            logger.info("Replay mode enabled: loading all cached trajectories")
-            all_trajectories = []
-            # Collect all query IDs from the tree store
-            for query_id in self.tree_store.trees.keys():
-                # Load all trajectories (including trained ones) for this query
-                trajs = self.tree_store.load_trajectories(
-                    query_id, n_samples=10000  # Load a large number to get all
-                )
-                all_trajectories.extend(trajs)
-            if all_trajectories:
-                logger.info(f"Loaded {len(all_trajectories)} trajectories for replay")
-                return all_trajectories
-            else:
-                logger.warning("Replay mode enabled but no cached trajectories available")
-
-        # Normal mode: split into cached / needs-generation
+        # Split into cached / needs-generation
         cached_items, need_gen_items = self._batch_builder.split_prompts(raw_batch)
 
         # Load cached trajectories
