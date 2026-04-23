@@ -26,6 +26,7 @@ class TrieNode:
     nodes: list[TrieNode] = field(default_factory=list)
     logprobs: list[float] = field(default_factory=list)
     versions: list[int] = field(default_factory=list)
+    training_steps: list[int] = field(default_factory=list)
 
     def add_turn(
         self,

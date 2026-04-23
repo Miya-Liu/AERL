@@ -186,6 +186,22 @@ class TestTrieNodeExtendedFields:
         assert child.versions == [0, 0, 0, 0]
 
 
+class TestTrieNodeTrainingSteps:
+    def test_training_steps_default_empty(self):
+        from customized_areal.tree_search.trie_node import TrieNode
+
+        node = TrieNode(tree_id=0)
+        assert node.training_steps == []
+
+    def test_training_steps_append(self):
+        from customized_areal.tree_search.trie_node import TrieNode
+
+        node = TrieNode(tree_id=0)
+        node.training_steps.append(5)
+        node.training_steps.append(10)
+        assert node.training_steps == [5, 10]
+
+
 class TestMCTSTreeStoreTrainedFlag:
     def test_trained_flag_default_false(self):
         store = MCTSTreeStore(_two_turn_splitter)
