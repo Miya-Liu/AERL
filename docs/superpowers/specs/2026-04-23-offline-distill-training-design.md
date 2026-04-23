@@ -15,12 +15,12 @@ The patched `_ppo_update_with_distill_loss` pops `rewards`, `tot_rewards`, `kl_r
 **Fix**: Log reward stats before popping.
 
 ### Bug 3: prompt_len only for first sample (loss.py:120-125)
-When `loss_mask` has batch dim `[batch, seq_len]`, `loss_mask.squeeze(0)` reduces to `[seq_len]` only when batch=1. With batch>1, `squeeze(0)` is a no-op and the loop iterates over the wrong dimension. Even when batch=1, it only finds prompt_len for the first sample, which is wrong when samples have different prompt lengths.
-**Fix**: Compute prompt_len per sample or use a batch-level approach.
+When `loss_mask` has batch dim `[batch, seq_len]`, `loss_mask.squeeze(0)` reduces to `[seq_len]` only when batch=1. With batch>1, `squeeze(0)` is a no-op and the loop iterates over the wrong dimension. Even when batch=1, it only finds prompt_len for the first sample, which is wrong when samples have different prompt lengths. Since PositionRewardInfo has a `sample_index` field, we need per-sample prompt lengths to correctly offset positions.
+**Fix**: Compute prompt_len per sample using `loss_mask` rows: `prompt_len[i] = (loss_mask[i] == 0).sum()` or the first-true-index approach per row. Then use `prompt_len[pr.sample_index]` when computing the absolute position.
 
 ### Bug 4: GPU-CPU sync in hot path (loss.py:342)
-`loss_mask.sum().item()` forces a GPU-CPU sync. This is called in the loss function which runs per minibatch per training step.
-**Fix**: Use `int(loss_mask.sum())` within `torch.no_grad()` or pre-compute. Lower priority (perf, not correctness).
+`loss_mask.sum().item()` forces a GPU-CPU sync. This is called in the loss function which runs per minibatch per training step. Note: `int(tensor)` is equivalent to `.item()` — both sync.
+**Fix**: Keep the computation on GPU: use `loss_mask.sum().clamp(min=1)` directly as a tensor in division, and avoid `.item()` for `output_len` by using `loss_mask.sum().long()` for tensor ops. Lower priority (perf, not correctness).
 
 ### Bug 5: Position indexing with padded sequences (loss.py:309)
 `new_logprobs = logprobs[positions_t, :]` uses absolute positions. If `logprobs` includes padding tokens at the end and `position` values are based on the unpadded sequence length, indexing could exceed bounds or select wrong positions.
