@@ -509,3 +509,96 @@ class TestRolloutCacheConfig:
         from customized_areal.tree_search.config import RolloutCacheConfig
         config = RolloutCacheConfig(replay=True)
         assert config.replay is True
+
+
+class TestTrainingOrderReplayIntegration:
+    def test_record_and_replay_cycle(self):
+        """Simulate recording training steps, saving checkpoint, loading, and replaying."""
+        import tempfile
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # === RECORD PHASE ===
+            store = MCTSTreeStore(_two_turn_splitter)
+            s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+            s1 = store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+            s2 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.3)
+
+            # Simulate training step 0: use q1/s0 and q2/s1
+            store.record_training_step(
+                0,
+                [
+                    {"_mcts_query_id": "q1", "_mcts_seq_id": s0},
+                    {"_mcts_query_id": "q2", "_mcts_seq_id": s1},
+                ],
+            )
+            # Simulate training step 1: use q1/s2
+            store.record_training_step(
+                1,
+                [{"_mcts_query_id": "q1", "_mcts_seq_id": s2}],
+            )
+
+            # Save checkpoint
+            mgr = TreeCheckpointManager(tmpdir)
+            mgr.save(store)
+
+            # === REPLAY PHASE ===
+            loaded = mgr.load(_two_turn_splitter)
+
+            # Step 0 replay
+            assert 0 in loaded._training_history
+            step0_pairs = loaded._training_history[0]
+            assert len(step0_pairs) == 2
+            assert step0_pairs[0] == ("q1", s0)
+            assert step0_pairs[1] == ("q2", s1)
+
+            # Load trajectories in replay order
+            replay_trajs = []
+            for query_id, seq_id in step0_pairs:
+                traj = loaded.load_trajectory_by_seq_id(query_id, seq_id)
+                assert traj is not None
+                replay_trajs.append(traj)
+
+            assert len(replay_trajs) == 2
+            assert replay_trajs[0]["_mcts_query_id"] == "q1"
+            assert replay_trajs[1]["_mcts_query_id"] == "q2"
+
+            # Step 1 replay
+            step1_pairs = loaded._training_history[1]
+            assert len(step1_pairs) == 1
+            assert step1_pairs[0] == ("q1", s2)
+
+    def test_build_history_fallback_for_old_checkpoint(self):
+        """Test that build_training_history can reconstruct from leaves alone."""
+        import json
+        import os
+        import tempfile
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = MCTSTreeStore(_two_turn_splitter)
+            s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+            store.record_training_step(
+                0, [{"_mcts_query_id": "q1", "_mcts_seq_id": s0}]
+            )
+
+            mgr = TreeCheckpointManager(tmpdir)
+            mgr.save(store)
+
+            # Simulate old checkpoint: remove training_history from metadata
+            metadata_path = os.path.join(tmpdir, "mcts_trees", "metadata.json")
+            with open(metadata_path) as f:
+                metadata = json.load(f)
+            del metadata["training_history"]
+            with open(metadata_path, "w") as f:
+                json.dump(metadata, f)
+
+            # Load — _training_history should be empty
+            loaded = mgr.load(_two_turn_splitter)
+            assert loaded._training_history == {}
+
+            # Fallback: build from leaves
+            loaded.build_training_history()
+            assert 0 in loaded._training_history
+            assert len(loaded._training_history[0]) == 1
+            assert loaded._training_history[0][0][0] == "q1"
