@@ -348,6 +348,121 @@ async def validate_json_request(raw_request: Request):
 
 
 # =============================================================================
+# Health & Infrastructure Endpoints
+# =============================================================================
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "initialized": _engine is not None}
+
+
+@app.post("/alloc_ports")
+async def alloc_ports(raw_request: Request):
+    """Allocate multiple free ports."""
+    global _allocated_ports
+
+    try:
+        data = await raw_request.json()
+        count = data.get("count")
+        if count is None:
+            raise HTTPException(
+                status_code=400, detail="Missing 'count' field in request"
+            )
+
+        if not isinstance(count, int) or count <= 0:
+            raise HTTPException(
+                status_code=400, detail="'count' must be a positive integer"
+            )
+
+        async with _port_alloc_lock:
+            ports = find_free_ports(count, exclude_ports=_allocated_ports)
+        _allocated_ports.update(ports)
+
+        return {"status": "success", "ports": ports, "host": _server_host}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in alloc_ports: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/configure")
+async def configure(raw_request: Request):
+    data = await raw_request.json()
+    config = deserialize_value(data.get("config"))
+    rank = data.get("rank", 0)
+    seeding.set_random_seed(config.seed, key=f"proxy{rank}")
+    return {"status": "success"}
+
+
+@app.post("/set_env")
+async def set_env(raw_request: Request):
+    data = await raw_request.json()
+    for key, value in data.get("env", {}).items():
+        os.environ[key] = str(value)
+    return {"status": "success"}
+
+
+@app.post("/create_engine")
+async def create_engine(raw_request: Request):
+    global _engine
+    if _engine is not None:
+        raise HTTPException(status_code=400, detail="Engine already exists")
+
+    data = await raw_request.json()
+    engine_class = import_from_string(data.get("engine"))
+    init_kwargs = deserialize_value(data.get("init_kwargs", {}))
+    _engine = engine_class(**init_kwargs)
+    return {"status": "success"}
+
+
+@app.post("/call")
+async def call_engine_method(raw_request: Request):
+    global _engine, _openai_client
+    if _engine is None:
+        raise HTTPException(status_code=400, detail="Engine not initialized")
+
+    data = await raw_request.json()
+    method_name = data.get("method")
+    args = deserialize_value(data.get("args", []))
+    kwargs = deserialize_value(data.get("kwargs", {}))
+
+    method = getattr(_engine, method_name)
+    result = method(*args, **kwargs)
+
+    if method_name == "initialize":
+        _setup_openai_client()
+
+    return {"status": "success", "result": serialize_value(result)}
+
+
+def _setup_openai_client():
+    """Initialize the OpenAI client from the engine configuration."""
+    global _openai_client, _session_timeout_seconds, _admin_api_key
+    config = _engine.config
+    tokenizer = load_hf_tokenizer(config.tokenizer_path)
+    openai_cfg = config.openai or OpenAIProxyConfig()
+    _openai_client = ArealOpenAI(
+        engine=_engine,
+        tokenizer=tokenizer,
+        tool_call_parser=openai_cfg.tool_call_parser,
+        reasoning_parser=openai_cfg.reasoning_parser,
+        engine_max_tokens=openai_cfg.engine_max_tokens,
+        chat_template_type=openai_cfg.chat_template_type,
+    )
+    _session_timeout_seconds = openai_cfg.session_timeout_seconds
+    with _lock:
+        _admin_api_key = openai_cfg.admin_api_key
+        if _admin_api_key == DEFAULT_ADMIN_API_KEY:
+            logger.warning(
+                "Using default admin API key. Change 'admin_api_key' in "
+                "OpenAIProxyConfig for non-local deployments."
+            )
+
+
+# =============================================================================
 # Admin Endpoints
 # =============================================================================
 
