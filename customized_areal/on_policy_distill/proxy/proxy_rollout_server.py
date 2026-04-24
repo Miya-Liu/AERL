@@ -38,6 +38,8 @@ from openai.types.chat.completion_create_params import CompletionCreateParams
 from openai.types.responses import Response
 from openai.types.responses.response_create_params import ResponseCreateParams
 
+from pydantic import BaseModel
+
 # Import from areal base server
 from areal.api.cli_args import NameResolveConfig, OpenAIProxyConfig
 from areal.experimental.openai.client import ArealOpenAI
@@ -462,6 +464,123 @@ def _setup_openai_client():
             )
 
 
+async def _call_client_create(
+    create_fn,
+    request: dict[str, Any] | BaseModel,
+    session_id: str,
+    extra_ignored_args: list[str] | None = None,
+    stream: bool = False,
+) -> ChatCompletion | Response | AsyncGenerator[ChatCompletionChunk, None]:
+    """Common logic for chat completions and responses."""
+    if _openai_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail='Proxy server not initialized. Send requests to /create_engine then /call "initialize" first.',
+        )
+
+    with _lock:
+        if session_id not in _session_cache:
+            raise HTTPException(
+                status_code=410, detail=f"Session {session_id} already ended or expired"
+            )
+        session_data = _session_cache[session_id]
+
+    session_data.update_last_access()
+
+    sig = inspect.signature(create_fn)
+    areal_client_ignored_args = ["model"] + (extra_ignored_args or [])
+    areal_client_disallowed_args = ["areal_cache"]
+    areal_client_allowed_args = list(
+        k
+        for k in sig.parameters.keys()
+        if k not in areal_client_ignored_args and k not in areal_client_disallowed_args
+    )
+
+    kwargs = request.model_dump() if isinstance(request, BaseModel) else dict(request)
+    dropped_args = []
+    for k, v in kwargs.items():
+        if k not in areal_client_allowed_args:
+            dropped_args.append((k, v))
+
+    for k, _ in dropped_args:
+        del kwargs[k]
+
+    def _is_default_value(k: str, v: Any) -> bool:
+        if isinstance(request, BaseModel):
+            return v == type(request).model_fields[k].default
+        return False
+
+    dropped_non_default_args = [
+        (k, v)
+        for k, v in dropped_args
+        if k not in areal_client_ignored_args and not _is_default_value(k, v)
+    ]
+    if len(dropped_non_default_args):
+        dropped_args_str = "\n".join(
+            [f"  {k}: {v}" for k, v in dropped_non_default_args]
+        )
+        _warn_once(
+            f"dropped unsupported non-default arguments for areal client:\n"
+            f"{dropped_args_str}"
+        )
+
+    if "temperature" not in kwargs:
+        kwargs["temperature"] = 1.0
+        _warn_once("temperature not set in request, defaulting to 1.0")
+    if "top_p" not in kwargs:
+        kwargs["top_p"] = 1.0
+        _warn_once("top_p not set in request, defaulting to 1.0")
+
+    kwargs.pop("stream", None)
+    if stream:
+        kwargs["stream"] = True
+
+    try:
+        return await create_fn(areal_cache=session_data.completions, **kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+
+def _translate_anthropic_to_openai_request(anthropic_request: dict[str, Any]) -> dict:
+    """Translate an Anthropic Messages API request to OpenAI format."""
+    openai_request = _adapter.translate_completion_input_params(
+        anthropic_request.copy()
+    )
+    if openai_request is None:
+        raise ValueError("Failed to translate request")
+    openai_request = dict(openai_request)
+
+    if "messages" in openai_request:
+        for msg in openai_request["messages"]:
+            if isinstance(msg.get("content"), list):
+                text_parts = []
+                for block in msg["content"]:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                msg["content"] = "\n".join(text_parts)
+
+    return openai_request
+
+
+async def _safe_stream_wrapper(
+    stream: AsyncGenerator,
+) -> AsyncGenerator:
+    """Wrap an async generator to handle client disconnection gracefully."""
+    try:
+        async for chunk in stream:
+            yield chunk
+    except asyncio.CancelledError:
+        logger.info("Streaming cancelled by client disconnect")
+        raise
+    finally:
+        if hasattr(stream, "aclose"):
+            await stream.aclose()
+
+
 # =============================================================================
 # Admin Endpoints
 # =============================================================================
@@ -841,6 +960,18 @@ async def _cleanup_stale_sessions():
                 logger.info(
                     f"Cleaned up {len(orphaned_sids)} orphaned API key mappings"
                 )
+
+
+def cleanup_engine():
+    """Clean up engine on shutdown."""
+    global _engine
+    if _engine is not None:
+        try:
+            _engine.destroy()
+            logger.info("Engine destroyed successfully")
+        except Exception as e:
+            logger.error(f"Error destroying engine: {e}")
+        _engine = None
 
 
 # =============================================================================
