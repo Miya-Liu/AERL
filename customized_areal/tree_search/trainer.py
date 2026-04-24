@@ -399,6 +399,35 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 all_trajs.extend(trajs)
         return all_trajs
 
+    def _generate_from_dataloader(
+        self,
+        dataloader,
+        workflow,
+        workflow_kwargs=None,
+        group_size=1,
+    ) -> list[dict[str, Any]]:
+        """Generate new rollouts from dataloader prompts."""
+        from areal.utils.data import cycle_dataloader
+
+        if not hasattr(self, "_replay_dataloader_iter"):
+            self._replay_dataloader_iter = iter(cycle_dataloader(dataloader))
+
+        raw_batch = next(self._replay_dataloader_iter)
+        prompts = [item for item in raw_batch]
+        if prompts:
+            new_trajs = self.actor.rollout_batch(
+                prompts,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                group_size=group_size,
+            )
+            n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
+            logger.info(
+                f"Replay fallback: generated {n_new} new trajectories from dataloader"
+            )
+            return new_trajs
+        return []
+
     def _replay_prepare_batch(
         self,
         dataloader,

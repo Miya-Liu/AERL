@@ -1,5 +1,5 @@
 import torch
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.turn_splitter import Turn
@@ -305,4 +305,100 @@ class TestLoadUntrainedFromTreeStore:
         trainer.cache_config = RolloutCacheConfig(n_samples=4)
 
         result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert result == []
+
+
+class TestGenerateFromDataloader:
+    def test_lazy_init_and_generation(self):
+        """Should lazily init dataloader iter and call rollout_batch."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+        trainer._replay_dataloader_iter = None
+        del trainer._replay_dataloader_iter  # Remove the attribute
+
+        # Mock rollout_batch to return a fake trajectory
+        fake_traj = {
+            "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
+            "rewards": torch.tensor([[1.0]], dtype=torch.float32),
+        }
+        trainer.actor = MagicMock()
+        trainer.actor.rollout_batch = MagicMock(return_value=[fake_traj])
+
+        # Create a mock dataloader that yields batches
+        mock_dataloader = MagicMock()
+        mock_workflow = MagicMock()
+
+        # Create a simple iterable that yields a batch of prompts
+        mock_prompts = [{"messages": [{"role": "user", "content": "hello"}]}]
+
+        with patch(
+            "areal.utils.data.cycle_dataloader",
+            return_value=iter([mock_prompts]),
+        ):
+            result = CacheAwarePPOTrainer._generate_from_dataloader(
+                trainer,
+                dataloader=mock_dataloader,
+                workflow=mock_workflow,
+                workflow_kwargs=None,
+                group_size=1,
+            )
+
+        assert len(result) == 1
+        trainer.actor.rollout_batch.assert_called_once()
+
+    def test_reuses_existing_iterator(self):
+        """Should reuse existing _replay_dataloader_iter if already initialized."""
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+
+        # Pre-create a dataloader iterator
+        batch = [{"messages": [{"role": "user", "content": "test"}]}]
+        existing_iter = iter([batch, batch])
+        trainer._replay_dataloader_iter = existing_iter
+
+        fake_traj = {
+            "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
+            "rewards": torch.tensor([[1.0]], dtype=torch.float32),
+        }
+        trainer.actor = MagicMock()
+        trainer.actor.rollout_batch = MagicMock(return_value=[fake_traj])
+
+        result = CacheAwarePPOTrainer._generate_from_dataloader(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+            workflow_kwargs=None,
+            group_size=1,
+        )
+
+        assert len(result) == 1
+        # Verify it used the existing iterator (didn't create a new one)
+        assert trainer._replay_dataloader_iter is existing_iter
+
+    def test_returns_empty_on_empty_batch(self):
+        """Should return empty list when dataloader yields empty batch."""
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer._replay_dataloader_iter = iter([[]])
+
+        result = CacheAwarePPOTrainer._generate_from_dataloader(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+            workflow_kwargs=None,
+            group_size=1,
+        )
+
         assert result == []
