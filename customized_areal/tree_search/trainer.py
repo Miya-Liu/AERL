@@ -437,38 +437,46 @@ class CacheAwarePPOTrainer(PPOTrainer):
         group_size=1,
         dynamic_bs=False,
     ):
-        """Replay mode: load trajectories from recorded training history."""
+        """Replay mode with 3-level fallback: history -> cached untrained -> fresh generation."""
         global_step = self._replay_global_step
 
-        if global_step not in self.tree_store._training_history:
-            if not self.tree_store._training_history:
-                raise ValueError(
-                    "Cannot replay: no training history found in tree checkpoint. "
-                    "Run a training session first."
+        # Level 1: Replay from training history
+        if global_step in self.tree_store._training_history:
+            pairs = self.tree_store._training_history[global_step]
+            trajs = []
+            for query_id, seq_id in pairs:
+                traj = self.tree_store.load_trajectory_by_seq_id(query_id, seq_id)
+                if traj is not None:
+                    trajs.append(traj)
+                else:
+                    logger.warning(
+                        f"Replay: trajectory (query_id={query_id}, seq_id={seq_id}) "
+                        f"not found, skipping"
+                    )
+            if trajs:
+                self._replay_global_step += 1
+                logger.info(
+                    f"Replay step {global_step}: {len(trajs)} trajectories from history"
                 )
+                return trajs
             logger.warning(
-                f"Replay: no recorded trajectories for global_step {global_step}, "
-                f"skipping"
+                f"Replay step {global_step}: all trajectories missing, falling back"
             )
-            return []
 
-        pairs = self.tree_store._training_history[global_step]
-        trajs = []
-        for query_id, seq_id in pairs:
-            traj = self.tree_store.load_trajectory_by_seq_id(query_id, seq_id)
-            if traj is not None:
-                trajs.append(traj)
-            else:
-                logger.warning(
-                    f"Replay: trajectory (query_id={query_id}, seq_id={seq_id}) "
-                    f"not found, skipping"
-                )
+        # Level 2: Cached untrained from tree store
+        cached_trajs = self._load_untrained_from_tree_store()
+        if cached_trajs:
+            self._replay_global_step += 1
+            logger.info(
+                f"Replay step {global_step}: {len(cached_trajs)} cached untrained"
+            )
+            return cached_trajs
 
+        # Level 3: Fresh generation from dataloader
         self._replay_global_step += 1
-        logger.info(
-            f"Replay step {global_step}: loaded {len(trajs)} trajectories from history"
+        return self._generate_from_dataloader(
+            dataloader, workflow, workflow_kwargs, group_size
         )
-        return trajs
 
     def train(
         self,

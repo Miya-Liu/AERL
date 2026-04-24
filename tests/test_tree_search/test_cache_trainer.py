@@ -402,3 +402,150 @@ class TestGenerateFromDataloader:
         )
 
         assert result == []
+
+
+class TestReplayPrepareBatchFallback:
+    def test_level1_replay_returns_when_history_available(self):
+        """Level 1: Should return replay trajectories when history exists for the step."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+        store._training_history[0] = [("q1", s0), ("q2", s1)]
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4, replay=True)
+        trainer._replay_global_step = 0
+
+        result = CacheAwarePPOTrainer._replay_prepare_batch(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+        )
+
+        assert len(result) == 2
+        assert trainer._replay_global_step == 1
+
+    def test_level1_partial_load_still_returns(self):
+        """Level 1: Should return whatever was loaded even if some are missing."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        # Reference a non-existent seq_id
+        store._training_history[0] = [("q1", s0), ("q2", 999)]
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4, replay=True)
+        trainer._replay_global_step = 0
+
+        result = CacheAwarePPOTrainer._replay_prepare_batch(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+        )
+
+        assert len(result) == 1
+        assert result[0]["_mcts_query_id"] == "q1"
+
+    def test_level2_falls_to_cached_untrained(self):
+        """Level 2: Should fall back to cached untrained when replay step missing."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+        # Only history for step 0, not step 1
+        store._training_history[0] = [("q1", s0)]
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4, replay=True)
+        trainer._replay_global_step = 1  # No history for step 1
+        # Wire _load_untrained_from_tree_store to call the real method
+        trainer._load_untrained_from_tree_store = (
+            lambda: CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        )
+
+        result = CacheAwarePPOTrainer._replay_prepare_batch(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+        )
+
+        # s0 and s1 are both untrained (they were never marked trained)
+        assert len(result) >= 1
+        assert trainer._replay_global_step == 2
+
+    def test_level3_falls_to_dataloader_generation(self):
+        """Level 3: Should fall back to dataloader generation when no replay and no untrained."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.set_trained("q1", s0, True)
+        # History exists but for a different step
+        store._training_history[0] = [("q1", s0)]
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4, replay=True)
+        trainer._replay_global_step = 1  # No history for step 1
+
+        # Wire _load_untrained_from_tree_store to the real method (returns [])
+        trainer._load_untrained_from_tree_store = (
+            lambda: CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        )
+
+        # Mock _generate_from_dataloader
+        fake_traj = {
+            "input_ids": torch.tensor([[5, 6, 10, 7, 8]], dtype=torch.int32),
+            "rewards": torch.tensor([[0.5]], dtype=torch.float32),
+        }
+        trainer._generate_from_dataloader = MagicMock(return_value=[fake_traj])
+
+        result = CacheAwarePPOTrainer._replay_prepare_batch(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+        )
+
+        trainer._generate_from_dataloader.assert_called_once()
+        assert result == [fake_traj]
+        assert trainer._replay_global_step == 2
+
+    def test_level1_all_missing_falls_to_level2(self):
+        """Level 1: When all replay trajectories are missing, fall to Level 2."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        # History references only non-existent trajectories
+        store._training_history[0] = [("q99", 999)]
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4, replay=True)
+        trainer._replay_global_step = 0
+        # Wire _load_untrained_from_tree_store to call the real method
+        trainer._load_untrained_from_tree_store = (
+            lambda: CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        )
+
+        # Level 1 fails (all missing), Level 2 finds s0 untrained
+        result = CacheAwarePPOTrainer._replay_prepare_batch(
+            trainer,
+            dataloader=MagicMock(),
+            workflow=MagicMock(),
+        )
+
+        assert len(result) == 1
+        assert result[0]["_mcts_query_id"] == "q1"
