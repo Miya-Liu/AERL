@@ -542,9 +542,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
         finally:
             # Always restore original prepare_batch
             self.actor.prepare_batch = original_prepare_batch
-            # Clean up the dataloader iterator
+            # Clean up the dataloader iterator(s)
             if hasattr(self, "_cache_dataloader_iter"):
                 del self._cache_dataloader_iter
+            if hasattr(self, "_replay_dataloader_iter"):
+                del self._replay_dataloader_iter
 
     def close(self) -> None:
         if (
