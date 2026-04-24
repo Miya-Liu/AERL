@@ -767,6 +767,185 @@ def set_reward(
 
 
 # =============================================================================
+# OpenAI-Compatible Endpoints
+# =============================================================================
+
+
+@app.post(
+    f"/{CHAT_COMPLETIONS_PATHNAME}",
+    dependencies=[Depends(validate_json_request)],
+    response_model=None,
+)
+async def chat_completions(
+    request: CompletionCreateParams, session_id: str = Depends(_require_session_key)
+) -> ChatCompletion | StreamingResponse:
+    """OpenAI-compatible chat completions endpoint."""
+    if _openai_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail='Proxy server not initialized. Send requests to /create_engine then /call "initialize" first.',
+        )
+
+    is_streaming = request.get("stream") is True
+
+    if is_streaming:
+        openai_stream = None
+        try:
+            openai_stream = await _call_client_create(
+                create_fn=_openai_client.chat.completions.create,
+                request=request,
+                session_id=session_id,
+                stream=True,
+            )
+
+            async def _openai_sse_generator(
+                chunk_stream: AsyncGenerator[ChatCompletionChunk, None],
+            ) -> AsyncGenerator[str, None]:
+                async for chunk in chunk_stream:
+                    yield f"data: {chunk.model_dump_json()}\n\n"
+                yield "data: [DONE]\n\n"
+
+            safe_stream = _safe_stream_wrapper(_openai_sse_generator(openai_stream))
+
+            return StreamingResponse(
+                safe_stream,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except Exception as e:
+            if openai_stream is not None and hasattr(openai_stream, "aclose"):
+                await openai_stream.aclose()
+            logger.error(f"Error setting up streaming response: {e}")
+            raise HTTPException(status_code=500, detail=f"Streaming setup failed: {e}")
+
+    return await _call_client_create(
+        create_fn=_openai_client.chat.completions.create,
+        request=request,
+        session_id=session_id,
+    )
+
+
+@app.post(
+    f"/{RESPONSES_PATHNAME}",
+    dependencies=[Depends(validate_json_request)],
+)
+async def responses(
+    request: ResponseCreateParams, session_id: str = Depends(_require_session_key)
+) -> Response:
+    """OpenAI-compatible responses endpoint."""
+    if _openai_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail='Proxy server not initialized. Send requests to /create_engine then /call "initialize" first.',
+        )
+    return await _call_client_create(
+        create_fn=_openai_client.responses.create,
+        request=request,
+        session_id=session_id,
+    )
+
+
+@app.post(
+    f"/{ANTHROPIC_MESSAGES_PATHNAME}",
+    dependencies=[Depends(validate_json_request)],
+    response_model=None,
+)
+async def anthropic_messages(
+    raw_request: Request, session_id: str = Depends(_require_session_key)
+) -> Message | StreamingResponse:
+    """Anthropic Messages API compatible endpoint."""
+    if _openai_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail='Proxy server not initialized. Send requests to /create_engine then /call "initialize" first.',
+        )
+
+    anthropic_request = await raw_request.json()
+    is_streaming = anthropic_request.get("stream", False)
+
+    try:
+        openai_request = _translate_anthropic_to_openai_request(anthropic_request)
+    except (ValueError, TypeError, KeyError) as e:
+        logger.warning(
+            f"Failed to convert Anthropic request to OpenAI format due to invalid input: {e}"
+        )
+        raise HTTPException(
+            status_code=400, detail=f"Invalid Anthropic request format: {e}"
+        )
+    except Exception as e:
+        logger.error(
+            f"Unexpected error converting Anthropic request to OpenAI format: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail="Internal server error during request conversion."
+        )
+
+    if is_streaming:
+        openai_stream = None
+        try:
+            openai_stream = await _call_client_create(
+                create_fn=_openai_client.chat.completions.create,
+                request=openai_request,
+                session_id=session_id,
+                stream=True,
+            )
+
+            anthropic_sse_stream = (
+                _adapter.translate_completion_output_params_streaming(
+                    completion_stream=openai_stream,
+                    model=anthropic_request.get("model", "default"),
+                )
+            )
+
+            safe_stream = _safe_stream_wrapper(anthropic_sse_stream)
+
+            return StreamingResponse(
+                safe_stream,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        except Exception as e:
+            if openai_stream is not None and hasattr(openai_stream, "aclose"):
+                await openai_stream.aclose()
+            logger.error(f"Error setting up streaming response: {e}")
+            raise HTTPException(status_code=500, detail=f"Streaming setup failed: {e}")
+
+    # Non-streaming
+    openai_response = await _call_client_create(
+        create_fn=_openai_client.chat.completions.create,
+        request=openai_request,
+        session_id=session_id,
+        stream=False,
+    )
+
+    try:
+        openai_response_dict = openai_response.model_dump()
+        model_response = LitellmModelResponse(**openai_response_dict)
+        anthropic_response = _adapter.translate_completion_output_params(model_response)
+        if anthropic_response is None:
+            raise ValueError("Failed to translate response")
+
+        if "content" in anthropic_response and anthropic_response["content"]:
+            anthropic_response["content"] = [
+                block.model_dump() if hasattr(block, "model_dump") else block
+                for block in anthropic_response["content"]
+            ]
+        return Message(**anthropic_response)
+    except Exception as e:
+        logger.error(f"Failed to convert OpenAI response to Anthropic format: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to convert response: {e}")
+
+
+# =============================================================================
 # Token-Level Reward Endpoints (NEW)
 # =============================================================================
 
