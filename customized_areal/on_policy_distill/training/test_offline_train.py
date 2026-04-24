@@ -387,3 +387,145 @@ def test_parse_args_custom():
     assert args.num_epochs == 5
     assert args.batch_size == 8
     assert args.lr == 5e-7
+
+
+def test_loss_computation_end_to_end():
+    """End-to-end test of loss computation without FSDP2."""
+    from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
+    from customized_areal.on_policy_distill.training.logprobs import (
+        gather_logprobs_entropy_multi_candidates,
+    )
+    from customized_areal.on_policy_distill.training.loss import grpo_distill_loss_fn
+
+    from areal.api.cli_args import PPOActorConfig
+
+    config = PPOActorConfig(path="dummy", eps_clip=0.2, ppo_n_minibatches=1)
+    seq_len = 16
+    prompt_len = 4
+    vocab_size = 1024
+    num_candidates = 3
+
+    logits = torch.randn(1, seq_len, vocab_size, requires_grad=True)
+    input_ids = torch.randint(0, vocab_size, (1, seq_len))
+    loss_mask = torch.zeros(1, seq_len, dtype=torch.long)
+    loss_mask[:, prompt_len:] = 1
+
+    labels = torch.zeros(seq_len, num_candidates, dtype=torch.long)
+    for pos in range(prompt_len, seq_len):
+        labels[pos] = torch.randint(0, vocab_size, (num_candidates,))
+
+    logprobs, entropy = gather_logprobs_entropy_multi_candidates(
+        logits.squeeze(0),
+        labels,
+        temperature=1.0,
+    )
+
+    old_logp = logprobs.detach().clone() + torch.randn_like(logprobs) * 0.1
+    old_logp_chosen = old_logp[:, 0]
+    advantages = torch.randn(seq_len)
+
+    position_rewards = []
+    for pos in range(seq_len - prompt_len):
+        pr = PositionRewardInfo(
+            position=pos,
+            candidates=[f"tok_{i}" for i in range(num_candidates)],
+            candidate_token_ids=labels[pos + prompt_len].tolist(),
+            logprobs=old_logp[pos + prompt_len].tolist(),
+            rewards=(torch.randn(num_candidates) * 0.3).tolist(),
+            chosen_index=0,
+            sample_index=0,
+        )
+        position_rewards.append(pr)
+
+    input_data = {
+        "logprobs": old_logp_chosen,
+        "advantages": advantages,
+        "loss_mask": loss_mask.squeeze(0),
+        "position_rewards": position_rewards,
+        "rl_loss_weight": 1.0,
+        "distill_loss_weight": 0.005,
+    }
+
+    loss = grpo_distill_loss_fn(
+        logprobs=logprobs,
+        entropy=entropy,
+        input_data=input_data,
+        config=config,
+    )
+
+    assert torch.isfinite(loss), f"Loss should be finite, got {loss}"
+    assert loss.requires_grad, "Loss should have grad_fn"
+    loss.backward()
+    assert logits.grad is not None, "Logits should have gradients after backward"
+
+
+def test_mock_data_loss_computation():
+    """Test that mock data from generate_mock_batch produces valid loss."""
+    from customized_areal.on_policy_distill.training.loss import grpo_distill_loss_fn
+    from customized_areal.on_policy_distill.training.offline_train import (
+        generate_mock_batch,
+    )
+
+    from areal.api.cli_args import PPOActorConfig
+
+    config = PPOActorConfig(path="dummy", eps_clip=0.2, ppo_n_minibatches=1)
+    batch = generate_mock_batch(
+        batch_size=1, seq_len=32, prompt_len=8, num_candidates=3, vocab_size=1024
+    )
+
+    seq_len = batch["input_ids"].shape[1]
+    logprobs = torch.randn(seq_len, 3, requires_grad=True)
+    entropy = torch.randn(seq_len)
+
+    input_data = {
+        "logprobs": batch["logprobs"].squeeze(0),
+        "advantages": batch["advantages"].squeeze(0),
+        "loss_mask": batch["loss_mask"].squeeze(0),
+        "position_rewards": batch["position_rewards"],
+        "rl_loss_weight": 1.0,
+        "distill_loss_weight": 0.005,
+    }
+
+    loss = grpo_distill_loss_fn(
+        logprobs=logprobs,
+        entropy=entropy,
+        input_data=input_data,
+        config=config,
+    )
+
+    assert torch.isfinite(loss), f"Loss should be finite, got {loss}"
+    loss.backward()
+    assert logprobs.grad is not None
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires GPU")
+def test_training_loop_with_gpu():
+    """Test that the training loop runs with mock data on GPU."""
+    from customized_areal.on_policy_distill.training.offline_train import (
+        TrainingConfig,
+        run_training,
+    )
+
+    config = TrainingConfig(
+        model_path="",
+        data_path="",
+        output_dir="./test_checkpoints",
+        num_epochs=1,
+        batch_size=1,
+        seq_len=64,
+        prompt_len=8,
+        num_candidates=2,
+        lr=1e-6,
+        eps_clip=0.2,
+        save_every=0,
+        mock_data=True,
+        dtype="float32",  # Use float32 for testing to avoid precision issues
+        gradient_checkpointing=False,
+    )
+
+    # Should run without errors
+    result = run_training(config)
+    assert "final_loss" in result
+    assert torch.isfinite(torch.tensor(result["final_loss"])), (
+        "Final loss should be finite"
+    )

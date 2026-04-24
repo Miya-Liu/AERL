@@ -5,6 +5,8 @@ and parsing command-line arguments for offline training.
 """
 
 import argparse
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -156,5 +158,194 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="bfloat16",
         choices=["bfloat16", "float16", "float32"],
     )
-    parser.add_argument("--gradient_checkpointting", action="store_true", default=False)
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=False)
     return parser.parse_args(argv)
+
+
+@dataclass
+class TrainingConfig:
+    model_path: str = ""
+    data_path: str = ""
+    output_dir: str = "./checkpoints/distill"
+    num_epochs: int = 3
+    batch_size: int = 4
+    seq_len: int = 512
+    prompt_len: int = 128
+    num_candidates: int = 3
+    lr: float = 1e-6
+    eps_clip: float = 0.2
+    distill_loss_weight: float = 0.005
+    rl_loss_weight: float = 1.0
+    save_every: int = 100
+    vocab_size: int = 32000
+    mock_data: bool = True
+    dtype: str = "bfloat16"
+    gradient_checkpointing: bool = False
+
+
+def _save_checkpoint(engine, path: str) -> None:
+    from areal.api.io_struct import SaveLoadMeta
+
+    meta = SaveLoadMeta(
+        path=path,
+        weight_format="hf",
+        with_optim=True,
+        tokenizer=engine.tokenizer,
+        processor=None,
+    )
+    engine.save(meta)
+
+
+def run_training(config: TrainingConfig) -> dict[str, float]:
+    import functools
+
+    from customized_areal.on_policy_distill.engine.fsdp_engine import (
+        MultiCandidateFSDPEngine,
+    )
+    from customized_areal.on_policy_distill.training.actor import (
+        patch_ppo_actor_class_to_use_distill_loss,
+    )
+    from customized_areal.on_policy_distill.training.loss import grpo_distill_loss_fn
+
+    from areal.api.cli_args import FinetuneSpec, OptimizerConfig, PPOActorConfig
+    from areal.utils import logging as areal_logging
+
+    logger = areal_logging.getLogger("OfflineTrain")
+
+    # Patch PPOActor for distill loss
+    patch_ppo_actor_class_to_use_distill_loss()
+
+    # Create engine config
+    engine_config = PPOActorConfig(
+        path=config.model_path or "dummy",
+        dtype=config.dtype,
+        eps_clip=config.eps_clip,
+        ppo_n_minibatches=1,
+        gradient_checkpointing=config.gradient_checkpointing,
+        init_from_scratch=(config.model_path == ""),
+        optimizer=OptimizerConfig(type="adam", lr=config.lr),
+    )
+
+    # Create engine
+    engine = MultiCandidateFSDPEngine(engine_config)
+    engine.create_process_group()
+    ft_spec = FinetuneSpec(
+        total_train_epochs=config.num_epochs,
+        dataset_size=config.batch_size * 10,
+        train_batch_size=config.batch_size,
+    )
+    engine.initialize(addr=None, ft_spec=ft_spec)
+
+    # Prepare output directory
+    os.makedirs(config.output_dir, exist_ok=True)
+
+    step = 0
+    final_loss = 0.0
+
+    for epoch in range(config.num_epochs):
+        logger.info(f"Epoch {epoch + 1}/{config.num_epochs}")
+
+        # Determine number of batches per epoch
+        if config.mock_data or not config.data_path:
+            steps_per_epoch = 10
+        else:
+            data_dir = Path(config.data_path)
+            pt_files = sorted(data_dir.glob("*.pt"))
+            steps_per_epoch = max(len(pt_files), 1)
+
+        for batch_idx in range(steps_per_epoch):
+            # Load or generate batch
+            if config.mock_data or not config.data_path:
+                batch = generate_mock_batch(
+                    batch_size=config.batch_size,
+                    seq_len=config.seq_len,
+                    prompt_len=config.prompt_len,
+                    num_candidates=config.num_candidates,
+                    vocab_size=config.vocab_size,
+                )
+            else:
+                data_dir = Path(config.data_path)
+                pt_files = sorted(data_dir.glob("*.pt"))
+                if pt_files:
+                    batch = load_batch(pt_files[batch_idx % len(pt_files)])
+                else:
+                    batch = generate_mock_batch(
+                        batch_size=config.batch_size,
+                        seq_len=config.seq_len,
+                        prompt_len=config.prompt_len,
+                        num_candidates=config.num_candidates,
+                        vocab_size=config.vocab_size,
+                    )
+
+            # Move tensors to device
+            device = engine.device
+            for key in [
+                "input_ids",
+                "attention_mask",
+                "loss_mask",
+                "logprobs",
+                "advantages",
+            ]:
+                if key in batch and isinstance(batch[key], torch.Tensor):
+                    batch[key] = batch[key].to(device)
+
+            # Run training step
+            train_stat = engine.train_batch(
+                batch,
+                loss_fn=functools.partial(
+                    grpo_distill_loss_fn,
+                    config=engine_config,
+                    current_version=engine.get_version(),
+                ),
+                loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+            )
+
+            final_loss = train_stat.get("loss", 0.0)
+            if step % 10 == 0:
+                logger.info(
+                    f"Step {step} | Loss: {final_loss:.6f} | "
+                    f"Epoch {epoch + 1} Batch {batch_idx + 1}/{steps_per_epoch}"
+                )
+
+            # Save checkpoint
+            if config.save_every > 0 and step > 0 and step % config.save_every == 0:
+                ckpt_path = os.path.join(config.output_dir, f"step_{step}")
+                logger.info(f"Saving checkpoint to {ckpt_path}")
+                _save_checkpoint(engine, ckpt_path)
+
+            step += 1
+
+    # Final checkpoint
+    final_ckpt_path = os.path.join(config.output_dir, "final")
+    logger.info(f"Saving final checkpoint to {final_ckpt_path}")
+    _save_checkpoint(engine, final_ckpt_path)
+
+    return {"final_loss": final_loss}
+
+
+def main():
+    args = parse_args()
+    config = TrainingConfig(
+        model_path=args.model_path,
+        data_path=args.data_path,
+        output_dir=args.output_dir,
+        num_epochs=args.num_epochs,
+        batch_size=args.batch_size,
+        seq_len=args.seq_len,
+        prompt_len=args.prompt_len,
+        num_candidates=args.num_candidates,
+        lr=args.lr,
+        eps_clip=args.eps_clip,
+        distill_loss_weight=args.distill_loss_weight,
+        rl_loss_weight=args.rl_loss_weight,
+        save_every=args.save_every,
+        vocab_size=args.vocab_size,
+        mock_data=args.mock_data,
+        dtype=args.dtype,
+        gradient_checkpointing=args.gradient_checkpointing,
+    )
+    run_training(config)
+
+
+if __name__ == "__main__":
+    main()
