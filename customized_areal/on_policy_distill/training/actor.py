@@ -46,6 +46,22 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
         """PPO update using grpo_distill_loss_fn."""
         from ..training.loss import grpo_distill_loss_fn
 
+        # Log reward stats before removing them (Bug 2 fix)
+        reward_score = data.get("rewards")
+        if reward_score is not None and isinstance(reward_score, torch.Tensor):
+            attn_mask = data.get("attention_mask")
+            if attn_mask is not None:
+                stats_tracker.stat(
+                    task_reward=reward_score.float(),
+                    denominator="n_seqs",
+                )
+            correct_n = (reward_score > 0).bool()
+            incorrect_n = (reward_score <= 0).bool()
+            stats_tracker.denominator(
+                correct_n_seqs=correct_n,
+                incorrect_n_seqs=incorrect_n,
+            )
+
         for key in ["rewards", "tot_rewards", "kl_rewards"]:
             data.pop(key, None)
 
@@ -83,19 +99,6 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
                     loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
                 )
                 stats_tracker.scalar(**train_stat)
-
-            # Log critical denominator stats
-            loss_mask = data.get("loss_mask")
-            if loss_mask is not None:
-                if isinstance(loss_mask, torch.Tensor):
-                    n_valid = loss_mask.count_nonzero().item()
-                else:
-                    n_valid = sum(
-                        mb["loss_mask"].count_nonzero().item()
-                        for mb in mb_inputs.mbs
-                        if "loss_mask" in mb
-                    )
-                stats_tracker.denominator(n_valid_tokens=n_valid)
 
     PPOActor._ppo_update = _ppo_update_with_distill_loss
     _patch_applied = True

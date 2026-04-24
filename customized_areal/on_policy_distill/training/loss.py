@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import torch
 
-from areal.api.cli_args import PPOActorConfig
 from areal.trainer.ppo.stats import infer_token_denominator
 from areal.utils import stats_tracker
 
@@ -25,7 +24,7 @@ def grpo_distill_loss_fn(
     logprobs: torch.Tensor,
     entropy: torch.Tensor,
     input_data: dict,
-    config: PPOActorConfig,
+    config,
     current_version: int | None = None,
     vocab_min_logits: torch.Tensor | None = None,
     vocab_max_logits: torch.Tensor | None = None,
@@ -74,13 +73,14 @@ def grpo_distill_loss_fn(
     old_logp = input_data["logprobs"]
     advantages = input_data["advantages"]
     loss_mask = input_data["loss_mask"].bool()
+
     prox_logp_gt = input_data.get("prox_logp")
 
     entropy = entropy.detach()
 
     coeffs = _resolve_proximal_logp(
         prox_logp_gt=prox_logp_gt,
-        prox_logp_method=config.prox_clip,
+        prox_logp_method=getattr(config, "prox_clip", "recompute"),
         old_logp=old_logp,
         logprobs=logprobs.detach() if logprobs.dim() == 1 else logprobs[:, 0].detach(),
         versions=input_data.get("versions"),
@@ -113,26 +113,36 @@ def grpo_distill_loss_fn(
         rl_loss_weight = input_data.get("rl_loss_weight", 1.0)
         distill_loss_weight = input_data.get("distill_loss_weight", 0.005)
 
-        # Determine prompt length from loss_mask (0 = prompt, 1 = output)
-        # PositionRewardInfo.position is 0-indexed from the first output token,
-        # but logprobs[seq_len, num_candidates] includes prompt tokens.
-        # We need prompt_len to offset positions correctly.
-        loss_mask_flat = loss_mask.squeeze(0) if loss_mask.dim() > 1 else loss_mask
-        prompt_len = 0
-        for i in range(loss_mask_flat.shape[0]):
-            if loss_mask_flat[i]:
-                prompt_len = i
-                break
+        # Determine prompt length per sample from loss_mask (0 = prompt, 1 = output)
+        # Bug 3 fix: compute prompt_len per sample for correct position offsetting
+        if loss_mask.dim() > 1:
+            # [batch, seq_len] -> compute per-sample prompt_len
+            prompt_lens = []
+            for b in range(loss_mask.shape[0]):
+                pl = 0
+                for i in range(loss_mask.shape[1]):
+                    if loss_mask[b, i]:
+                        pl = i
+                        break
+                prompt_lens.append(pl)
+        else:
+            # [seq_len] -> single sample
+            prompt_len = 0
+            for i in range(loss_mask.shape[0]):
+                if loss_mask[i]:
+                    prompt_len = i
+                    break
+            prompt_lens = [prompt_len]
 
         position_grpo_loss = _compute_position_level_grpo_loss(
             position_rewards=position_rewards,
             logprobs=logprobs,
             loss_mask=loss_mask,
-            prompt_len=prompt_len,
+            prompt_lens=prompt_lens,
         )
 
         loss = rl_loss_weight * loss + distill_loss_weight * position_grpo_loss
-        distill_stat = position_grpo_loss
+        distill_stat = position_grpo_loss.detach()
 
     stats_tracker.denominator(
         n_tokens=infer_token_denominator(input_data, loss_mask),
@@ -142,8 +152,15 @@ def grpo_distill_loss_fn(
     )
 
     if distill_stat is not None:
+        # Expand distill_stat to match the shape of loss_mask for stats_tracker
+        distill_loss_expanded = torch.full(
+            loss_mask.shape,
+            distill_stat.item(),
+            dtype=torch.float32,
+            device=loss_mask.device,
+        )
         stats_tracker.stat(
-            distill_loss=distill_stat,
+            distill_loss=distill_loss_expanded,
             denominator="n_valid_tokens",
         )
 
@@ -220,7 +237,7 @@ def _compute_position_level_grpo_loss(
     position_rewards: list,
     logprobs: torch.Tensor,
     loss_mask: torch.Tensor,
-    prompt_len: int,
+    prompt_lens: list[int] | int = 0,
 ) -> torch.Tensor:
     """Compute position-level GRPO loss using pre-computed multi-candidate logprobs.
 
@@ -262,10 +279,20 @@ def _compute_position_level_grpo_loss(
     for pr in position_rewards:
         if not pr.rewards:
             continue
-        # Offset position: PositionRewardInfo.position is 0-indexed from
-        # the first output token, but logprobs includes prompt tokens.
-        position = pr.position + prompt_len
+        # Bug 3 fix: use per-sample prompt_len
+        if isinstance(prompt_lens, list):
+            pl = (
+                prompt_lens[pr.sample_index]
+                if pr.sample_index < len(prompt_lens)
+                else 0
+            )
+        else:
+            pl = prompt_lens
+        position = pr.position + pl
+        # Bug 5 fix: clamp position to valid range instead of silently skipping
         if position >= logprobs.shape[0]:
+            position = logprobs.shape[0] - 1
+        if position < 0:
             continue
         num_candidates = min(len(pr.rewards), max_candidates)
         positions.append(position)
@@ -339,17 +366,14 @@ def _compute_position_level_grpo_loss(
     )
 
     # Pad or truncate to match loss_mask output length
-    output_len = loss_mask.sum().item()
-    if output_len <= 0:
-        output_len = 1
+    # Bug 4 fix: avoid .item() GPU-CPU sync by keeping computation on GPU
+    output_len = loss_mask.sum()
     n_loss = loss_per_position.shape[0]
     if n_loss < output_len:
-        padding = torch.zeros(
-            int(output_len) - n_loss, dtype=torch.float32, device=device
-        )
+        padding = torch.zeros((output_len - n_loss), dtype=torch.float32, device=device)
         loss_per_position = torch.cat([loss_per_position, padding])
     elif n_loss > output_len:
-        loss_per_position = loss_per_position[: int(output_len)]
+        loss_per_position = loss_per_position[:output_len]
 
-    grpo_loss = loss_per_position.sum() / loss_mask.sum().clamp(min=1)
+    grpo_loss = loss_per_position.sum() / loss_mask.sum().clamp(min=1).float()
     return grpo_loss
