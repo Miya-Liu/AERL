@@ -406,7 +406,6 @@ def test_loss_computation_end_to_end():
     num_candidates = 3
 
     logits = torch.randn(1, seq_len, vocab_size, requires_grad=True)
-    input_ids = torch.randint(0, vocab_size, (1, seq_len))
     loss_mask = torch.zeros(1, seq_len, dtype=torch.long)
     loss_mask[:, prompt_len:] = 1
 
