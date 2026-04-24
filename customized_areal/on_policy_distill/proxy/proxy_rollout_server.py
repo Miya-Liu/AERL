@@ -15,19 +15,39 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hmac
+import inspect
 import os
 import secrets
 import threading
+import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any
 
 import uvicorn
+from anthropic.types.message import Message
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import StreamingResponse
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    AnthropicAdapter,
+)
+from litellm.types.utils import ModelResponse as LitellmModelResponse
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+from openai.types.chat.completion_create_params import CompletionCreateParams
+from openai.types.responses import Response
+from openai.types.responses.response_create_params import ResponseCreateParams
 
 # Import from areal base server
+from areal.api.cli_args import NameResolveConfig, OpenAIProxyConfig
+from areal.experimental.openai.client import ArealOpenAI
 from areal.experimental.openai.proxy.server import (
+    ANTHROPIC_MESSAGES_PATHNAME,
+    CHAT_COMPLETIONS_PATHNAME,
     DEFAULT_ADMIN_API_KEY,
     EXPORT_TRAJECTORIES_PATHNAME,
     GRANT_CAPACITY_PATHNAME,
+    RESPONSES_PATHNAME,
     RL_END_SESSION_PATHNAME,
     RL_SET_REWARD_PATHNAME,
     RL_START_SESSION_PATHNAME,
@@ -37,8 +57,14 @@ from areal.experimental.openai.proxy.server import (
     SetRewardRequest,
     StartSessionRequest,
     StartSessionResponse,
+    serialize_interactions,
 )
+from areal.infra.rpc.serialization import deserialize_value, serialize_value
+from areal.utils import name_resolve, names, seeding
+from areal.utils.dynamic_import import import_from_string
+from areal.utils.hf_utils import load_hf_tokenizer
 from areal.utils.logging import getLogger
+from areal.utils.network import find_free_ports, gethostip
 
 # Import from local server module
 from .server import (
@@ -51,6 +77,9 @@ from .server import (
     SetTokenRewardsRequest,
     TokenRewardSessionData,
 )
+
+if TYPE_CHECKING:
+    from areal.api import InferenceEngine
 
 logger = getLogger("TokenRewardProxyServer")
 
@@ -194,6 +223,28 @@ _session_to_api_key: dict[str, str] = {}
 # Server config
 _server_host: str = "0.0.0.0"
 _server_port: int = 8000
+
+# Engine and client (created via /create_engine and /call with method "initialize")
+_engine: InferenceEngine | None = None
+_openai_client: ArealOpenAI | None = None
+
+# Port allocation tracking
+_allocated_ports: set[int] = set()
+_port_alloc_lock = asyncio.Lock()
+
+# Session cleanup timing
+_last_cleanup_time: float = 0
+_session_timeout_seconds: int = 3600  # Overridden by _setup_openai_client()
+
+# Name_resolve config (needed for cluster registration)
+_experiment_name: str | None = None
+_trial_name: str | None = None
+_name_resolve_type: str = "nfs"
+_nfs_record_root: str = "/tmp/areal/name_resolve"
+_etcd3_addr: str = "localhost:2379"
+
+# Anthropic request adapter
+_adapter = AnthropicAdapter()
 
 
 # =============================================================================
