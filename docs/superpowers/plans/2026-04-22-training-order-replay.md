@@ -1,32 +1,41 @@
 # Training Order Recording & Replay Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Record the exact order of trajectories used at each training step in `CacheAwarePPOTrainer` (stored in trie leaf nodes and store-level history), and support deterministic replay of previous training runs using cached trajectories only.
+**Goal:** Record the exact order of trajectories used at each training step in
+`CacheAwarePPOTrainer` (stored in trie leaf nodes and store-level history), and support
+deterministic replay of previous training runs using cached trajectories only.
 
-**Architecture:** Add `training_steps` list to `TrieNode` leaf nodes and `_training_history` dict to `MCTSTreeStore`. Inject `_global_step` into trajectory dicts before `compute_advantages`. In the patched method, call `record_training_step` to persist order. Add a `replay` mode to `RolloutCacheConfig` that loads from `_training_history` instead of the dataloader.
+**Architecture:** Add `training_steps` list to `TrieNode` leaf nodes and
+`_training_history` dict to `MCTSTreeStore`. Inject `_global_step` into trajectory dicts
+before `compute_advantages`. In the patched method, call `record_training_step` to
+persist order. Add a `replay` mode to `RolloutCacheConfig` that loads from
+`_training_history` instead of the dataloader.
 
 **Tech Stack:** Python 3.12+ | PyTorch | dataclasses | JSON serialization
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|----------------|
-| `customized_areal/tree_search/trie_node.py` | Add `training_steps` field to `TrieNode` |
+| File                                              | Responsibility                                                                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `customized_areal/tree_search/trie_node.py`       | Add `training_steps` field to `TrieNode`                                                                                       |
 | `customized_areal/tree_search/mcts_tree_store.py` | Add `_training_history`, `record_training_step()`, `load_trajectory_by_seq_id()`, `build_training_history()`, update `clear()` |
-| `customized_areal/tree_search/checkpoint.py` | Serialize/deserialize `training_steps` on nodes and `_training_history` in metadata |
-| `customized_areal/tree_search/config.py` | Add `replay: bool` to `RolloutCacheConfig` |
-| `customized_areal/tree_search/trainer.py` | Call `record_training_step` in patched method; add replay mode to `_cache_aware_prepare_batch` |
-| `areal/trainer/rl_trainer.py` | Inject `_global_step` on trajectories before `compute_advantages` |
-| `tests/test_tree_search/test_mcts_tree_store.py` | Unit tests for all new functionality |
+| `customized_areal/tree_search/checkpoint.py`      | Serialize/deserialize `training_steps` on nodes and `_training_history` in metadata                                            |
+| `customized_areal/tree_search/config.py`          | Add `replay: bool` to `RolloutCacheConfig`                                                                                     |
+| `customized_areal/tree_search/trainer.py`         | Call `record_training_step` in patched method; add replay mode to `_cache_aware_prepare_batch`                                 |
+| `areal/trainer/rl_trainer.py`                     | Inject `_global_step` on trajectories before `compute_advantages`                                                              |
+| `tests/test_tree_search/test_mcts_tree_store.py`  | Unit tests for all new functionality                                                                                           |
 
----
+______________________________________________________________________
 
 ### Task 1: Add `training_steps` field to TrieNode
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trie_node.py:10-28`
 
 - [ ] **Step 1: Write the failing test**
@@ -52,12 +61,15 @@ class TestTrieNodeTrainingSteps:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeTrainingSteps -v`
-Expected: FAIL — `TrieNode.__init__()` got an unexpected keyword argument `training_steps` (or similar TypeError from dataclass)
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeTrainingSteps -v`
+Expected: FAIL — `TrieNode.__init__()` got an unexpected keyword argument
+`training_steps` (or similar TypeError from dataclass)
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/trie_node.py`, add `training_steps` field to the `TrieNode` dataclass:
+In `customized_areal/tree_search/trie_node.py`, add `training_steps` field to the
+`TrieNode` dataclass:
 
 ```python
 @dataclass
@@ -78,13 +90,14 @@ class TrieNode:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeTrainingSteps -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeTrainingSteps -v`
 Expected: PASS
 
 - [ ] **Step 5: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All existing tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+existing tests PASS
 
 - [ ] **Step 6: Commit**
 
@@ -93,12 +106,14 @@ git add customized_areal/tree_search/trie_node.py tests/test_tree_search/test_mc
 git commit -m "feat(tree-search): add training_steps field to TrieNode"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Add `record_training_step` to MCTSTreeStore
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:42-368`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -172,12 +187,15 @@ class TestMCTSTreeStoreRecordTrainingStep:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreRecordTrainingStep -v`
-Expected: FAIL — `AttributeError: 'MCTSTreeStore' object has no attribute 'record_training_step'`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreRecordTrainingStep -v`
+Expected: FAIL —
+`AttributeError: 'MCTSTreeStore' object has no attribute 'record_training_step'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/mcts_tree_store.py`, add `_training_history` to `__init__` and implement `record_training_step`:
+In `customized_areal/tree_search/mcts_tree_store.py`, add `_training_history` to
+`__init__` and implement `record_training_step`:
 
 In `__init__`, add after `self._rewards`:
 
@@ -251,13 +269,14 @@ def clear(self) -> None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreRecordTrainingStep -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreRecordTrainingStep -v`
 Expected: PASS
 
 - [ ] **Step 5: Run all tree search tests**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 6: Commit**
 
@@ -266,12 +285,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add record_training_step and _training_history to MCTSTreeStore"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Add `load_trajectory_by_seq_id` to MCTSTreeStore
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -312,8 +333,10 @@ class TestMCTSTreeStoreLoadBySeqId:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadBySeqId -v`
-Expected: FAIL — `AttributeError: 'MCTSTreeStore' object has no attribute 'load_trajectory_by_seq_id'`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadBySeqId -v`
+Expected: FAIL —
+`AttributeError: 'MCTSTreeStore' object has no attribute 'load_trajectory_by_seq_id'`
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -384,7 +407,8 @@ def load_trajectory_by_seq_id(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadBySeqId -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadBySeqId -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -394,12 +418,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add load_trajectory_by_seq_id to MCTSTreeStore"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Add `build_training_history` to MCTSTreeStore
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -448,12 +474,15 @@ class TestMCTSTreeStoreBuildTrainingHistory:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store_store.py::TestMCTSTreeStoreBuildTrainingHistory -v`
-Expected: FAIL — `AttributeError: 'MCTSTreeStore' object has no attribute 'build_training_history'`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store_store.py::TestMCTSTreeStoreBuildTrainingHistory -v`
+Expected: FAIL —
+`AttributeError: 'MCTSTreeStore' object has no attribute 'build_training_history'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `customized_areal/tree_search/mcts_tree_store.py`, after `load_trajectory_by_seq_id`:
+Add to `customized_areal/tree_search/mcts_tree_store.py`, after
+`load_trajectory_by_seq_id`:
 
 ```python
 def build_training_history(self) -> None:
@@ -495,7 +524,8 @@ def build_training_history(self) -> None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreBuildTrainingHistory -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreBuildTrainingHistory -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -505,12 +535,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add build_training_history to MCTSTreeStore"
 ```
 
----
+______________________________________________________________________
 
-### Task 5: Update TreeCheckpointManager for training_steps and _training_history
+### Task 5: Update TreeCheckpointManager for training_steps and \_training_history
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py:83-122`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -574,12 +606,15 @@ class TestTreeCheckpointTrainingHistory:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTreeCheckpointTrainingHistory -v`
-Expected: FAIL — `training_steps` not serialized/deserialized, `training_history` not in metadata
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTreeCheckpointTrainingHistory -v`
+Expected: FAIL — `training_steps` not serialized/deserialized, `training_history` not in
+metadata
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/checkpoint.py`, update `_serialize_node` to include `training_steps`:
+In `customized_areal/tree_search/checkpoint.py`, update `_serialize_node` to include
+`training_steps`:
 
 ```python
 def _serialize_node(self, node: TrieNode) -> dict:
@@ -709,13 +744,14 @@ def load(self, turn_splitter: Callable[[list[int]], list[Turn]]) -> MCTSTreeStor
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTreeCheckpointTrainingHistory -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTreeCheckpointTrainingHistory -v`
 Expected: PASS
 
 - [ ] **Step 5: Run all tree search tests**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 6: Commit**
 
@@ -724,11 +760,12 @@ git add customized_areal/tree_search/checkpoint.py tests/test_tree_search/test_m
 git commit -m "feat(tree-search): serialize training_steps and _training_history in checkpoints"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Add `replay` field to RolloutCacheConfig
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/config.py:18-22`
 
 - [ ] **Step 1: Write the failing test**
@@ -752,7 +789,8 @@ class TestRolloutCacheConfig:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestRolloutCacheConfig -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestRolloutCacheConfig -v`
 Expected: FAIL — `__init__()` got an unexpected keyword argument `replay`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -770,7 +808,8 @@ class RolloutCacheConfig:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestRolloutCacheConfig -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestRolloutCacheConfig -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -780,17 +819,20 @@ git add customized_areal/tree_search/config.py tests/test_tree_search/test_mcts_
 git commit -m "feat(tree-search): add replay field to RolloutCacheConfig"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Inject `_global_step` in RLTrainer and call `record_training_step` in patched method
 
 **Files:**
+
 - Modify: `areal/trainer/rl_trainer.py:650`
+
 - Modify: `customized_areal/tree_search/trainer.py:75-91`
 
 - [ ] **Step 1: Inject `_global_step` in RLTrainer.train() loop**
 
-In `areal/trainer/rl_trainer.py`, right before the `compute_advantages` call at line 650, add the injection:
+In `areal/trainer/rl_trainer.py`, right before the `compute_advantages` call at line
+650, add the injection:
 
 ```python
             # Inject global_step into trajectories for tree backup recording
@@ -808,9 +850,11 @@ In `areal/trainer/rl_trainer.py`, right before the `compute_advantages` call at 
                 adv_batch = self.actor.compute_advantages(rollout_batch)
 ```
 
-- [ ] **Step 2: Call `record_training_step` in the patched `_tree_backup_compute_advantages`**
+- [ ] **Step 2: Call `record_training_step` in the patched
+  `_tree_backup_compute_advantages`**
 
-In `customized_areal/tree_search/trainer.py`, update the patched method to call `record_training_step` after marking trained:
+In `customized_areal/tree_search/trainer.py`, update the patched method to call
+`record_training_step` after marking trained:
 
 ```python
     def _tree_backup_compute_advantages(
@@ -837,8 +881,8 @@ In `customized_areal/tree_search/trainer.py`, update the patched method to call 
 
 - [ ] **Step 3: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 4: Commit**
 
@@ -847,16 +891,18 @@ git add areal/trainer/rl_trainer.py customized_areal/tree_search/trainer.py
 git commit -m "feat(tree-search): inject _global_step and call record_training_step in patched method"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Add replay mode to CacheAwarePPOTrainer
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py:219-433`
 
 - [ ] **Step 1: Write the replay `_cache_aware_prepare_batch` override**
 
-In `customized_areal/tree_search/trainer.py`, add a `_replay_prepare_batch` method to `CacheAwarePPOTrainer`:
+In `customized_areal/tree_search/trainer.py`, add a `_replay_prepare_batch` method to
+`CacheAwarePPOTrainer`:
 
 ```python
 def _replay_prepare_batch(
@@ -908,7 +954,8 @@ def _replay_prepare_batch(
 
 - [ ] **Step 2: Update `__init__` to handle replay mode**
 
-In `CacheAwarePPOTrainer.__init__`, add replay initialization after the existing cache setup block (after the `logger.info` call around line 280):
+In `CacheAwarePPOTrainer.__init__`, add replay initialization after the existing cache
+setup block (after the `logger.info` call around line 280):
 
 ```python
             if self.cache_config.replay:
@@ -928,7 +975,9 @@ In `CacheAwarePPOTrainer.__init__`, add replay initialization after the existing
 
 - [ ] **Step 3: Update `train()` to use replay prepare_batch**
 
-In `CacheAwarePPOTrainer.train()`, add replay branch. The existing monkey-patch logic (lines 387-433) currently always uses `_cache_aware_prepare_batch`. For replay, use `_replay_prepare_batch` instead:
+In `CacheAwarePPOTrainer.train()`, add replay branch. The existing monkey-patch logic
+(lines 387-433) currently always uses `_cache_aware_prepare_batch`. For replay, use
+`_replay_prepare_batch` instead:
 
 Replace the monkey-patch section:
 
@@ -961,13 +1010,12 @@ Replace the monkey-patch section:
 
 - [ ] **Step 4: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 5: Run pre-commit**
 
-Run: `pre-commit run --all-files`
-Expected: All checks PASS (fix any issues)
+Run: `pre-commit run --all-files` Expected: All checks PASS (fix any issues)
 
 - [ ] **Step 6: Commit**
 
@@ -976,11 +1024,12 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "feat(tree-search): add replay mode to CacheAwarePPOTrainer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Final integration test
 
 **Files:**
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write integration test for full record-replay cycle**
@@ -1086,18 +1135,18 @@ class TestTrainingOrderReplayIntegration:
 
 - [ ] **Step 2: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrainingOrderReplayIntegration -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrainingOrderReplayIntegration -v`
 Expected: PASS
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+tests PASS
 
 - [ ] **Step 4: Run pre-commit**
 
-Run: `pre-commit run --all-files`
-Expected: All checks PASS (fix any issues)
+Run: `pre-commit run --all-files` Expected: All checks PASS (fix any issues)
 
 - [ ] **Step 5: Commit**
 
@@ -1106,28 +1155,36 @@ git add tests/test_tree_search/test_mcts_tree_store.py
 git commit -m "test(tree-search): add integration tests for training order record-replay"
 ```
 
----
+______________________________________________________________________
 
 ## Self-Review Checklist
 
 **1. Spec coverage:**
+
 - TrieNode `training_steps` field → Task 1
 - `record_training_step()` with leaf annotation + `_training_history` → Task 2
 - `load_trajectory_by_seq_id()` → Task 3
 - `build_training_history()` fallback → Task 4
-- Checkpoint serialization (training_steps + _training_history) → Task 5
+- Checkpoint serialization (training_steps + \_training_history) → Task 5
 - `RolloutCacheConfig.replay` field → Task 6
 - `_global_step` injection + call in patched method → Task 7
 - Replay mode in CacheAwarePPOTrainer → Task 8
 - Integration test → Task 9
-- Error handling (empty history, missing trajectories, missing `_global_step`) → covered in Task 2 (skip on None global_step), Task 8 (ValueError on empty, warnings on missing)
+- Error handling (empty history, missing trajectories, missing `_global_step`) → covered
+  in Task 2 (skip on None global_step), Task 8 (ValueError on empty, warnings on
+  missing)
 - `clear()` update → Task 2
 
-**2. Placeholder scan:** No TBD/TODO/fill-in-later found. All steps contain complete code.
+**2. Placeholder scan:** No TBD/TODO/fill-in-later found. All steps contain complete
+code.
 
 **3. Type consistency:**
+
 - `training_steps: list[int]` — consistent across TrieNode, serialization, tests
-- `_training_history: dict[int, list[tuple[str, int]]]` — consistent across MCTSTreeStore, serialization (converted to `list[list]` for JSON), tests
-- `record_training_step(global_step: int | None, trajectories: list[dict])` — consistent between MCTSTreeStore method and trainer call
-- `load_trajectory_by_seq_id(query_id: str, seq_id: int) -> dict | None` — consistent usage in replay
+- `_training_history: dict[int, list[tuple[str, int]]]` — consistent across
+  MCTSTreeStore, serialization (converted to `list[list]` for JSON), tests
+- `record_training_step(global_step: int | None, trajectories: list[dict])` — consistent
+  between MCTSTreeStore method and trainer call
+- `load_trajectory_by_seq_id(query_id: str, seq_id: int) -> dict | None` — consistent
+  usage in replay
 - `RolloutCacheConfig.replay: bool = False` — consistent usage in trainer

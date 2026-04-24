@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 from customized_areal.tpfc.scripts.benchmark_run import entrypoint
 
+
 def main():
     dotenv.load_dotenv()
 
@@ -48,7 +49,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "new_trained_add_audio_video_change_doc_tool",
+        "trained_add_audio_video_change_doc_tool_0424",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

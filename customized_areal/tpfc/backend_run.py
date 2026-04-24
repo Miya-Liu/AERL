@@ -45,7 +45,7 @@ except ImportError:
     logger = logging.getLogger("BackendRun")
 
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
-DEFAULT_AGENT_ID = '2b211050-6993-4f4c-87f3-2c23b46a96b6'
+DEFAULT_AGENT_ID = "2b211050-6993-4f4c-87f3-2c23b46a96b6"
 # DEFAULT_AGENT_ID = None
 
 DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
@@ -275,7 +275,7 @@ def _prepare_form_data(
         "task_id": task_id,
         "prompt": task_description,
         "agent_id": agent_id,
-        "training_mode": True
+        "training_mode": True,
     }
     if model_name is not None:
         form_data["model_name"] = model_name
@@ -384,9 +384,7 @@ async def _wait_for_agent_run(
         return timeout - (time.time() - start_time)
 
     if api_base_url and auth_token:
-        stream_url = (
-            f"{api_base_url}/api/tasks/{task_id}/stream?token={auth_token}"
-        )
+        stream_url = f"{api_base_url}/api/tasks/{task_id}/stream?token={auth_token}"
         sse_retry_delay = 1.0
 
         while _time_left() > 0:

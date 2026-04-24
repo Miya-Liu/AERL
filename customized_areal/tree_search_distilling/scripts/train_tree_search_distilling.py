@@ -9,7 +9,7 @@ When no teacher is configured, student position-level logprobs are still
 saved for logging, with zero distillation rewards.
 
 Usage:
-uv run customized_areal/tpfc/scripts/train_tpfc_tree_distill.py  --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct.yaml workflow=customized_areal.tpfc.tpfc_agent.TPFCAgent +cache_dir=customized_areal/tpfc/data/tree_cache 
+uv run customized_areal/tpfc/scripts/train_tpfc_tree_distill.py  --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct.yaml workflow=customized_areal.tpfc.tpfc_agent.TPFCAgent +cache_dir=customized_areal/tpfc/data/tree_cache
 """
 
 # ruff: noqa: E402

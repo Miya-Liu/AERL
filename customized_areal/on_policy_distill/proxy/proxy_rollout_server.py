@@ -440,6 +440,11 @@ def set_reward(
             )
         session_data = _session_cache[session_id]
 
+    if session_data.is_completed:
+        raise HTTPException(
+            status_code=409, detail=f"Session {session_id} is already finished"
+        )
+
     session_data.update_last_access()
 
     completions = session_data.completions
@@ -484,6 +489,11 @@ def set_token_rewards(
             )
         session_data = _session_cache[session_id]
 
+    if session_data.is_completed:
+        raise HTTPException(
+            status_code=409, detail=f"Session {session_id} is already finished"
+        )
+
     session_data.update_last_access()
 
     # Resolve interaction_id if not provided
@@ -510,7 +520,10 @@ def set_token_rewards(
                 )
 
     # Store token-level rewards
-    session_data.set_token_rewards(interaction_id, token_rewards)
+    try:
+        session_data.set_token_rewards(interaction_id, token_rewards)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     logger.info(
         f"Set {len(token_rewards)} token rewards for {interaction_id}: "
@@ -538,6 +551,11 @@ def set_position_rewards(
                 status_code=410, detail=f"Session {session_id} already ended or expired"
             )
         session_data = _session_cache[session_id]
+
+    if session_data.is_completed:
+        raise HTTPException(
+            status_code=409, detail=f"Session {session_id} is already finished"
+        )
 
     session_data.update_last_access()
 
@@ -567,7 +585,10 @@ def set_position_rewards(
         )
 
     # Store position-level rewards
-    session_data.set_position_rewards(interaction_id, pr_dataclasses)
+    try:
+        session_data.set_position_rewards(interaction_id, pr_dataclasses)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     logger.info(
         f"Set position-wise rewards for {interaction_id}: "
@@ -629,11 +650,15 @@ async def _cleanup_stale_sessions():
             # Sweep orphaned API key mappings whose session_id is no longer
             # in cache. Handles edge case where client crashes after
             # end_session but before export_trajectories.
-            orphaned_sids = [sid for sid in _session_to_api_key if sid not in _session_cache]
+            orphaned_sids = [
+                sid for sid in _session_to_api_key if sid not in _session_cache
+            ]
             for sid in orphaned_sids:
                 _remove_api_keys_for_session(sid)
             if orphaned_sids:
-                logger.info(f"Cleaned up {len(orphaned_sids)} orphaned API key mappings")
+                logger.info(
+                    f"Cleaned up {len(orphaned_sids)} orphaned API key mappings"
+                )
 
 
 # =============================================================================

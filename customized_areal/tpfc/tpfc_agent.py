@@ -96,15 +96,10 @@ class TPFCAgent:
         agent = TPFCAgent()
         reward = await agent.run(data={"prompt": "task description", "answer": "ground_truth"}, **extra_kwargs)
 
-    Attributes:
-        default_agent_id: Default agent ID for TPFC agent runs.
     """
-
-    default_agent_id: str = "8bba75cb-0d87-4efe-b566-87de77335b76"
 
     def __init__(
         self,
-        agent_id: str | None = None,
         user_id: str | None = None,
         train_id: str | None = None,
         trial_name: str | None = None,
@@ -118,7 +113,6 @@ class TPFCAgent:
         Initialize TPFC Agent.
 
         Args:
-            agent_id: Optional agent ID to use. Falls back to default_agent_id.
             user_id: Optional user ID for authentication.
             train_id: Optional training run ID to tag agent runs with.
             trial_name: Optional AReaL trial name to tag agent runs with.
@@ -128,7 +122,6 @@ class TPFCAgent:
             judge_api_key: API key for the judge LLM.
             **kwargs: Additional configuration options (ignored but accepted for compatibility).
         """
-        self.agent_id = agent_id or self.default_agent_id
         self.user_id = user_id
         self.train_id = train_id
         self.trial_name = trial_name
@@ -165,74 +158,76 @@ class TPFCAgent:
             RuntimeError: If agent run fails to start.
             TimeoutError: If agent run doesn't complete within timeout.
         """
-        # Extract task description from messages
-        messages = data.get("messages", [])
-        if messages:
-            task_description = messages[-1].get("content", "")
-        else:
-            task_description = data.get("prompt", "")
+        try:
+            # Extract task description from messages
+            messages = data.get("messages", [])
+            if messages:
+                task_description = messages[-1].get("content", "")
+            else:
+                task_description = data.get("prompt", "")
 
-        # Extract ground truth for reward calculation
-        gt = data.get("answer", "")
+            # Extract ground truth for reward calculation
+            gt = data.get("answer", "")
 
-        # Extract image paths from dataset (new files_path column)
-        task_file_path = data.get("files_path", [])
-        if task_file_path is None:
-            task_file_path = []
+            # Extract image paths from dataset (new files_path column)
+            task_file_path = data.get("files_path", [])
+            if task_file_path is None:
+                task_file_path = []
 
-        # Get OpenAI proxy parameters (passed by OpenAIProxyWorkflow._run_agent)
-        base_url = extra_kwargs.get("base_url")
-        http_client = extra_kwargs.get("http_client")
-        api_key = extra_kwargs.get("api_key")
+            # Get OpenAI proxy parameters (passed by OpenAIProxyWorkflow._run_agent)
+            base_url = extra_kwargs.get("base_url")
+            http_client = extra_kwargs.get("http_client")
+            api_key = extra_kwargs.get("api_key")
 
-        logger.info(
-            "TPFCAgent starting run: task=%s, agent_id=%s, has_ground_truth=%s, base_url=%s, n_images=%d",
-            task_description[:100] if task_description else None,
-            self.agent_id,
-            bool(gt),
-            base_url,
-            len(task_file_path),
-        )
+            logger.info(
+                "TPFCAgent starting run: task=%s, has_ground_truth=%s, base_url=%s, n_images=%d",
+                task_description[:100] if task_description else None,
+                bool(gt),
+                base_url,
+                len(task_file_path),
+            )
 
-        # Build tags for traceability
-        tags = []
-        if self.trial_name:
-            tags.extend(self.trial_name.split("&"))
-        if self.train_id:
-            tags.append(f"train_id={self.train_id}")
-        if self.user_id:
-            tags.append(f"user_id={self.user_id}")
+            # Build tags for traceability
+            tags = []
+            if self.trial_name:
+                tags.extend(self.trial_name.split("&"))
+            if self.train_id:
+                tags.append(f"train_id={self.train_id}")
+            if self.user_id:
+                tags.append(f"user_id={self.user_id}")
 
-        # Execute the backend run
-        completion_messages, _final_answer, _log_path, _trace = await run_backend(
-            task_description=task_description,
-            task_file_path=task_file_path,
-            log_path="./log.json",
-            task_id="",
-            gt=gt,
-            tags=tags,
-            user_id=self.user_id,
-            model_name=self.model_name,
-            agent_id=self.agent_id,
-            base_url=base_url,
-            api_key=api_key,
-        )
+            # Execute the backend run
+            completion_messages, _final_answer, _log_path, _trace = await run_backend(
+                task_description=task_description,
+                task_file_path=task_file_path,
+                log_path="./log.json",
+                task_id="",
+                gt=gt,
+                tags=tags,
+                user_id=self.user_id,
+                model_name=self.model_name,
+                base_url=base_url,
+                api_key=api_key,
+            )
 
-        # Calculate reward using reward function
-        reward_fn = AsyncRewardWrapper(tpfc_reward_fn)
-        reward = await reward_fn(
-            completions=completion_messages,
-            gt=gt,
-            user_query=task_description,
-            judge_model_name=self.judge_model_name,
-            judge_base_url=self.judge_base_url,
-            judge_api_key=self.judge_api_key,
-        )
+            # Calculate reward using reward function
+            reward_fn = AsyncRewardWrapper(tpfc_reward_fn)
+            reward = await reward_fn(
+                completions=completion_messages,
+                gt=gt,
+                user_query=task_description,
+                judge_model_name=self.judge_model_name,
+                judge_base_url=self.judge_base_url,
+                judge_api_key=self.judge_api_key,
+            )
 
-        logger.info(
-            "TPFCAgent run completed: message_count=%d, reward=%.4f",
-            len(completion_messages),
-            reward,
-        )
+            logger.info(
+                "TPFCAgent run completed: message_count=%d, reward=%.4f",
+                len(completion_messages),
+                reward,
+            )
 
-        return float(reward)
+            return float(reward)
+        except Exception as exc:
+            logger.warning("TPFCAgent run failed: %s", exc)
+            return 0.0

@@ -33,8 +33,8 @@ from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTraine
 
 from areal.api.cli_args import load_expr_config
 from areal.utils import logging
-from areal.utils.hf_utils import load_hf_tokenizer
 from areal.utils.dynamic_import import import_from_string
+from areal.utils.hf_utils import load_hf_tokenizer
 
 logger = logging.getLogger("TrainTPFCTreeDistill")
 
@@ -49,7 +49,9 @@ def _resolve_agent(workflow_path: str):
     try:
         cls = import_from_string(workflow_path)
     except (ImportError, AttributeError):
-        logger.warning("Could not import workflow=%s, using default agent", workflow_path)
+        logger.warning(
+            "Could not import workflow=%s, using default agent", workflow_path
+        )
         return None
 
     if isinstance(cls, type) and hasattr(cls, "run"):

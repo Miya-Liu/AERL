@@ -24,7 +24,7 @@ TPFC_CONFIG = {
                     "document_reading_tool",
                     "sb_files_tool",
                     "audio_analysis_tool",
-                    "video_analysis_tool"
+                    "video_analysis_tool",
                 ]
             ],
             "mcp": [],

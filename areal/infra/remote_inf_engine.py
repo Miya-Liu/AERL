@@ -842,9 +842,7 @@ class RemoteInfEngine(InferenceEngine):
                 accumulated_routed_experts.append(gen_result.routed_experts)
             # Accumulate top-k logprobs if available
             if gen_result.output_top_logprobs is not None:
-                accumulated_output_top_logprobs.extend(
-                    gen_result.output_top_logprobs
-                )
+                accumulated_output_top_logprobs.extend(gen_result.output_top_logprobs)
 
             # Update request for next iteration
             req.input_ids += gen_result.output_tokens

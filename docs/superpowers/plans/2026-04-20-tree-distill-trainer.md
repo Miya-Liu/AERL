@@ -1,30 +1,40 @@
 # TreeDistillPPOTrainer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create a combined trainer that uses MCTS tree backup advantages with on-policy distillation loss and rollout caching, plus a student-only logprobs path when no teacher is configured.
+**Goal:** Create a combined trainer that uses MCTS tree backup advantages with on-policy
+distillation loss and rollout caching, plus a student-only logprobs path when no teacher
+is configured.
 
-**Architecture:** `TreeDistillPPOTrainer` inherits from `CacheAwarePPOTrainer` and layers on distillation via the `OnPolicyDistillationTrainer` pattern (monkey-patching `PPOActor._ppo_update` + using `MultiCandidateFSDPPPOActor`). A new helper `_build_student_only_position_rewards` constructs `PositionRewardInfo` from student top-k logprobs when no teacher is present.
+**Architecture:** `TreeDistillPPOTrainer` inherits from `CacheAwarePPOTrainer` and
+layers on distillation via the `OnPolicyDistillationTrainer` pattern (monkey-patching
+`PPOActor._ppo_update` + using `MultiCandidateFSDPPPOActor`). A new helper
+`_build_student_only_position_rewards` constructs `PositionRewardInfo` from student
+top-k logprobs when no teacher is present.
 
-**Tech Stack:** Python 3.12+, PyTorch, AReaL framework, existing `customized_areal` modules
+**Tech Stack:** Python 3.12+, PyTorch, AReaL framework, existing `customized_areal`
+modules
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| Action | File | Responsibility |
-|--------|------|----------------|
-| Create | `customized_areal/tree_search_distilling/__init__.py` | Module exports |
-| Create | `customized_areal/tree_search_distilling/trainer.py` | TreeDistillPPOTrainer class |
-| Create | `customized_areal/tree_search_distilling/agent.py` | TreeDistillAgent with student-only position rewards |
-| Create | `customized_areal/tree_search_distilling/scripts/train_tree_search_distilling.py` | Entry point script |
-| Create | `customized_areal/tree_search_distilling/configs/config_tree_search_distilling.yaml` | Training config |
+| Action | File                                                                                 | Responsibility                                      |
+| ------ | ------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| Create | `customized_areal/tree_search_distilling/__init__.py`                                | Module exports                                      |
+| Create | `customized_areal/tree_search_distilling/trainer.py`                                 | TreeDistillPPOTrainer class                         |
+| Create | `customized_areal/tree_search_distilling/agent.py`                                   | TreeDistillAgent with student-only position rewards |
+| Create | `customized_areal/tree_search_distilling/scripts/train_tree_search_distilling.py`    | Entry point script                                  |
+| Create | `customized_areal/tree_search_distilling/configs/config_tree_search_distilling.yaml` | Training config                                     |
 
----
+______________________________________________________________________
 
 ### Task 1: Create module structure and `__init__.py`
 
 **Files:**
+
 - Create: `customized_areal/tree_search_distilling/__init__.py`
 
 - [ ] **Step 1: Create directory and `__init__.py`**
@@ -55,7 +65,8 @@ mkdir -p customized_areal/tree_search_distilling/configs
 cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.tree_search_distilling import TreeDistillPPOTrainer; print('Import OK')"
 ```
 
-Expected: `ImportError` (trainer.py doesn't exist yet). That's fine — this step just verifies the directory structure and `__init__.py` are in place.
+Expected: `ImportError` (trainer.py doesn't exist yet). That's fine — this step just
+verifies the directory structure and `__init__.py` are in place.
 
 - [ ] **Step 4: Commit**
 
@@ -64,14 +75,17 @@ git add customized_areal/tree_search_distilling/__init__.py
 git commit -m "feat(tree-search-distilling): add module structure and __init__.py"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Create `TreeDistillAgent` with student-only position rewards
 
 **Files:**
+
 - Create: `customized_areal/tree_search_distilling/agent.py`
 
-This agent extends `OnPolicyDistillAgent` to add a student-only path that builds `PositionRewardInfo` objects from the student's top-k logprobs when no teacher is configured.
+This agent extends `OnPolicyDistillAgent` to add a student-only path that builds
+`PositionRewardInfo` objects from the student's top-k logprobs when no teacher is
+configured.
 
 - [ ] **Step 1: Create `agent.py`**
 
@@ -292,13 +306,16 @@ git add customized_areal/tree_search_distilling/agent.py
 git commit -m "feat(tree-search-distilling): add TreeDistillAgent with student-only position rewards"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Create `TreeDistillPPOTrainer`
 
 **Files:**
+
 - Create: `customized_areal/tree_search_distilling/trainer.py`
-- Modify: `customized_areal/tree_search_distilling/__init__.py` (update imports after trainer is created)
+
+- Modify: `customized_areal/tree_search_distilling/__init__.py` (update imports after
+  trainer is created)
 
 - [ ] **Step 1: Create `trainer.py`**
 
@@ -507,12 +524,14 @@ git add customized_areal/tree_search_distilling/trainer.py
 git commit -m "feat(tree-search-distilling): add TreeDistillPPOTrainer combining tree backup and distillation"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Create entry point script
 
 **Files:**
-- Create: `customized_areal/tree_search_distilling/scripts/train_tree_search_distilling.py`
+
+- Create:
+  `customized_areal/tree_search_distilling/scripts/train_tree_search_distilling.py`
 
 - [ ] **Step 1: Create the training script**
 
@@ -619,12 +638,14 @@ git add customized_areal/tree_search_distilling/scripts/train_tree_search_distil
 git commit -m "feat(tree-search-distilling): add training entry point script"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Create YAML config
 
 **Files:**
-- Create: `customized_areal/tree_search_distilling/configs/config_tree_search_distilling.yaml`
+
+- Create:
+  `customized_areal/tree_search_distilling/configs/config_tree_search_distilling.yaml`
 
 - [ ] **Step 1: Create the config file**
 
@@ -863,11 +884,12 @@ git add customized_areal/tree_search_distilling/configs/config_tree_search_disti
 git commit -m "feat(tree-search-distilling): add training config YAML"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: End-to-end import verification and lint
 
 **Files:**
+
 - All files created in Tasks 1-5
 
 - [ ] **Step 1: Run full import verification**
@@ -882,7 +904,8 @@ print(f'TreeDistillPPOTrainer MRO: {[c.__name__ for c in T.__mro__]}')
 "
 ```
 
-Expected: `All imports OK` and MRO showing `TreeDistillPPOTrainer -> CacheAwarePPOTrainer -> PPOTrainer -> ...`
+Expected: `All imports OK` and MRO showing
+`TreeDistillPPOTrainer -> CacheAwarePPOTrainer -> PPOTrainer -> ...`
 
 - [ ] **Step 2: Run pre-commit on new files**
 
@@ -927,26 +950,26 @@ Expected: `_build_student_only_position_rewards: all tests passed`
 git add -u && git commit -m "style: apply pre-commit formatting fixes"
 ```
 
----
+______________________________________________________________________
 
 ## Self-Review Checklist
 
 ### Spec Coverage
 
-| Spec Requirement | Task |
-|---|---|
-| Inherit from CacheAwarePPOTrainer | Task 3 |
-| Patch PPOActor._ppo_update with grpo_distill_loss_fn | Task 3 (in `__init__`) |
-| Use MultiCandidateFSDPPPOActor | Task 3 (`_create_actor`) |
-| Initialize OpenAIProxyWorkflow with agent | Task 3 (`_init_components`) |
-| MCTS tree backup (inherited from CacheAwarePPOTrainer) | Task 3 (via super()) |
-| Rollout caching (inherited from CacheAwarePPOTrainer) | Task 3 (via super()) |
-| Student-only position rewards when no teacher | Task 2 (`_build_student_only_position_rewards`) |
-| Teacher position rewards when teacher configured | Task 2 (inherits from OnPolicyDistillAgent) |
-| Entry point script | Task 4 |
-| YAML config | Task 5 |
-| FSDP-only constraint | Task 3 (`_create_actor` raises ValueError) |
-| File location: `customized_areal/tree_search_distilling/` | Tasks 1-5 |
+| Spec Requirement                                          | Task                                            |
+| --------------------------------------------------------- | ----------------------------------------------- |
+| Inherit from CacheAwarePPOTrainer                         | Task 3                                          |
+| Patch PPOActor.\_ppo_update with grpo_distill_loss_fn     | Task 3 (in `__init__`)                          |
+| Use MultiCandidateFSDPPPOActor                            | Task 3 (`_create_actor`)                        |
+| Initialize OpenAIProxyWorkflow with agent                 | Task 3 (`_init_components`)                     |
+| MCTS tree backup (inherited from CacheAwarePPOTrainer)    | Task 3 (via super())                            |
+| Rollout caching (inherited from CacheAwarePPOTrainer)     | Task 3 (via super())                            |
+| Student-only position rewards when no teacher             | Task 2 (`_build_student_only_position_rewards`) |
+| Teacher position rewards when teacher configured          | Task 2 (inherits from OnPolicyDistillAgent)     |
+| Entry point script                                        | Task 4                                          |
+| YAML config                                               | Task 5                                          |
+| FSDP-only constraint                                      | Task 3 (`_create_actor` raises ValueError)      |
+| File location: `customized_areal/tree_search_distilling/` | Tasks 1-5                                       |
 
 ### Placeholder Scan
 
@@ -954,7 +977,12 @@ No TBD, TODO, or incomplete sections found. All steps contain complete code.
 
 ### Type Consistency
 
-- `_build_student_only_position_rewards` returns `list[PositionRewardInfo]` — matches what `OnPolicyDistillAgent.run()` returns when teacher is present.
-- `TreeDistillAgent.run()` return type is `float | dict[str, dict[str, Any]]` — matches parent class interface.
-- `TreeDistillPPOTrainer.__init__` signature matches `CacheAwarePPOTrainer` plus `workflow` and `agent` params from `OnPolicyDistillationTrainer`.
-- Config types: `cache_config: RolloutCacheConfig | None`, `tree_backup_config: TreeBackupConfig | None` — matches `CacheAwarePPOTrainer` signature.
+- `_build_student_only_position_rewards` returns `list[PositionRewardInfo]` — matches
+  what `OnPolicyDistillAgent.run()` returns when teacher is present.
+- `TreeDistillAgent.run()` return type is `float | dict[str, dict[str, Any]]` — matches
+  parent class interface.
+- `TreeDistillPPOTrainer.__init__` signature matches `CacheAwarePPOTrainer` plus
+  `workflow` and `agent` params from `OnPolicyDistillationTrainer`.
+- Config types: `cache_config: RolloutCacheConfig | None`,
+  `tree_backup_config: TreeBackupConfig | None` — matches `CacheAwarePPOTrainer`
+  signature.

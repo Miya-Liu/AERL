@@ -18,23 +18,19 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
-from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo as CachePRI
+from customized_areal.on_policy_distill.proxy.cache import (
+    PositionRewardInfo as CachePRI,
+)
 from customized_areal.on_policy_distill.proxy.proxy_rollout_server import (
     _admin_api_key,
-    _api_key_to_session,
-    _capacity,
     _session_cache,
     _session_to_api_key,
     app,
     deserialize_interactions_with_position_rewards,
 )
-from customized_areal.on_policy_distill.proxy.server import (
-    PositionRewardInfo as ServerPRI,
-)
 from customized_areal.on_policy_distill.proxy.types import (
     InteractionWithTokenLevelReward,
 )
-
 
 # =============================================================================
 # Helpers
@@ -196,9 +192,7 @@ class TestTokenRewardsRoundTrip:
         assert interaction.reward == 0.0
 
     @pytest.mark.asyncio
-    async def test_set_token_rewards_last_interaction(
-        self, client, admin_headers
-    ):
+    async def test_set_token_rewards_last_interaction(self, client, admin_headers):
         session_id, session_key, session_headers = await _start_session(
             client, admin_headers
         )
@@ -290,9 +284,7 @@ class TestPositionRewardsRoundTrip:
         assert token_rewards[5:] == pytest.approx([0.5, 0.2, 0.9])
 
     @pytest.mark.asyncio
-    async def test_position_rewards_with_logprobs_survive(
-        self, client, admin_headers
-    ):
+    async def test_position_rewards_with_logprobs_survive(self, client, admin_headers):
         session_id, session_key, session_headers = await _start_session(
             client, admin_headers
         )
@@ -480,9 +472,7 @@ class TestFullWorkflowEpisode:
         import uvicorn
 
         port = _find_free_port()
-        config = uvicorn.Config(
-            app, host="127.0.0.1", port=port, log_level="error"
-        )
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -539,9 +529,7 @@ class TestFullWorkflowEpisode:
                             chosen_index=2,
                         ),
                     ]
-                    await proxy_client.set_position_rewards(
-                        "comp-test", pos_rewards
-                    )
+                    await proxy_client.set_position_rewards("comp-test", pos_rewards)
 
                 # Return dict with position rewards + scalar reward
                 return {
@@ -574,9 +562,7 @@ class TestFullWorkflowEpisode:
             # The session should have been created by now
             for sid, sdata in _session_cache.items():
                 if len(sdata.completions) == 0:
-                    sdata.completions["comp-test"] = _make_mock_interaction(
-                        reward=0.0
-                    )
+                    sdata.completions["comp-test"] = _make_mock_interaction(reward=0.0)
                     break
 
         workflow._grant_capacity = patched_grant
@@ -585,9 +571,7 @@ class TestFullWorkflowEpisode:
             "customized_areal.on_policy_distill.proxy.workflow.workflow_context"
         ) as mock_ctx:
             mock_ctx.get.return_value = Mock(task_id=123)
-            mock_ctx.get_aiohttp_session = AsyncMock(
-                return_value=AsyncMock()
-            )
+            mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
             mock_ctx.get_httpx_client = AsyncMock(return_value=AsyncMock())
             mock_ctx.stat_scope = Mock(return_value="test")
 
@@ -650,9 +634,7 @@ class TestFullWorkflowEpisode:
             await original_grant(session)
             for sid, sdata in _session_cache.items():
                 if len(sdata.completions) == 0:
-                    sdata.completions["comp-test"] = _make_mock_interaction(
-                        reward=0.0
-                    )
+                    sdata.completions["comp-test"] = _make_mock_interaction(reward=0.0)
                     break
 
         workflow._grant_capacity = patched_grant
@@ -661,9 +643,7 @@ class TestFullWorkflowEpisode:
             "customized_areal.on_policy_distill.proxy.workflow.workflow_context"
         ) as mock_ctx:
             mock_ctx.get.return_value = Mock(task_id=456)
-            mock_ctx.get_aiohttp_session = AsyncMock(
-                return_value=AsyncMock()
-            )
+            mock_ctx.get_aiohttp_session = AsyncMock(return_value=AsyncMock())
             mock_ctx.get_httpx_client = AsyncMock(return_value=AsyncMock())
             mock_ctx.stat_scope = Mock(return_value="test")
 
@@ -713,6 +693,7 @@ class TestGPUWithSGLang:
     def sglang_server(self):
         """Start the base proxy_rollout_server with SGLang support."""
         import uvicorn
+
         from areal.experimental.openai.proxy.proxy_rollout_server import (
             app as base_app,
         )

@@ -68,9 +68,7 @@ class TreeCheckpointManager:
         # Restore training_history (absent in old checkpoints)
         training_history_data = metadata.get("training_history", {})
         for step_str, pairs in training_history_data.items():
-            store._training_history[int(step_str)] = [
-                (qid, sid) for qid, sid in pairs
-            ]
+            store._training_history[int(step_str)] = [(qid, sid) for qid, sid in pairs]
 
         for filename in os.listdir(self.save_dir):
             if not filename.startswith("query_") or not filename.endswith(".json"):

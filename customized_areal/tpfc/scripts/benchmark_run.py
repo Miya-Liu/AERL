@@ -694,7 +694,7 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 1, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 10, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
@@ -715,7 +715,7 @@ def main():
             # "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
             # "api_key": "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",  # Set your API key here or via CLI
             "base_url": "http://10.254.94.128:8443/service-large-544-1773728352034/llm/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",   # Set your API key here or via CLI
+            "api_key": "Rl44TWGlj7Nn06txRhLrmgLf888A768jvxZc6Xm1gD7mtcrz2Vrg0pNH8rdP8mg688jl8Xdcq7MSB7Anzp8pf8XgnK7168R2267ZBS5dSlzbGhr6rwB5t6ZcP5wn6w7t",  # Set your API key here or via CLI
         }
     )
 
@@ -723,11 +723,11 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_retry_think_fixtool_0422",
+        "base_add_audio_video_change_doc_tool_0424",
         # "compression_1w",
         f"level_{cfg.level}",
     ]
-    
+
     cfg.output_dir = f"logs/{'-'.join(cfg.tags[:-1])}/{cfg.tags[-1]}"
 
     asyncio.run(entrypoint(cfg))

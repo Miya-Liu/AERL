@@ -3,29 +3,29 @@
 ## Goal
 
 Add an HTTP server integration test that verifies the on-policy distillation proxy
-components (cache, server, workflow) work correctly together end-to-end. The test
-spins up the real FastAPI app via `httpx.AsyncClient` and sends actual HTTP requests
-through the ASGI stack, exercising real serialization, session management, and
-reward handling without requiring GPU or LLM backends.
+components (cache, server, workflow) work correctly together end-to-end. The test spins
+up the real FastAPI app via `httpx.AsyncClient` and sends actual HTTP requests through
+the ASGI stack, exercising real serialization, session management, and reward handling
+without requiring GPU or LLM backends.
 
 ## Scope
 
 Four test scenarios covering the critical data flows:
 
 1. **Token rewards round-trip** — set token rewards via HTTP, export, verify
-2. **Position rewards round-trip** — set position rewards via HTTP, export, verify
+1. **Position rewards round-trip** — set position rewards via HTTP, export, verify
    derived token rewards
-3. **Scalar/position reward separation** — set both scalar and position rewards,
-   verify scalar reward is preserved (not overwritten)
-4. **Full workflow episode** — `OpenAIProxyWorkflow.arun_episode` against the real
+1. **Scalar/position reward separation** — set both scalar and position rewards, verify
+   scalar reward is preserved (not overwritten)
+1. **Full workflow episode** — `OpenAIProxyWorkflow.arun_episode` against the real
    server, verify tensor dict has `position_rewards` with correct `sample_index`
 
 ## Approach
 
-Use `httpx.AsyncClient(app=app)` to send HTTP requests through the real FastAPI
-ASGI stack. This tests real route handlers, Pydantic validation, session state
-management, serialization/deserialization, and export logic — without subprocess,
-port binding, or LLM dependencies.
+Use `httpx.AsyncClient(app=app)` to send HTTP requests through the real FastAPI ASGI
+stack. This tests real route handlers, Pydantic validation, session state management,
+serialization/deserialization, and export logic — without subprocess, port binding, or
+LLM dependencies.
 
 ### What's Real
 
@@ -38,10 +38,10 @@ port binding, or LLM dependencies.
 
 ### What's Mocked
 
-- LLM chat/completions calls (mock interactions injected directly into session
-  data via `session_data.completions["id"] = mock_interaction`)
-- `workflow_context` module (mock `task_id`, `get_aiohttp_session`,
-  `get_httpx_client`) — only for Scenario 4
+- LLM chat/completions calls (mock interactions injected directly into session data via
+  `session_data.completions["id"] = mock_interaction`)
+- `workflow_context` module (mock `task_id`, `get_aiohttp_session`, `get_httpx_client`)
+  — only for Scenario 4
 - The agent's `run()` method returns pre-defined rewards — only for Scenario 4
 
 ## Test File
@@ -166,8 +166,8 @@ async def session_with_interaction(proxy_http_client, admin_headers, make_mock_i
 
 ### `live_server`
 
-Start the FastAPI app on a real port via uvicorn in a background thread.
-Needed for Scenario 4 where the workflow's `OpenAIProxyClient` uses aiohttp:
+Start the FastAPI app on a real port via uvicorn in a background thread. Needed for
+Scenario 4 where the workflow's `OpenAIProxyClient` uses aiohttp:
 
 ```python
 @pytest.fixture
@@ -235,12 +235,12 @@ async def live_server():
 
 **Key design consideration**: The `OpenAIProxyWorkflow` creates an `OpenAIProxyClient`
 internally, which uses `aiohttp.ClientSession` for HTTP requests. Since
-`httpx.AsyncClient(app=app)` only handles httpx requests, we need to start the
-FastAPI server on a real port for this scenario so aiohttp can reach it.
+`httpx.AsyncClient(app=app)` only handles httpx requests, we need to start the FastAPI
+server on a real port for this scenario so aiohttp can reach it.
 
 **Approach**: Use `uvicorn` in a background thread to serve the app on a random
-available port. The test finds the port and passes it to the workflow. The thread
-is stopped in the fixture teardown.
+available port. The test finds the port and passes it to the workflow. The thread is
+stopped in the fixture teardown.
 
 ```
 1. Start FastAPI app on real port via uvicorn in background thread
@@ -267,8 +267,8 @@ is stopped in the fixture teardown.
 ## Risk: Global State in proxy_rollout_server
 
 The server module uses module-level globals (`_session_cache`, `_admin_api_key`, etc.).
-The `reset_server_state` fixture clears these between tests. Tests must run
-sequentially (no parallelism within this file) to avoid state conflicts.
+The `reset_server_state` fixture clears these between tests. Tests must run sequentially
+(no parallelism within this file) to avoid state conflicts.
 
 ## Out of Scope
 

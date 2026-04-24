@@ -1,35 +1,44 @@
 # Rollout Cache with Tree Backup Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add rollout caching to MCTS tree structures so that training runs can reuse previously-generated trajectories, only generating the remaining samples needed for a GRPO group.
+**Goal:** Add rollout caching to MCTS tree structures so that training runs can reuse
+previously-generated trajectories, only generating the remaining samples needed for a
+GRPO group.
 
-**Architecture:** Extend TrieNode with logprobs/versions, add trained-flag tracking and trajectory extraction to MCTSTreeStore, update TreeCheckpointManager for new fields, then create CacheAwarePPOTrainer that patches the PPOTrainer training loop to check cache before inference.
+**Architecture:** Extend TrieNode with logprobs/versions, add trained-flag tracking and
+trajectory extraction to MCTSTreeStore, update TreeCheckpointManager for new fields,
+then create CacheAwarePPOTrainer that patches the PPOTrainer training loop to check
+cache before inference.
 
 **Tech Stack:** Python 3.12+ | PyTorch | AReaL PPOTrainer | MCTS Tree Store
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|---------------|
-| `customized_areal/tree_search/trie_node.py` | Extended TrieNode with logprobs, versions fields |
-| `customized_areal/tree_search/mcts_tree_store.py` | Trained tracking, reward storage, trajectory extraction, cache-aware batch insert |
-| `customized_areal/tree_search/checkpoint.py` | Serialize/deserialize new fields (logprobs, versions, trained, rewards) |
-| `customized_areal/tree_search/config.py` | RolloutCacheConfig dataclass |
-| `customized_areal/tree_search/trainer.py` | CacheAwarePPOTrainer class |
-| `customized_areal/on_policy_distill/scripts/train_with_cache.py` | Training script entry point |
-| `tests/test_tree_search/test_mcts_tree_store.py` | Existing test file, extend with new tests |
-| `tests/test_tree_search/test_checkpoint_extended.py` | New test file for extended checkpoint round-trip |
-| `tests/test_tree_search/test_cache_trainer.py` | New test file for CacheAwarePPOTrainer |
+| File                                                             | Responsibility                                                                    |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `customized_areal/tree_search/trie_node.py`                      | Extended TrieNode with logprobs, versions fields                                  |
+| `customized_areal/tree_search/mcts_tree_store.py`                | Trained tracking, reward storage, trajectory extraction, cache-aware batch insert |
+| `customized_areal/tree_search/checkpoint.py`                     | Serialize/deserialize new fields (logprobs, versions, trained, rewards)           |
+| `customized_areal/tree_search/config.py`                         | RolloutCacheConfig dataclass                                                      |
+| `customized_areal/tree_search/trainer.py`                        | CacheAwarePPOTrainer class                                                        |
+| `customized_areal/on_policy_distill/scripts/train_with_cache.py` | Training script entry point                                                       |
+| `tests/test_tree_search/test_mcts_tree_store.py`                 | Existing test file, extend with new tests                                         |
+| `tests/test_tree_search/test_checkpoint_extended.py`             | New test file for extended checkpoint round-trip                                  |
+| `tests/test_tree_search/test_cache_trainer.py`                   | New test file for CacheAwarePPOTrainer                                            |
 
----
+______________________________________________________________________
 
 ### Task 1: Extend TrieNode with logprobs and versions fields
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trie_node.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test for TrieNode logprobs/versions**
@@ -63,7 +72,8 @@ class TestTrieNodeExtendedFields:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeExtendedFields -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeExtendedFields -v`
 Expected: FAIL — `add_turn()` doesn't accept `logprobs`/`versions` kwargs
 
 - [ ] **Step 3: Add logprobs and versions fields to TrieNode**
@@ -116,13 +126,14 @@ def add_turn(self, turn: Turn, seq_id: int, logprobs: list[float] | None = None,
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeExtendedFields -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrieNodeExtendedFields -v`
 Expected: PASS
 
 - [ ] **Step 5: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+PASS
 
 - [ ] **Step 6: Commit**
 
@@ -131,12 +142,14 @@ git add customized_areal/tree_search/trie_node.py tests/test_tree_search/test_mc
 git commit -m "feat(tree-search): add logprobs and versions fields to TrieNode"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Add trained flag and reward tracking to MCTSTreeStore
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test for trained flag tracking**
@@ -182,7 +195,8 @@ class TestMCTSTreeStoreTrainedFlag:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreTrainedFlag -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreTrainedFlag -v`
 Expected: FAIL — `is_trained`, `set_trained`, etc. don't exist
 
 - [ ] **Step 3: Add trained flag and reward tracking to MCTSTreeStore**
@@ -270,13 +284,14 @@ def clear(self) -> None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreTrainedFlag -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreTrainedFlag -v`
 Expected: PASS
 
 - [ ] **Step 5: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+PASS
 
 - [ ] **Step 6: Commit**
 
@@ -285,12 +300,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add trained flag and reward tracking to MCTSTreeStore"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Add trajectory extraction from MCTSTreeStore
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test for trajectory extraction**
@@ -338,7 +355,8 @@ class TestMCTSTreeStoreLoadTrajectories:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadTrajectories -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadTrajectories -v`
 Expected: FAIL — `load_trajectories` doesn't exist
 
 - [ ] **Step 3: Implement load_trajectories in MCTSTreeStore**
@@ -411,13 +429,14 @@ def load_trajectories(self, query_id: str, n_samples: int) -> list[dict[str, Any
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadTrajectories -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadTrajectories -v`
 Expected: PASS
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+PASS
 
 - [ ] **Step 6: Commit**
 
@@ -426,15 +445,17 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add trajectory extraction from MCTSTreeStore"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Update insert_batch to store logprobs, versions, rewards with tree data
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
-Currently `insert_batch` only stores tokens and uses `_get_query_id` to hash prompts. We need to pass logprobs and versions through the insert pipeline.
+Currently `insert_batch` only stores tokens and uses `_get_query_id` to hash prompts. We
+need to pass logprobs and versions through the insert pipeline.
 
 - [ ] **Step 1: Write the failing test for insert_batch_with_metadata**
 
@@ -484,10 +505,12 @@ class TestMCTSTreeStoreInsertBatchWithMetadata:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertBatchWithMetadata -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertBatchWithMetadata -v`
 Expected: FAIL — `insert_batch` doesn't propagate logprobs/versions to tree nodes
 
-- [ ] **Step 3: Update insert_trajectory and insert_batch to propagate logprobs/versions**
+- [ ] **Step 3: Update insert_trajectory and insert_batch to propagate
+  logprobs/versions**
 
 Update `insert_trajectory` in `customized_areal/tree_search/mcts_tree_store.py`:
 
@@ -561,13 +584,14 @@ def insert_batch(self, trajectories: list[dict[str, Any]]) -> None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertBatchWithMetadata -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertBatchWithMetadata -v`
 Expected: PASS
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All
+PASS
 
 - [ ] **Step 6: Commit**
 
@@ -576,12 +600,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): propagate logprobs and versions through insert pipeline"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Update TreeCheckpointManager for new fields
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py`
+
 - Create: `tests/test_tree_search/test_checkpoint_extended.py`
 
 - [ ] **Step 1: Write the failing test for extended checkpoint round-trip**
@@ -680,8 +706,8 @@ class TestExtendedCheckpointRoundTrip:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_checkpoint_extended.py -v`
-Expected: FAIL — logprobs/versions/trained/rewards not serialized
+Run: `uv run pytest tests/test_tree_search/test_checkpoint_extended.py -v` Expected:
+FAIL — logprobs/versions/trained/rewards not serialized
 
 - [ ] **Step 3: Update TreeCheckpointManager serialization**
 
@@ -796,13 +822,12 @@ def load(self, turn_splitter: Callable[[list[int]], list[Turn]]) -> MCTSTreeStor
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_checkpoint_extended.py -v`
-Expected: PASS
+Run: `uv run pytest tests/test_tree_search/test_checkpoint_extended.py -v` Expected:
+PASS
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All PASS
 
 - [ ] **Step 6: Commit**
 
@@ -811,12 +836,14 @@ git add customized_areal/tree_search/checkpoint.py tests/test_tree_search/test_c
 git commit -m "feat(tree-search): serialize logprobs, versions, trained flags, and rewards in checkpoint"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Add RolloutCacheConfig
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/config.py`
+
 - Modify: `customized_areal/tree_search/__init__.py`
 
 - [ ] **Step 1: Add RolloutCacheConfig to config.py**
@@ -860,7 +887,8 @@ And add `"RolloutCacheConfig"` to `__all__`.
 
 - [ ] **Step 3: Verify import works**
 
-Run: `uv run python -c "from customized_areal.tree_search import RolloutCacheConfig; print(RolloutCacheConfig())"`
+Run:
+`uv run python -c "from customized_areal.tree_search import RolloutCacheConfig; print(RolloutCacheConfig())"`
 Expected: `RolloutCacheConfig(cache_dir='', enabled=True, n_samples=1)`
 
 - [ ] **Step 4: Commit**
@@ -870,17 +898,21 @@ git add customized_areal/tree_search/config.py customized_areal/tree_search/__in
 git commit -m "feat(tree-search): add RolloutCacheConfig dataclass"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Implement CacheAwarePPOTrainer
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 - Create: `tests/test_tree_search/test_cache_trainer.py`
 
-This is the core component. The trainer patches the `train()` loop to intercept `prepare_batch` and merge cached trajectories with newly generated ones.
+This is the core component. The trainer patches the `train()` loop to intercept
+`prepare_batch` and merge cached trajectories with newly generated ones.
 
-**Strategy**: Rather than overriding the monolithic `train()` method, we patch `PPOActor.prepare_batch` to inject cache logic. This follows the same pattern as `TreeBackupPPOTrainer` which patches `compute_advantages`.
+**Strategy**: Rather than overriding the monolithic `train()` method, we patch
+`PPOActor.prepare_batch` to inject cache logic. This follows the same pattern as
+`TreeBackupPPOTrainer` which patches `compute_advantages`.
 
 - [ ] **Step 1: Write the failing test for CacheAwarePPOTrainer**
 
@@ -962,10 +994,10 @@ class TestCacheAwareBatchBuilder:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: FAIL — `_CacheAwareBatchBuilder` doesn't exist
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: FAIL —
+`_CacheAwareBatchBuilder` doesn't exist
 
-- [ ] **Step 3: Implement _CacheAwareBatchBuilder and CacheAwarePPOTrainer**
+- [ ] **Step 3: Implement \_CacheAwareBatchBuilder and CacheAwarePPOTrainer**
 
 In `customized_areal/tree_search/trainer.py`, add:
 
@@ -1118,13 +1150,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: PASS
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All PASS
 
 - [ ] **Step 6: Commit**
 
@@ -1133,24 +1163,34 @@ git add customized_areal/tree_search/trainer.py tests/test_tree_search/test_cach
 git commit -m "feat(tree-search): add CacheAwarePPOTrainer with rollout cache logic"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Add prepare_batch patching for cache injection
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 - Modify: `tests/test_tree_search/test_cache_trainer.py`
 
-The key challenge: `PPOTrainer.train()` calls `self.actor.prepare_batch()` which handles all inference. We need to patch `prepare_batch` to intercept it and merge cached trajectories.
+The key challenge: `PPOTrainer.train()` calls `self.actor.prepare_batch()` which handles
+all inference. We need to patch `prepare_batch` to intercept it and merge cached
+trajectories.
 
-**Approach**: Patch `prepare_batch` on the `TrainController` (or `RolloutController`) so that when `train()` calls it, the patched version:
+**Approach**: Patch `prepare_batch` on the `TrainController` (or `RolloutController`) so
+that when `train()` calls it, the patched version:
+
 1. Runs the original `prepare_batch` to get newly-generated trajectories
-2. For prompts with cached data, generates only the needed remainder
-3. Merges cached + new trajectories using `concat_padded_tensors`
+1. For prompts with cached data, generates only the needed remainder
+1. Merges cached + new trajectories using `concat_padded_tensors`
 
-However, this is complex because `prepare_batch` receives a dataloader, not individual prompts with query IDs. A simpler approach: override `train()` to insert cache logic around the `prepare_batch` call.
+However, this is complex because `prepare_batch` receives a dataloader, not individual
+prompts with query IDs. A simpler approach: override `train()` to insert cache logic
+around the `prepare_batch` call.
 
-Since the user wants this to work with the existing training loop, and `train()` is monolithic, we'll take a pragmatic approach: override `train()` with a copy that adds cache injection at the `prepare_batch` point. This is not ideal but matches what the codebase already does (TreeBackupPPOTrainer patches actor methods).
+Since the user wants this to work with the existing training loop, and `train()` is
+monolithic, we'll take a pragmatic approach: override `train()` with a copy that adds
+cache injection at the `prepare_batch` point. This is not ideal but matches what the
+codebase already does (TreeBackupPPOTrainer patches actor methods).
 
 - [ ] **Step 1: Write the failing test for prepare_batch patching**
 
@@ -1207,10 +1247,11 @@ class TestCacheAwarePrepareBatchPatch:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwarePrepareBatchPatch -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwarePrepareBatchPatch -v`
 Expected: FAIL — `_merge_cached_and_new` doesn't exist
 
-- [ ] **Step 3: Implement _merge_cached_and_new helper**
+- [ ] **Step 3: Implement \_merge_cached_and_new helper**
 
 Add to `customized_areal/tree_search/trainer.py`:
 
@@ -1261,13 +1302,13 @@ def _merge_cached_and_new(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwarePrepareBatchPatch -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwarePrepareBatchPatch -v`
 Expected: PASS
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All PASS
 
 - [ ] **Step 6: Commit**
 
@@ -1276,11 +1317,12 @@ git add customized_areal/tree_search/trainer.py tests/test_tree_search/test_cach
 git commit -m "feat(tree-search): add cache-aware prepare_batch merge logic"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Create training script
 
 **Files:**
+
 - Create: `customized_areal/on_policy_distill/scripts/train_with_cache.py`
 
 - [ ] **Step 1: Create the training script**
@@ -1368,7 +1410,8 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Verify the script is importable**
 
-Run: `uv run python -c "from customized_areal.on_policy_distill.scripts.train_with_cache import main; print('OK')"`
+Run:
+`uv run python -c "from customized_areal.on_policy_distill.scripts.train_with_cache import main; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
@@ -1378,11 +1421,12 @@ git add customized_areal/on_policy_distill/scripts/train_with_cache.py
 git commit -m "feat(scripts): add cache-aware training script with tree backup"
 ```
 
----
+______________________________________________________________________
 
 ### Task 10: Update __init__.py exports
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/__init__.py`
 
 - [ ] **Step 1: Update exports**
@@ -1398,7 +1442,8 @@ And add `"RolloutCacheConfig"` and `"CacheAwarePPOTrainer"` to `__all__`.
 
 - [ ] **Step 2: Verify import works**
 
-Run: `uv run python -c "from customized_areal.tree_search import CacheAwarePPOTrainer, RolloutCacheConfig; print('OK')"`
+Run:
+`uv run python -c "from customized_areal.tree_search import CacheAwarePPOTrainer, RolloutCacheConfig; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
@@ -1408,7 +1453,7 @@ git add customized_areal/tree_search/__init__.py
 git commit -m "feat(tree-search): export CacheAwarePPOTrainer and RolloutCacheConfig"
 ```
 
----
+______________________________________________________________________
 
 ### Task 11: Run pre-commit and final verification
 
@@ -1416,25 +1461,16 @@ git commit -m "feat(tree-search): export CacheAwarePPOTrainer and RolloutCacheCo
 
 - [ ] **Step 1: Run pre-commit**
 
-Run: `pre-commit run --all-files`
-Expected: All checks pass (fix any issues)
+Run: `pre-commit run --all-files` Expected: All checks pass (fix any issues)
 
 - [ ] **Step 2: Run full test suite for tree_search**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All PASS
 
 - [ ] **Step 3: Verify the complete flow with a dry-run import check**
 
-Run: `uv run python -c "
-from customized_areal.tree_search import (
-    CacheAwarePPOTrainer, RolloutCacheConfig,
-    TreeBackupConfig, TreeBackupMode, MCTSTreeStore,
-    TreeCheckpointManager,
-)
-from customized_areal.on_policy_distill.scripts.train_with_cache import main
-print('All imports successful')
-"`
+Run:
+`uv run python -c " from customized_areal.tree_search import (     CacheAwarePPOTrainer, RolloutCacheConfig,     TreeBackupConfig, TreeBackupMode, MCTSTreeStore,     TreeCheckpointManager, ) from customized_areal.on_policy_distill.scripts.train_with_cache import main print('All imports successful') "`
 Expected: `All imports successful`
 
 - [ ] **Step 4: Final commit if any pre-commit fixes were needed**
@@ -1444,10 +1480,15 @@ git add -u
 git commit -m "chore: fix linting issues from pre-commit"
 ```
 
----
+______________________________________________________________________
 
 ## Self-Review Checklist
 
-- [x] **Spec coverage**: Each spec section maps to a task (TrieNode extensions → Task 1, trained flags → Task 2, trajectory extraction → Task 3, insert_batch metadata → Task 4, checkpoint → Task 5, config → Task 6, trainer → Tasks 7-8, script → Task 9, exports → Task 10)
+- [x] **Spec coverage**: Each spec section maps to a task (TrieNode extensions → Task 1,
+  trained flags → Task 2, trajectory extraction → Task 3, insert_batch metadata → Task
+  4, checkpoint → Task 5, config → Task 6, trainer → Tasks 7-8, script → Task 9, exports
+  → Task 10)
 - [x] **Placeholder scan**: No TBD/TODO/placeholder steps; all code shown inline
-- [x] **Type consistency**: Method names consistent across tasks (`load_trajectories`, `get_untrained_count`, `set_trained`, `is_trained`, `get_reward`, `reset_trained_flags`, `_merge_cached_and_new`)
+- [x] **Type consistency**: Method names consistent across tasks (`load_trajectories`,
+  `get_untrained_count`, `set_trained`, `is_trained`, `get_reward`,
+  `reset_trained_flags`, `_merge_cached_and_new`)

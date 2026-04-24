@@ -444,9 +444,8 @@ class TestMCTSTreeStoreBuildTrainingHistory:
 
 class TestTreeCheckpointTrainingHistory:
     def test_save_load_training_steps_and_history(self):
-        import os
         import tempfile
-        import json
+
         from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 
         store = MCTSTreeStore(_two_turn_splitter)
@@ -475,9 +474,10 @@ class TestTreeCheckpointTrainingHistory:
             assert leaf1.training_steps == [0]
 
     def test_load_old_checkpoint_without_history(self):
+        import json
         import os
         import tempfile
-        import json
+
         from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 
         store = MCTSTreeStore(_two_turn_splitter)
@@ -502,11 +502,13 @@ class TestTreeCheckpointTrainingHistory:
 class TestRolloutCacheConfig:
     def test_default_replay_is_false(self):
         from customized_areal.tree_search.config import RolloutCacheConfig
+
         config = RolloutCacheConfig()
         assert config.replay is False
 
     def test_replay_can_be_set(self):
         from customized_areal.tree_search.config import RolloutCacheConfig
+
         config = RolloutCacheConfig(replay=True)
         assert config.replay is True
 
@@ -515,6 +517,7 @@ class TestTrainingOrderReplayIntegration:
     def test_record_and_replay_cycle(self):
         """Simulate recording training steps, saving checkpoint, loading, and replaying."""
         import tempfile
+
         from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -573,6 +576,7 @@ class TestTrainingOrderReplayIntegration:
         import json
         import os
         import tempfile
+
         from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 
         with tempfile.TemporaryDirectory() as tmpdir:

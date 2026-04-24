@@ -1,28 +1,26 @@
 # Rollout Cache with Tree Backup Training
 
-**Date**: 2026-04-17
-**Status**: Approved
+**Date**: 2026-04-17 **Status**: Approved
 
 ## Problem
 
-On-policy distillation training requires generating rollouts via inference each
-training step. When restarting training from scratch, all rollouts must be
-regenerated even if the same prompts were seen before. This wastes inference
-compute. We want to cache rollouts so that a second training run can reuse them
-without re-generating, only rolling out the remaining samples needed to form a
-complete GRPO group.
+On-policy distillation training requires generating rollouts via inference each training
+step. When restarting training from scratch, all rollouts must be regenerated even if
+the same prompts were seen before. This wastes inference compute. We want to cache
+rollouts so that a second training run can reuse them without re-generating, only
+rolling out the remaining samples needed to form a complete GRPO group.
 
 ## Solution
 
 A `CacheAwarePPOTrainer` that:
 
 1. Saves generated rollout trajectories into a self-contained MCTS tree structure
-2. On subsequent training runs, loads cached trajectories from the tree and skips
+1. On subsequent training runs, loads cached trajectories from the tree and skips
    inference for prompts with enough cached samples
-3. For partially-cached prompts, generates only the remaining `n_samples - cached`
+1. For partially-cached prompts, generates only the remaining `n_samples - cached`
    trajectories, merges with cached ones, and trains on the combined batch
-4. Tracks a `trained` flag per trajectory to avoid re-training already-consumed data
-5. Integrates with `TreeBackupPPOTrainer`'s MCTS backup for advantage computation
+1. Tracks a `trained` flag per trajectory to avoid re-training already-consumed data
+1. Integrates with `TreeBackupPPOTrainer`'s MCTS backup for advantage computation
 
 ## Components
 
@@ -76,8 +74,8 @@ class MCTSTreeStore:
         ...
 ```
 
-`load_trajectories` walks tree paths for untrained seq_ids and reconstructs the
-standard trajectory dict format:
+`load_trajectories` walks tree paths for untrained seq_ids and reconstructs the standard
+trajectory dict format:
 
 ```python
 {
@@ -92,8 +90,8 @@ standard trajectory dict format:
 
 ### 3. Extended TreeCheckpointManager
 
-Update serialization/deserialization to handle the new fields (`logprobs`,
-`versions`, `trained`, `rewards`):
+Update serialization/deserialization to handle the new fields (`logprobs`, `versions`,
+`trained`, `rewards`):
 
 - `_serialize_node`: also serialize `logprobs`, `versions`
 - `_deserialize_node`: also deserialize `logprobs`, `versions`
@@ -116,30 +114,32 @@ Subclass of `PPOTrainer` that intercepts the training loop for cache-aware rollo
 generation.
 
 **Initialization**:
+
 1. If `cache_config.enabled` and `cache_dir` exists: load tree checkpoint
-2. Reset all `trained` flags to `False` (new training run from scratch)
-3. Set up tree backup (patch `PPOActor.compute_advantages`)
+1. Reset all `trained` flags to `False` (new training run from scratch)
+1. Set up tree backup (patch `PPOActor.compute_advantages`)
 
 **Per-step logic** (overrides the training step):
 
 For each prompt in the batch:
+
 1. Compute `prompt_hash` from prompt tokens
-2. `untrained_count = tree_store.get_untrained_count(prompt_hash)`
-3. Three cases:
-   - **Enough cached** (`untrained_count >= n_samples`):
-     Load `n_samples` trajectories from tree, skip inference entirely
-   - **Partially cached** (`0 < untrained_count < n_samples`):
-     Load all untrained trajectories, generate `n_samples - untrained_count` new ones
-     via `prepare_batch` with `group_size = n_samples - untrained_count`,
-     insert new trajectories into tree, merge with loaded ones via
-     `concat_padded_tensors()`
-   - **Not cached** (`untrained_count == 0`):
-     Generate all `n_samples` trajectories normally, insert into tree
-4. After `compute_advantages` (which runs tree backup): mark all used trajectories
-   as `trained=True`
-5. Run `ppo_update` on the merged batch
+1. `untrained_count = tree_store.get_untrained_count(prompt_hash)`
+1. Three cases:
+   - **Enough cached** (`untrained_count >= n_samples`): Load `n_samples` trajectories
+     from tree, skip inference entirely
+   - **Partially cached** (`0 < untrained_count < n_samples`): Load all untrained
+     trajectories, generate `n_samples - untrained_count` new ones via `prepare_batch`
+     with `group_size = n_samples - untrained_count`, insert new trajectories into tree,
+     merge with loaded ones via `concat_padded_tensors()`
+   - **Not cached** (`untrained_count == 0`): Generate all `n_samples` trajectories
+     normally, insert into tree
+1. After `compute_advantages` (which runs tree backup): mark all used trajectories as
+   `trained=True`
+1. Run `ppo_update` on the merged batch
 
 **Tree checkpoint saving**:
+
 - Save tree checkpoint at the same cadence as regular checkpoints
 - Uses `TreeBackupMode.CROSS_TRAINING` to persist across runs
 
@@ -172,40 +172,40 @@ def main(args):
 ### First Training Run (no cache)
 
 1. Prompt -> `prepare_batch(group_size=n_samples)` generates `n_samples` trajectories
-2. `compute_advantages` -> GAE + tree backup (insert trajectories, compute Q-values)
-3. `ppo_update` -> train on batch
-4. Mark used trajectories `trained=True`
-5. Save tree checkpoint with extended fields + trained flags
+1. `compute_advantages` -> GAE + tree backup (insert trajectories, compute Q-values)
+1. `ppo_update` -> train on batch
+1. Mark used trajectories `trained=True`
+1. Save tree checkpoint with extended fields + trained flags
 
 ### Second Training Run (from scratch, cache exists)
 
 1. Load tree checkpoint -> reset all `trained=False`
-2. For each prompt:
+1. For each prompt:
    - Count untrained cached trajectories
    - Enough cached -> load from tree, skip inference
    - Partial -> load cached + generate remainder -> merge -> insert new into tree
-3. `compute_advantages` -> tree backup on merged batch
-4. `ppo_update` -> train, mark used trajectories `trained=True`
-5. Save updated tree checkpoint
+1. `compute_advantages` -> tree backup on merged batch
+1. `ppo_update` -> train, mark used trajectories `trained=True`
+1. Save updated tree checkpoint
 
 ## File Changes
 
-| File | Change |
-|------|--------|
-| `customized_areal/tree_search/trie_node.py` | Add `logprobs`, `versions` fields |
-| `customized_areal/tree_search/mcts_tree_store.py` | Add `trained` tracking, `load_trajectories`, `get_untrained_count`, `reset_trained_flags`, `_rewards` dict |
-| `customized_areal/tree_search/checkpoint.py` | Serialize/deserialize new fields, `_trained`, `_rewards` |
-| `customized_areal/tree_search/config.py` | Add `RolloutCacheConfig` |
-| `customized_areal/tree_search/trainer.py` | New `CacheAwarePPOTrainer` class |
-| `customized_areal/on_policy_distill/scripts/train_with_cache.py` | New training script |
+| File                                                             | Change                                                                                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `customized_areal/tree_search/trie_node.py`                      | Add `logprobs`, `versions` fields                                                                          |
+| `customized_areal/tree_search/mcts_tree_store.py`                | Add `trained` tracking, `load_trajectories`, `get_untrained_count`, `reset_trained_flags`, `_rewards` dict |
+| `customized_areal/tree_search/checkpoint.py`                     | Serialize/deserialize new fields, `_trained`, `_rewards`                                                   |
+| `customized_areal/tree_search/config.py`                         | Add `RolloutCacheConfig`                                                                                   |
+| `customized_areal/tree_search/trainer.py`                        | New `CacheAwarePPOTrainer` class                                                                           |
+| `customized_areal/on_policy_distill/scripts/train_with_cache.py` | New training script                                                                                        |
 
 ## Key Decisions
 
-1. **Tree is the primary cache** — no separate trajectory files; the MCTS tree
-   stores all data needed for training
-2. **`trained` flag per trajectory** — prevents re-training already-consumed data
-   in subsequent runs; reset on new training run from scratch
-3. **Partial group reuse** — if a prompt has some cached but not enough for a full
-   GRPO group, generate only the remainder
-4. **Patch PPOTrainer loop** — subclass and override training step rather than
-   wrapping the workflow (matches existing pattern in TreeBackupPPOTrainer)
+1. **Tree is the primary cache** — no separate trajectory files; the MCTS tree stores
+   all data needed for training
+1. **`trained` flag per trajectory** — prevents re-training already-consumed data in
+   subsequent runs; reset on new training run from scratch
+1. **Partial group reuse** — if a prompt has some cached but not enough for a full GRPO
+   group, generate only the remainder
+1. **Patch PPOTrainer loop** — subclass and override training step rather than wrapping
+   the workflow (matches existing pattern in TreeBackupPPOTrainer)

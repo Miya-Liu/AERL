@@ -9,12 +9,9 @@ Bug 6: end_session doesn't remove session from _session_cache
 
 from __future__ import annotations
 
-import threading
-import time
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import pytest
-
 
 # =============================================================================
 # Bug 2 & 6: end_session race condition and cache leak
@@ -30,13 +27,10 @@ class TestBug2_EndSessionTOCTOURace:
         """A set_token_rewards call that arrives between finish() and
         _remove_api_keys_for_session should fail or be rejected,
         not silently succeed on a finished session."""
+        # Import the server module globals so we can manipulate them
         from customized_areal.on_policy_distill.proxy.server import (
-            PositionRewardInfo as ServerPRI,
             TokenRewardSessionData,
         )
-
-        # Import the server module globals so we can manipulate them
-        import customized_areal.on_policy_distill.proxy.proxy_rollout_server as srv
 
         # Set up a minimal in-memory session
         session_id = "test-race-session"
@@ -247,25 +241,32 @@ class TestBug4_TokenRewardsLostInSerialization:
     def test_serialize_preserves_token_rewards(self):
         """Token rewards set on the server should survive serialization
         so they reach the trainer after export_trajectories."""
+        # Create a mock interaction with token_rewards and a real tensor_dict
+        import torch
+
         from customized_areal.on_policy_distill.proxy.proxy_rollout_server import (
-            serialize_interactions_with_position_rewards,
             deserialize_interactions_with_position_rewards,
+            serialize_interactions_with_position_rewards,
         )
 
-        # Create a mock interaction with token_rewards
         mock_interaction = Mock()
         mock_interaction.reward = 1.5
         mock_interaction.interaction_id = "comp-token-test"
-        mock_interaction.position_rewards = None  # no position rewards
+        mock_interaction.position_rewards = None
 
         # Set token_rewards as the server does
         mock_interaction.token_rewards = [0.1, 0.2, 0.3, 0.4, 0.5]
 
-        # Mock to_tensor_dict
+        # Mock to_tensor_dict with actual tensors (serialization may inspect them)
         mock_interaction.to_tensor_dict.return_value = {
-            "input_ids": [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]],
-            "loss_mask": [[0, 0, 0, 0, 0, 1, 1, 1, 1, 1]],
-            "rewards": [1.5],
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]),
+            "loss_mask": torch.tensor([[0, 0, 0, 0, 0, 1, 1, 1, 1, 1]]),
+            "rewards": torch.tensor([1.5]),
+            "logprobs": torch.tensor(
+                [[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8, -0.1, -0.2]]
+            ),
+            "versions": torch.tensor([[-1, -1, -1, -1, -1, 0, 0, 0, 0, 0]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
         }
 
         interactions = {"comp-token-test": mock_interaction}
@@ -278,7 +279,9 @@ class TestBug4_TokenRewardsLostInSerialization:
 
         # Check token_rewards survived
         result = deserialized["comp-token-test"]
-        has_token_rewards = hasattr(result, "token_rewards") and result.token_rewards is not None
+        has_token_rewards = (
+            hasattr(result, "token_rewards") and result.token_rewards is not None
+        )
         assert has_token_rewards, (
             "Bug 4: token_rewards attribute is lost during serialization "
             "round-trip. The server sets it, but it doesn't survive HTTP transport."
@@ -287,9 +290,11 @@ class TestBug4_TokenRewardsLostInSerialization:
     def test_deserialized_interaction_token_rewards_values(self):
         """When token_rewards survive serialization, their values should
         match what was set on the server."""
+        import torch
+
         from customized_areal.on_policy_distill.proxy.proxy_rollout_server import (
-            serialize_interactions_with_position_rewards,
             deserialize_interactions_with_position_rewards,
+            serialize_interactions_with_position_rewards,
         )
 
         mock_interaction = Mock()
@@ -301,9 +306,12 @@ class TestBug4_TokenRewardsLostInSerialization:
         mock_interaction.token_rewards = expected_rewards
 
         mock_interaction.to_tensor_dict.return_value = {
-            "input_ids": [[1, 2, 3, 4, 5, 6, 7, 8]],
-            "loss_mask": [[0, 0, 0, 0, 0, 1, 1, 1]],
-            "rewards": [0.0],
+            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]),
+            "loss_mask": torch.tensor([[0, 0, 0, 0, 0, 1, 1, 1]]),
+            "rewards": torch.tensor([0.0]),
+            "logprobs": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8]]),
+            "versions": torch.tensor([[-1, -1, -1, -1, -1, 0, 0, 0]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1]]),
         }
 
         interactions = {"comp-values-test": mock_interaction}
@@ -311,11 +319,13 @@ class TestBug4_TokenRewardsLostInSerialization:
         deserialized = deserialize_interactions_with_position_rewards(serialized)
 
         result = deserialized["comp-values-test"]
-        if hasattr(result, "token_rewards") and result.token_rewards is not None:
-            assert result.token_rewards == expected_rewards, (
-                f"token_rewards values mismatch: expected {expected_rewards}, "
-                f"got {result.token_rewards}"
-            )
+        assert hasattr(result, "token_rewards") and result.token_rewards is not None, (
+            "token_rewards should be present after deserialization"
+        )
+        assert result.token_rewards == expected_rewards, (
+            f"token_rewards values mismatch: expected {expected_rewards}, "
+            f"got {result.token_rewards}"
+        )
 
 
 # =============================================================================
@@ -331,8 +341,9 @@ class TestBug1_NoRetryOnExportHTTPCalls:
     def test_export_interactions_uses_retry(self):
         """export_interactions should use post_json_with_retry for
         resilience against transient failures."""
-        from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
         import inspect
+
+        from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
 
         source = inspect.getsource(OpenAIProxyClient.export_interactions)
         uses_retry = "post_json_with_retry" in source
@@ -343,8 +354,9 @@ class TestBug1_NoRetryOnExportHTTPCalls:
 
     def test_get_last_interaction_uses_retry(self):
         """get_last_interaction should also use retry logic."""
-        from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
         import inspect
+
+        from customized_areal.on_policy_distill.proxy.client import OpenAIProxyClient
 
         source = inspect.getsource(OpenAIProxyClient.get_last_interaction)
         uses_retry = "post_json_with_retry" in source

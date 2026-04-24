@@ -23,7 +23,7 @@ TPFC_CONFIG = {
                     "searching_tool",
                     "sb_document_parser",
                     "sb_files_tool",
-                    "audio_analysis_tool"
+                    "audio_analysis_tool",
                 ]
             ],
             "mcp": [],

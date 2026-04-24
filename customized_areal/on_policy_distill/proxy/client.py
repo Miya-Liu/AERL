@@ -360,9 +360,7 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
         if self.session_id is None:
             raise RuntimeError("Session not started")
 
-        interactions = await self.export_interactions(
-            discount=1.0, style="individual"
-        )
+        interactions = await self.export_interactions(discount=1.0, style="individual")
 
         if not interactions:
             return None

@@ -1,30 +1,39 @@
 # Offline On-Policy Distillation Training Script Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a standalone training script that exercises the on-policy distillation pipeline without inference, plus fix 6 identified bugs in the production code.
+**Goal:** Build a standalone training script that exercises the on-policy distillation
+pipeline without inference, plus fix 6 identified bugs in the production code.
 
-**Architecture:** Direct reuse of AReaL modules (`MultiCandidateFSDPEngine`, `grpo_distill_loss_fn`, `PositionRewardInfo`). The script creates an FSDP2-wrapped model, loads data from disk or generates mock data, and runs a manual training loop calling `engine.train_batch`. Bug fixes are applied to the production source files first, then the script validates them.
+**Architecture:** Direct reuse of AReaL modules (`MultiCandidateFSDPEngine`,
+`grpo_distill_loss_fn`, `PositionRewardInfo`). The script creates an FSDP2-wrapped
+model, loads data from disk or generates mock data, and runs a manual training loop
+calling `engine.train_batch`. Bug fixes are applied to the production source files
+first, then the script validates them.
 
 **Tech Stack:** Python 3.12+ | PyTorch | FSDP2 | HuggingFace Transformers | AReaL
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|----------------|
-| `customized_areal/on_policy_distill/training/loss.py` | Modify | Fix bugs 1, 3, 4, 5 |
-| `customized_areal/on_policy_distill/training/actor.py` | Modify | Fix bugs 2, 6 |
-| `customized_areal/on_policy_distill/training/offline_train.py` | Create | Standalone training script |
+| File                                                                | Action | Responsibility                               |
+| ------------------------------------------------------------------- | ------ | -------------------------------------------- |
+| `customized_areal/on_policy_distill/training/loss.py`               | Modify | Fix bugs 1, 3, 4, 5                          |
+| `customized_areal/on_policy_distill/training/actor.py`              | Modify | Fix bugs 2, 6                                |
+| `customized_areal/on_policy_distill/training/offline_train.py`      | Create | Standalone training script                   |
 | `customized_areal/on_policy_distill/training/test_offline_train.py` | Create | Tests for bug fixes and mock data generation |
 
----
+______________________________________________________________________
 
 ### Task 1: Fix Bug 1 — `distill_stat` not detached in `loss.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/loss.py:135`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -108,7 +117,8 @@ def test_distill_stat_is_detached():
 
 - [ ] **Step 2: Run test to verify it documents the expected behavior**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_distill_stat_is_detached -v 2>&1 | head -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_distill_stat_is_detached -v 2>&1 | head -30`
 Expected: PASS (the fix is already correct, this is a regression test)
 
 - [ ] **Step 3: Apply the fix in `loss.py`**
@@ -125,7 +135,8 @@ distill_stat = position_grpo_loss.detach()
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_distill_stat_is_detached -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_distill_stat_is_detached -v`
 
 - [ ] **Step 5: Commit**
 
@@ -134,12 +145,14 @@ git add customized_areal/on_policy_distill/training/loss.py customized_areal/on_
 git commit -m "fix(distill): detach position_grpo_loss before passing to stats_tracker (Bug 1)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Fix Bug 2 — Missing reward logging in `actor.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/actor.py:45-50`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -187,11 +200,14 @@ def test_reward_stats_logged_before_pop(monkeypatch):
 
 - [ ] **Step 2: Run test**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_reward_stats_logged_before_pop -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_reward_stats_logged_before_pop -v`
 
 - [ ] **Step 3: Apply the fix in `actor.py`**
 
-In `customized_areal/on_policy_distill/training/actor.py`, replace the `_ppo_update_with_distill_loss` method's pop-and-discard block (lines 49-50) with a version that logs first:
+In `customized_areal/on_policy_distill/training/actor.py`, replace the
+`_ppo_update_with_distill_loss` method's pop-and-discard block (lines 49-50) with a
+version that logs first:
 
 ```python
     def _ppo_update_with_distill_loss(self, data: dict[str, Any]) -> None:
@@ -224,7 +240,8 @@ Note: The full `import torch` is already at the top of the file.
 
 - [ ] **Step 4: Run test to verify**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_reward_stats_logged_before_pop -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_reward_stats_logged_before_pop -v`
 
 - [ ] **Step 5: Commit**
 
@@ -233,12 +250,14 @@ git add customized_areal/on_policy_distill/training/actor.py customized_areal/on
 git commit -m "fix(distill): log reward stats before popping from data dict (Bug 2)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Fix Bug 3 — prompt_len only for first sample in `loss.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/loss.py:116-131,262-267`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -341,11 +360,13 @@ def test_prompt_len_computation_with_batch_dim():
 
 - [ ] **Step 2: Run test to verify it fails with the bug**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_per_sample -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_per_sample -v`
 
 - [ ] **Step 3: Apply the fix in `loss.py`**
 
-Change the `prompt_len` computation in `grpo_distill_loss_fn` (lines 116-131) and the `_compute_position_level_grpo_loss` function signature and body:
+Change the `prompt_len` computation in `grpo_distill_loss_fn` (lines 116-131) and the
+`_compute_position_level_grpo_loss` function signature and body:
 
 In `grpo_distill_loss_fn`, replace lines 116-131:
 
@@ -379,7 +400,8 @@ In `grpo_distill_loss_fn`, replace lines 116-131:
         )
 ```
 
-And change `_compute_position_level_grpo_loss` signature and the position offset (lines 219-267):
+And change `_compute_position_level_grpo_loss` signature and the position offset (lines
+219-267):
 
 ```python
 def _compute_position_level_grpo_loss(
@@ -403,7 +425,8 @@ And the position offset inside the loop (around line 267):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_per_sample customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_computation_with_batch_dim -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_per_sample customized_areal/on_policy_distill/training/test_offline_train.py::test_prompt_len_computation_with_batch_dim -v`
 
 - [ ] **Step 5: Commit**
 
@@ -412,12 +435,14 @@ git add customized_areal/on_policy_distill/training/loss.py customized_areal/on_
 git commit -m "fix(distill): compute prompt_len per sample for correct position offset (Bug 3)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Fix Bug 4 — GPU-CPU sync in `loss.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/loss.py:342,354`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -441,11 +466,13 @@ def test_position_level_loss_no_cpu_sync():
 
 - [ ] **Step 2: Run test to verify it fails before the fix**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_level_loss_no_cpu_sync -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_level_loss_no_cpu_sync -v`
 
 - [ ] **Step 3: Apply the fix in `loss.py`**
 
-Replace the padding/truncation block in `_compute_position_level_grpo_loss` (lines 341-354):
+Replace the padding/truncation block in `_compute_position_level_grpo_loss` (lines
+341-354):
 
 ```python
     # Pad or truncate to match loss_mask output length
@@ -467,11 +494,14 @@ Replace the padding/truncation block in `_compute_position_level_grpo_loss` (lin
     return grpo_loss
 ```
 
-Note: The `.item()` on `output_len_tensor` is required for integer comparison (we need a Python int for `if n_loss < output_len_val`), but we consolidate from two `.item()` calls to one and use `.clamp(min=1).float()` for the division to stay on GPU.
+Note: The `.item()` on `output_len_tensor` is required for integer comparison (we need a
+Python int for `if n_loss < output_len_val`), but we consolidate from two `.item()`
+calls to one and use `.clamp(min=1).float()` for the division to stay on GPU.
 
 - [ ] **Step 4: Run test to verify**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_level_loss_no_cpu_sync -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_level_loss_no_cpu_sync -v`
 
 - [ ] **Step 5: Commit**
 
@@ -480,13 +510,17 @@ git add customized_areal/on_policy_distill/training/loss.py customized_areal/on_
 git commit -m "fix(distill): reduce GPU-CPU syncs in _compute_position_level_grpo_loss (Bug 4)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Fix Bug 5 — Position indexing bounds check in `loss.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/loss.py:268-269`
-- Modify: `customized_areal/on_policy_distill/engine/fsdp_engine.py:233-234` (same pattern)
+
+- Modify: `customized_areal/on_policy_distill/engine/fsdp_engine.py:233-234` (same
+  pattern)
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -538,11 +572,15 @@ def test_position_bounds_check():
 
 - [ ] **Step 2: Run test to verify it fails before the fix**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_bounds_check -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_bounds_check -v`
 
 - [ ] **Step 3: Apply the fix in `loss.py`**
 
-In `_compute_position_level_grpo_loss`, the position offset code already has `if position >= logprobs.shape[0]: continue` (line 268). This is correct as a guard but the `_prepare_multi_candidate_labels` in `fsdp_engine.py` has the same pattern. Let's verify the existing guard is sufficient and add a clamp for safety:
+In `_compute_position_level_grpo_loss`, the position offset code already has
+`if position >= logprobs.shape[0]: continue` (line 268). This is correct as a guard but
+the `_prepare_multi_candidate_labels` in `fsdp_engine.py` has the same pattern. Let's
+verify the existing guard is sufficient and add a clamp for safety:
 
 Replace the position computation (around line 267-269):
 
@@ -561,7 +599,8 @@ Replace the position computation (around line 267-269):
 
 - [ ] **Step 4: Run test to verify**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_bounds_check -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_position_bounds_check -v`
 
 - [ ] **Step 5: Commit**
 
@@ -570,12 +609,14 @@ git add customized_areal/on_policy_distill/training/loss.py customized_areal/on_
 git commit -m "fix(distill): clamp position to valid range instead of skipping (Bug 5)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Fix Bug 6 — Duplicate denominator in `actor.py`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/actor.py:87-98`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -609,7 +650,8 @@ def test_no_duplicate_denominator():
 
 - [ ] **Step 2: Run test to verify it fails before the fix**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_no_duplicate_denominator -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_no_duplicate_denominator -v`
 
 - [ ] **Step 3: Apply the fix in `actor.py`**
 
@@ -620,7 +662,8 @@ Remove lines 87-98 from `_ppo_update_with_distill_loss`:
             # n_valid_tokens denominator (Bug 6 fix)
 ```
 
-The code after removal should go from `stats_tracker.scalar(**train_stat)` directly to the end of the `with stats_tracker.scope("update")` block. The lines to delete are:
+The code after removal should go from `stats_tracker.scalar(**train_stat)` directly to
+the end of the `with stats_tracker.scope("update")` block. The lines to delete are:
 
 ```python
             # Log critical denominator stats
@@ -639,7 +682,8 @@ The code after removal should go from `stats_tracker.scalar(**train_stat)` direc
 
 - [ ] **Step 4: Run test to verify**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_no_duplicate_denominator -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_no_duplicate_denominator -v`
 
 - [ ] **Step 5: Commit**
 
@@ -648,12 +692,14 @@ git add customized_areal/on_policy_distill/training/actor.py customized_areal/on
 git commit -m "fix(distill): remove duplicate n_valid_tokens denominator registration (Bug 6)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Create mock data generator
 
 **Files:**
+
 - Create: `customized_areal/on_policy_distill/training/offline_train.py`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -701,7 +747,8 @@ def test_generate_mock_batch():
 
 - [ ] **Step 2: Run test to verify it fails (module doesn't exist yet)**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_generate_mock_batch -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_generate_mock_batch -v`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Implement `generate_mock_batch`**
@@ -808,7 +855,8 @@ def generate_mock_batch(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_generate_mock_batch -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_generate_mock_batch -v`
 
 - [ ] **Step 5: Commit**
 
@@ -817,12 +865,14 @@ git add customized_areal/on_policy_distill/training/offline_train.py customized_
 git commit -m "feat(distill): add mock data generator for offline training script"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Add data loading from disk
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/offline_train.py`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -862,7 +912,8 @@ def test_load_batch_from_disk(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_load_batch_from_disk -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_load_batch_from_disk -v`
 
 - [ ] **Step 3: Implement `save_batch` and `load_batch`**
 
@@ -913,7 +964,8 @@ def load_batch(path: Path) -> dict[str, Any]:
 
 - [ ] **Step 4: Run test to verify**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_load_batch_from_disk -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_load_batch_from_disk -v`
 
 - [ ] **Step 5: Commit**
 
@@ -922,12 +974,14 @@ git add customized_areal/on_policy_distill/training/offline_train.py customized_
 git commit -m "feat(distill): add save/load batch functions for offline training"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Add CLI argument parser
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/offline_train.py`
+
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 1: Write the test**
@@ -970,7 +1024,8 @@ def test_parse_args_custom():
 
 - [ ] **Step 2: Run test**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_defaults customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_custom -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_defaults customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_custom -v`
 
 - [ ] **Step 3: Implement `parse_args`**
 
@@ -1015,7 +1070,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_defaults customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_custom -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_defaults customized_areal/on_policy_distill/training/test_offline_train.py::test_parse_args_custom -v`
 
 - [ ] **Step 5: Commit**
 
@@ -1024,15 +1080,17 @@ git add customized_areal/on_policy_distill/training/offline_train.py customized_
 git commit -m "feat(distill): add CLI argument parser for offline training script"
 ```
 
----
+______________________________________________________________________
 
 ### Task 10: Implement training loop with FSDP2 engine
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/offline_train.py`
 - Test: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
-This is the core task — the main training loop that creates a `MultiCandidateFSDPEngine`, loads data, and runs `train_batch`.
+This is the core task — the main training loop that creates a
+`MultiCandidateFSDPEngine`, loads data, and runs `train_batch`.
 
 - [ ] **Step 1: Write the test**
 
@@ -1075,7 +1133,8 @@ def test_training_loop_mock_data(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails (run_training doesn't exist yet)**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_training_loop_mock_data -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_training_loop_mock_data -v`
 Expected: FAIL with `ImportError` or `AttributeError`
 
 - [ ] **Step 3: Implement `TrainingConfig` and `run_training`**
@@ -1293,7 +1352,8 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run test**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_training_loop_mock_data -v -s`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_training_loop_mock_data -v -s`
 
 Note: This test requires GPU. If no GPU is available, it will be skipped.
 
@@ -1304,14 +1364,17 @@ git add customized_areal/on_policy_distill/training/offline_train.py customized_
 git commit -m "feat(distill): add offline training loop with FSDP2 engine"
 ```
 
----
+______________________________________________________________________
 
 ### Task 11: Add end-to-end test with loss computation only (no FSDP)
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/test_offline_train.py`
 
-This test validates the entire loss computation pipeline (mock data → loss function → backward) without needing FSDP2 or a real model. It directly calls `grpo_distill_loss_fn` with mock logits.
+This test validates the entire loss computation pipeline (mock data → loss function →
+backward) without needing FSDP2 or a real model. It directly calls
+`grpo_distill_loss_fn` with mock logits.
 
 - [ ] **Step 1: Write the test**
 
@@ -1441,7 +1504,8 @@ def test_mock_data_loss_computation():
 
 - [ ] **Step 2: Run tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_loss_computation_end_to_end customized_areal/on_policy_distill/training/test_offline_train.py::test_mock_data_loss_computation -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py::test_loss_computation_end_to_end customized_areal/on_policy_distill/training/test_offline_train.py::test_mock_data_loss_computation -v`
 
 - [ ] **Step 3: Commit**
 
@@ -1450,16 +1514,18 @@ git add customized_areal/on_policy_distill/training/test_offline_train.py
 git commit -m "test(distill): add end-to-end loss computation tests without FSDP2"
 ```
 
----
+______________________________________________________________________
 
 ### Task 12: Run all tests and fix any remaining issues
 
 **Files:**
+
 - May modify any file from previous tasks
 
 - [ ] **Step 1: Run the full test suite**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -m pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
 
 - [ ] **Step 2: Fix any failing tests**
 
@@ -1467,7 +1533,8 @@ Address failures by reading error output and adjusting the code.
 
 - [ ] **Step 3: Run pre-commit on changed files**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && pre-commit run --files customized_areal/on_policy_distill/training/loss.py customized_areal/on_policy_distill/training/actor.py customized_areal/on_policy_distill/training/offline_train.py customized_areal/on_policy_distill/training/test_offline_train.py`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && pre-commit run --files customized_areal/on_policy_distill/training/loss.py customized_areal/on_policy_distill/training/actor.py customized_areal/on_policy_distill/training/offline_train.py customized_areal/on_policy_distill/training/test_offline_train.py`
 
 - [ ] **Step 4: Fix any linting issues**
 
