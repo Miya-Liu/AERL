@@ -157,29 +157,32 @@ def deserialize_interactions_with_position_rewards(
     """Deserialize interactions including position_rewards and token_rewards for distillation.
 
     Extends the base deserialize_interactions to reconstruct position_rewards
-    and token_rewards from the serialized data. Position_rewards are stored as
-    a Python attribute on the interaction object; token_rewards are also stored
-    as a Python attribute so they can be used downstream if needed.
+    and token_rewards from the serialized data. Creates InteractionWithTokenLevelReward
+    objects so that token_rewards is a proper dataclass field and to_tensor_dict()
+    correctly recomputes token_rewards after cache invalidation.
     """
-    from areal.experimental.openai.types import InteractionWithTokenLogpReward
     from areal.infra.rpc.serialization import deserialize_value
+
+    from .types import InteractionWithTokenLevelReward
 
     data = deserialize_value(data)
     result = {}
     for key, item in data.items():
-        interaction = InteractionWithTokenLogpReward()
+        interaction = InteractionWithTokenLevelReward()
         interaction._cache = item["tensor_dict"]
         interaction.reward = item["reward"]
         interaction.interaction_id = item["interaction_id"]
 
-        # Reconstruct token_rewards if available
+        # Set token_rewards via the typed dataclass field (validates length
+        # if model_response is present). Unlike the base InteractionWithTokenLogpReward,
+        # InteractionWithTokenLevelReward has token_rewards as a declared field,
+        # so to_tensor_dict() correctly includes it after cache invalidation.
         token_rewards_data = item.get("token_rewards")
         if token_rewards_data is not None:
-            interaction.token_rewards = token_rewards_data  # type: ignore
+            interaction.token_rewards = token_rewards_data
 
         # Reconstruct position_rewards if available and inject into the
-        # cached tensor dict so they flow through the data pipeline to
-        # the distillation loss function.
+        # interaction object so they flow through to the distillation loss.
         pos_rewards_data = item.get("position_rewards")
         if pos_rewards_data is not None:
             from .server import PositionRewardInfo as PRI
@@ -201,7 +204,7 @@ def deserialize_interactions_with_position_rewards(
             # We do NOT inject it into _cache to avoid concat_padded_tensors
             # key consistency issues when some interactions have position_rewards
             # and others don't (e.g., multi-turn conversations).
-            interaction.position_rewards = pos_rewards  # type: ignore
+            interaction.position_rewards = pos_rewards  # type: ignore[attr-defined]
 
         result[key] = interaction
     return result
