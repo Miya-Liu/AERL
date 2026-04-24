@@ -52,6 +52,7 @@ from .server import (
     SetPositionRewardsRequest,
     SetTokenRewardsRequest,
 )
+from .types import TokenRewardInteractions
 
 logger = logging.getLogger("OpenAIProxyClient")
 
@@ -313,11 +314,13 @@ class OpenAIProxyClient(BaseOpenAIProxyClient):
         self,
         discount: float = 1.0,
         style: str = "individual",
-    ) -> dict:
+    ) -> TokenRewardInteractions:
         """Export interactions with position_rewards support.
 
         Overrides the base class method to use custom deserialization
         that reconstructs position_rewards for the distillation loss.
+        Returns InteractionWithTokenLevelReward objects with proper
+        token_rewards dataclass fields.
         Uses post_json_with_retry for resilience against transient failures.
         """
         if self.session_id is None:
