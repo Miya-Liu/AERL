@@ -388,6 +388,17 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Merge cached and new trajectories
         return _merge_cached_and_new(cached_trajs, new_trajs)
 
+    def _load_untrained_from_tree_store(self) -> list[dict[str, Any]]:
+        """Load untrained trajectories from all tree store queries."""
+        all_trajs: list[dict[str, Any]] = []
+        for query_id in list(self.tree_store.trees.keys()):
+            count = self.tree_store.get_untrained_count(query_id)
+            if count > 0:
+                n = min(count, self.cache_config.n_samples)
+                trajs = self.tree_store.load_trajectories(query_id, n)
+                all_trajs.extend(trajs)
+        return all_trajs
+
     def _replay_prepare_batch(
         self,
         dataloader,

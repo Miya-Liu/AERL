@@ -1,4 +1,5 @@
 import torch
+from unittest.mock import MagicMock
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.turn_splitter import Turn
@@ -203,3 +204,105 @@ class TestMergeCachedAndNew:
 
         merged = _merge_cached_and_new([], [])
         assert merged == []
+
+
+class TestLoadUntrainedFromTreeStore:
+    def test_loads_from_single_query(self):
+        """Should load untrained trajectories from a single query_id."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert len(result) == 2
+        assert result[0]["_mcts_query_id"] == "q1"
+        assert result[1]["_mcts_query_id"] == "q1"
+
+    def test_loads_from_multiple_queries(self):
+        """Should load untrained trajectories from all query_ids with untrained paths."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.insert_trajectory("q2", [5, 6, 10, 7, 8], reward=0.5)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert len(result) == 2
+        query_ids = {t["_mcts_query_id"] for t in result}
+        assert query_ids == {"q1", "q2"}
+
+    def test_skips_trained_trajectories(self):
+        """Should not load trajectories that are already marked trained."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        s1 = store.insert_trajectory("q1", [1, 2, 10, 3, 5], reward=0.5)
+        store.set_trained("q1", s0, True)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert len(result) == 1
+        assert result[0]["_mcts_seq_id"] == s1
+
+    def test_respects_n_samples_limit(self):
+        """Should not load more than n_samples per query_id."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        for i in range(4):
+            store.insert_trajectory("q1", [1, 2, 10, 3, 4 + i], reward=1.0)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=2)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert len(result) == 2
+
+    def test_returns_empty_when_no_untrained(self):
+        """Should return empty list when all trajectories are trained."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+        s0 = store.insert_trajectory("q1", [1, 2, 10, 3, 4], reward=1.0)
+        store.set_trained("q1", s0, True)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert result == []
+
+    def test_returns_empty_when_tree_empty(self):
+        """Should return empty list when tree store has no trees."""
+        from customized_areal.tree_search.config import RolloutCacheConfig
+        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
+
+        store = MCTSTreeStore(_two_turn_splitter)
+
+        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer.tree_store = store
+        trainer.cache_config = RolloutCacheConfig(n_samples=4)
+
+        result = CacheAwarePPOTrainer._load_untrained_from_tree_store(trainer)
+        assert result == []
