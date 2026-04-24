@@ -275,7 +275,7 @@ def _prepare_form_data(
         "task_id": task_id,
         "prompt": task_description,
         "agent_id": agent_id,
-        "training_mode": True,
+        "skip_check_pending": True,
     }
     if model_name is not None:
         form_data["model_name"] = model_name

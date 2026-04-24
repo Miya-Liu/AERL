@@ -406,7 +406,12 @@ class CacheAwarePPOTrainer(PPOTrainer):
         workflow_kwargs=None,
         group_size=1,
     ) -> list[dict[str, Any]]:
-        """Generate new rollouts from dataloader prompts."""
+        """Generate new rollouts from dataloader prompts.
+
+        Prioritizes prompts whose query_id does not already exist in the tree
+        store, so Level 3 expands coverage to new queries before re-generating
+        for existing ones.
+        """
         from areal.utils.data import cycle_dataloader
 
         if not hasattr(self, "_replay_dataloader_iter"):
@@ -414,19 +419,40 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         raw_batch = next(self._replay_dataloader_iter)
         prompts = [item for item in raw_batch]
-        if prompts:
-            new_trajs = self.actor.rollout_batch(
-                prompts,
-                workflow=workflow,
-                workflow_kwargs=workflow_kwargs,
-                group_size=group_size,
-            )
-            n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
-            logger.info(
-                f"Replay fallback: generated {n_new} new trajectories from dataloader"
-            )
-            return new_trajs
-        return []
+        if not prompts:
+            return []
+
+        # Separate prompts into novel (not in tree store) vs existing
+        novel_prompts = []
+        existing_prompts = []
+        for prompt in prompts:
+            messages = prompt.get("messages", [])
+            if messages:
+                query_id = get_query_id_from_messages(messages, self.tokenizer)
+            else:
+                query_id = prompt.get("_mcts_query_id", "")
+
+            if query_id and query_id not in self.tree_store.trees:
+                novel_prompts.append(prompt)
+            else:
+                existing_prompts.append(prompt)
+
+        # Generate for novel queries first; fall back to full batch if none
+        gen_prompts = novel_prompts if novel_prompts else prompts
+        new_trajs = self.actor.rollout_batch(
+            gen_prompts,
+            workflow=workflow,
+            workflow_kwargs=workflow_kwargs,
+            group_size=group_size,
+        )
+        n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
+        n_novel = len(novel_prompts)
+        n_total = len(prompts)
+        logger.info(
+            f"Replay fallback: generated {n_new} trajectories from "
+            f"{n_novel}/{n_total} novel queries"
+        )
+        return new_trajs
 
     def _replay_prepare_batch(
         self,
@@ -557,69 +583,3 @@ class CacheAwarePPOTrainer(PPOTrainer):
         super().close()
 
 
-class TreeBackupPPOTrainer(PPOTrainer):
-    """PPOTrainer with MCTS tree backup replacing GAE advantage computation.
-
-    When tree_backup_config.mode is OFF, behaves exactly like PPOTrainer.
-    When mode is IN_TRAINING or CROSS_TRAINING, inserts rollout trajectories
-    into a shared compressed trie, runs MCTS backup to compute Q-values, and
-    uses those Q-values as the advantage signal instead of GAE.
-
-    Args:
-        config: PPOConfig instance.
-        tree_backup_config: TreeBackupConfig instance controlling tree behavior.
-        train_dataset: Optional training dataset.
-        valid_dataset: Optional validation dataset.
-    """
-
-    def __init__(
-        self,
-        config: Any,
-        tree_backup_config: TreeBackupConfig | None = None,
-        train_dataset: Any | None = None,
-        valid_dataset: Any | None = None,
-    ):
-        self.tree_backup_config = tree_backup_config or TreeBackupConfig()
-
-        # Initialize base PPOTrainer first (sets self.tokenizer etc.)
-        super().__init__(config, train_dataset, valid_dataset)
-
-        # Set up tree backup components after base init
-        if self.tree_backup_config.mode != TreeBackupMode.OFF:
-            turn_splitter = make_turn_splitter(
-                self.tokenizer, self.tree_backup_config.assistant_marker
-            )
-            self.tree_store = MCTSTreeStore(turn_splitter)
-            self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
-            self.tree_checkpoint_manager = TreeCheckpointManager(
-                self.tree_backup_config.checkpoint_dir
-            )
-
-            if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
-                if self.tree_checkpoint_manager.exists():
-                    self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
-                    logger.info("Loaded MCTS tree checkpoint")
-
-            # Patch PPOActor outer method to add tree backup after GAE
-            patch_ppo_actor_for_tree_backup(
-                self.tree_store, self.tree_advantage_computer
-            )
-            logger.info(
-                f"MCTS tree backup enabled (mode={self.tree_backup_config.mode.value})"
-            )
-
-    def _save_recover_checkpoint(
-        self, epoch: int, epoch_step: int, global_step: int
-    ) -> None:
-        """Save recover checkpoint including MCTS tree state."""
-        super()._save_recover_checkpoint(epoch, epoch_step, global_step)
-
-        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
-            self.tree_checkpoint_manager.save(self.tree_store)
-            logger.info("Saved MCTS tree checkpoint")
-
-    def close(self) -> None:
-        """Clean up: unpatch PPOActor and call base close."""
-        if self.tree_backup_config.mode != TreeBackupMode.OFF:
-            unpatch_ppo_actor()
-        super().close()

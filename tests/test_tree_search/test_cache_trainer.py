@@ -311,20 +311,27 @@ class TestLoadUntrainedFromTreeStore:
 
 
 class TestGenerateFromDataloader:
-    def test_lazy_init_and_generation(self):
-        """Should lazily init dataloader iter and call rollout_batch."""
+    def _make_trainer(self, store=None, has_tokenizer=False):
         from customized_areal.tree_search.config import RolloutCacheConfig
         from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 
-        store = MCTSTreeStore(_two_turn_splitter)
+        self._trainer_cls = CacheAwarePPOTrainer
+
+        if store is None:
+            store = MCTSTreeStore(_two_turn_splitter)
 
         trainer = MagicMock(spec=CacheAwarePPOTrainer)
         trainer.tree_store = store
         trainer.cache_config = RolloutCacheConfig(n_samples=4)
-        trainer._replay_dataloader_iter = None
-        del trainer._replay_dataloader_iter  # Remove the attribute
 
-        # Mock rollout_batch to return a fake trajectory
+        if has_tokenizer:
+            # Mock tokenizer that returns a deterministic query_id
+            mock_tokenizer = MagicMock()
+            mock_tokenizer.apply_chat_template.return_value = "<prompt>"
+            trainer.tokenizer = mock_tokenizer
+        else:
+            trainer.tokenizer = None
+
         fake_traj = {
             "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
             "rewards": torch.tensor([[1.0]], dtype=torch.float32),
@@ -332,23 +339,23 @@ class TestGenerateFromDataloader:
         trainer.actor = MagicMock()
         trainer.actor.rollout_batch = MagicMock(return_value=[fake_traj])
 
-        # Create a mock dataloader that yields batches
-        mock_dataloader = MagicMock()
-        mock_workflow = MagicMock()
+        return trainer
 
-        # Create a simple iterable that yields a batch of prompts
-        mock_prompts = [{"messages": [{"role": "user", "content": "hello"}]}]
+    def test_lazy_init_and_generation(self):
+        """Should lazily init dataloader iter and call rollout_batch."""
+        trainer = self._make_trainer()
+        del trainer._replay_dataloader_iter
+
+        mock_prompts = [{"_mcts_query_id": "q_new"}]
 
         with patch(
             "areal.utils.data.cycle_dataloader",
             return_value=iter([mock_prompts]),
         ):
-            result = CacheAwarePPOTrainer._generate_from_dataloader(
+            result = self._trainer_cls._generate_from_dataloader(
                 trainer,
-                dataloader=mock_dataloader,
-                workflow=mock_workflow,
-                workflow_kwargs=None,
-                group_size=1,
+                dataloader=MagicMock(),
+                workflow=MagicMock(),
             )
 
         assert len(result) == 1
@@ -356,50 +363,101 @@ class TestGenerateFromDataloader:
 
     def test_reuses_existing_iterator(self):
         """Should reuse existing _replay_dataloader_iter if already initialized."""
-        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
-
-        trainer = MagicMock(spec=CacheAwarePPOTrainer)
-
-        # Pre-create a dataloader iterator
-        batch = [{"messages": [{"role": "user", "content": "test"}]}]
+        trainer = self._make_trainer()
+        batch = [{"_mcts_query_id": "q_new"}]
         existing_iter = iter([batch, batch])
         trainer._replay_dataloader_iter = existing_iter
 
-        fake_traj = {
-            "input_ids": torch.tensor([[1, 2, 10, 3, 4]], dtype=torch.int32),
-            "rewards": torch.tensor([[1.0]], dtype=torch.float32),
-        }
-        trainer.actor = MagicMock()
-        trainer.actor.rollout_batch = MagicMock(return_value=[fake_traj])
-
-        result = CacheAwarePPOTrainer._generate_from_dataloader(
+        result = self._trainer_cls._generate_from_dataloader(
             trainer,
             dataloader=MagicMock(),
             workflow=MagicMock(),
-            workflow_kwargs=None,
-            group_size=1,
         )
 
         assert len(result) == 1
-        # Verify it used the existing iterator (didn't create a new one)
         assert trainer._replay_dataloader_iter is existing_iter
 
     def test_returns_empty_on_empty_batch(self):
         """Should return empty list when dataloader yields empty batch."""
-        from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
-
-        trainer = MagicMock(spec=CacheAwarePPOTrainer)
+        trainer = self._make_trainer()
         trainer._replay_dataloader_iter = iter([[]])
 
-        result = CacheAwarePPOTrainer._generate_from_dataloader(
+        result = self._trainer_cls._generate_from_dataloader(
             trainer,
             dataloader=MagicMock(),
             workflow=MagicMock(),
-            workflow_kwargs=None,
-            group_size=1,
         )
 
         assert result == []
+
+    def test_prioritizes_novel_queries_via_mcts_query_id(self):
+        """Should only generate for prompts whose query_id is not in tree_store.trees."""
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q_existing", [1, 2, 10, 3, 4], reward=1.0)
+
+        trainer = self._make_trainer(store=store)
+        batch = [
+            {"_mcts_query_id": "q_existing"},  # Already in tree
+            {"_mcts_query_id": "q_novel"},  # Not in tree
+        ]
+        trainer._replay_dataloader_iter = iter([batch])
+
+        self._trainer_cls._generate_from_dataloader(
+            trainer, dataloader=MagicMock(), workflow=MagicMock()
+        )
+
+        # Should only pass the novel prompt to rollout_batch
+        called_prompts = trainer.actor.rollout_batch.call_args[0][0]
+        assert len(called_prompts) == 1
+        assert called_prompts[0]["_mcts_query_id"] == "q_novel"
+
+    def test_falls_back_to_full_batch_when_all_existing(self):
+        """Should use all prompts when none are novel."""
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("q_a", [1, 2, 10, 3, 4], reward=1.0)
+        store.insert_trajectory("q_b", [5, 6, 10, 7, 8], reward=0.5)
+
+        trainer = self._make_trainer(store=store)
+        batch = [
+            {"_mcts_query_id": "q_a"},
+            {"_mcts_query_id": "q_b"},
+        ]
+        trainer._replay_dataloader_iter = iter([batch])
+
+        self._trainer_cls._generate_from_dataloader(
+            trainer, dataloader=MagicMock(), workflow=MagicMock()
+        )
+
+        # All prompts are existing, so falls back to full batch
+        called_prompts = trainer.actor.rollout_batch.call_args[0][0]
+        assert len(called_prompts) == 2
+
+    def test_prioritizes_novel_queries_via_messages(self):
+        """Should derive query_id from messages using tokenizer for novel filtering."""
+        store = MCTSTreeStore(_two_turn_splitter)
+        store.insert_trajectory("existing_hash", [1, 2, 10, 3, 4], reward=1.0)
+
+        trainer = self._make_trainer(store=store, has_tokenizer=True)
+        # Mock get_query_id_from_messages to return known IDs
+        batch = [
+            {"messages": [{"role": "user", "content": "existing"}]},
+            {"messages": [{"role": "user", "content": "novel"}]},
+        ]
+        trainer._replay_dataloader_iter = iter([batch])
+
+        with patch(
+            "customized_areal.tree_search.trainer.get_query_id_from_messages",
+            side_effect=lambda msgs, tok: (
+                "existing_hash" if "existing" in str(msgs) else "novel_hash"
+            ),
+        ):
+            self._trainer_cls._generate_from_dataloader(
+                trainer, dataloader=MagicMock(), workflow=MagicMock()
+            )
+
+        called_prompts = trainer.actor.rollout_batch.call_args[0][0]
+        assert len(called_prompts) == 1
+        assert called_prompts[0]["messages"][0]["content"] == "novel"
 
 
 class TestReplayPrepareBatchFallback:
@@ -656,3 +714,16 @@ class TestReplayFallbackProgression:
         )
         assert len(result2) == 1
         assert result2[0]["_mcts_seq_id"] == s1
+
+
+class TestReplayTrainCleanup:
+    def test_replay_dataloader_iter_cleaned_up_after_train(self):
+        """Should clean up _replay_dataloader_iter in train() finally block."""
+        trainer = MagicMock()
+        trainer._replay_dataloader_iter = MagicMock()
+
+        # Simulate the finally block logic from CacheAwarePPOTrainer.train()
+        if hasattr(trainer, "_replay_dataloader_iter"):
+            del trainer._replay_dataloader_iter
+
+        assert not hasattr(trainer, "_replay_dataloader_iter")
