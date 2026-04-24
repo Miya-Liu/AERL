@@ -19,7 +19,6 @@ import inspect
 import os
 import secrets
 import threading
-import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -37,7 +36,6 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.completion_create_params import CompletionCreateParams
 from openai.types.responses import Response
 from openai.types.responses.response_create_params import ResponseCreateParams
-
 from pydantic import BaseModel
 
 # Import from areal base server
@@ -59,7 +57,6 @@ from areal.experimental.openai.proxy.server import (
     SetRewardRequest,
     StartSessionRequest,
     StartSessionResponse,
-    serialize_interactions,
 )
 from areal.infra.rpc.serialization import deserialize_value, serialize_value
 from areal.utils import name_resolve, names, seeding
@@ -269,6 +266,7 @@ async def lifespan(app: FastAPI):
             await _cleanup_task
         except asyncio.CancelledError:
             pass
+    cleanup_engine()
 
 
 app = FastAPI(title="Token Reward Proxy Server", lifespan=lifespan)
@@ -1162,22 +1160,100 @@ def main():
     """Run the token reward proxy server."""
     parser = argparse.ArgumentParser(description="Token Reward Proxy Server")
     parser.add_argument("--host", default="0.0.0.0", help="Server host")
-    parser.add_argument("--port", type=int, default=8000, help="Server port")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="Port to serve on (default: 0 = auto-assign)",
+    )
     parser.add_argument(
         "--admin-api-key",
         default=DEFAULT_ADMIN_API_KEY,
         help="Admin API key for management operations",
     )
+    # name_resolve config (same as base proxy_rollout_server)
+    parser.add_argument("--experiment-name", type=str, required=True)
+    parser.add_argument("--trial-name", type=str, required=True)
+    parser.add_argument("--role", type=str, required=True)
+    parser.add_argument("--worker-index", type=int, default=-1)
+    parser.add_argument("--name-resolve-type", type=str, default="nfs")
+    parser.add_argument(
+        "--nfs-record-root", type=str, default="/tmp/areal/name_resolve"
+    )
+    parser.add_argument("--etcd3-addr", type=str, default="localhost:2379")
+    parser.add_argument(
+        "--fileroot",
+        type=str,
+        default=None,
+        help="Root directory for log files (unused, for compatibility with rpc_server)",
+    )
 
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
 
     global _server_host, _server_port, _admin_api_key
+    global \
+        _experiment_name, \
+        _trial_name, \
+        _name_resolve_type, \
+        _nfs_record_root, \
+        _etcd3_addr
     _server_host = args.host
-    _server_port = args.port
+    if _server_host == "0.0.0.0":
+        _server_host = gethostip()
     _admin_api_key = args.admin_api_key
 
-    logger.info(f"Starting Token Reward Proxy Server on {args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    # Set global config for name_resolve
+    _experiment_name = args.experiment_name
+    _trial_name = args.trial_name
+    _name_resolve_type = args.name_resolve_type
+    _nfs_record_root = args.nfs_record_root
+    _etcd3_addr = args.etcd3_addr
+
+    # Get worker identity
+    worker_role = args.role
+    worker_index = args.worker_index
+
+    if "SLURM_PROCID" in os.environ:
+        worker_index = int(os.environ["SLURM_PROCID"])
+    if worker_index == -1:
+        raise ValueError("Invalid worker index. Not found from SLURM environ or args.")
+    worker_id = f"{worker_role}/{worker_index}"
+
+    # Determine port
+    _server_port = args.port if args.port != 0 else find_free_ports(1)[0]
+    _allocated_ports.add(_server_port)
+
+    # Configure name_resolve and register this server
+    name_resolve.reconfigure(
+        NameResolveConfig(
+            type=args.name_resolve_type,
+            nfs_record_root=args.nfs_record_root,
+            etcd3_addr=args.etcd3_addr,
+        )
+    )
+    key = names.worker_discovery(
+        args.experiment_name, args.trial_name, args.role, worker_index
+    )
+    name_resolve.add(key, f"{_server_host}:{_server_port}", replace=True)
+
+    logger.info(
+        f"Starting Token Reward Proxy Server on {_server_host}:{_server_port} "
+        f"for worker {worker_id}"
+    )
+
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=_server_port,
+            log_level="warning",
+            timeout_keep_alive=300,
+        )
+    except KeyboardInterrupt:
+        logger.info("Shutting down Token Reward Proxy Server")
+    finally:
+        cleanup_engine()
+        logger.info("Token Reward Proxy Server stopped.")
 
 
 if __name__ == "__main__":
