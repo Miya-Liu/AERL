@@ -331,6 +331,22 @@ def _remove_api_keys_for_session(session_id: str) -> None:
         _api_key_to_session.pop(api_key, None)
 
 
+async def validate_json_request(raw_request: Request):
+    """Validate that the request content-type is application/json."""
+    content_type = raw_request.headers.get("content-type", "").lower()
+    media_type = content_type.split(";", maxsplit=1)[0]
+    if media_type != "application/json":
+        raise RequestValidationError(
+            errors=[
+                {
+                    "loc": ["header", "content-type"],
+                    "msg": "Unsupported Media Type: Only 'application/json' is allowed",
+                    "type": "value_error",
+                }
+            ]
+        )
+
+
 # =============================================================================
 # Admin Endpoints
 # =============================================================================
