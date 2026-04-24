@@ -33,8 +33,8 @@ from areal.experimental.openai.proxy.server import (
     serialize_interactions,
 )
 
-if TYPE_CHECKING:
-    from areal.experimental.openai.types import InteractionWithTokenLogpReward
+from .cache import InteractionCache as ExtendedInteractionCache
+from .types import InteractionWithTokenLevelReward
 
 # =============================================================================
 # Extended Request/Response Models for Token-Level Rewards
@@ -102,7 +102,11 @@ class TokenRewardSessionData(SessionData):
 
     def __init__(self, session_id: str):
         super().__init__(session_id)
-        # Store token-level rewards separately
+        # Use extended InteractionCache that stores
+        # InteractionWithTokenLevelReward objects
+        self._completions = ExtendedInteractionCache()
+        # Store token-level rewards separately for fallback during export
+        # (when interactions aren't in cache yet at set-time)
         self._token_rewards: dict[str, list[float]] = {}
         self._position_rewards: dict[str, list[PositionRewardInfo]] = {}
         self._lock = threading.Lock()
@@ -113,11 +117,9 @@ class TokenRewardSessionData(SessionData):
         """
         Set token-wise rewards for an interaction.
 
-        Token-level rewards are stored separately for distillation loss.
-        The scalar (trajectory-level) reward is NOT overwritten here — it
-        should be set independently via set_reward(). This separation ensures
-        tree backup advantage computation uses only trajectory-level rewards,
-        while token-level rewards are used only for distillation.
+        Delegates to the extended cache if the interaction is present.
+        Preserves the scalar (trajectory-level) reward — it is NOT
+        overwritten by sum(token_rewards).
 
         Raises
         ------
@@ -137,9 +139,13 @@ class TokenRewardSessionData(SessionData):
             )
         with self._lock:
             self._token_rewards[interaction_id] = token_rewards
-            # Do NOT overwrite scalar reward here. The scalar reward
-            # (trajectory-level) is set via set_reward() and must be
-            # preserved for tree backup advantage computation.
+            # Delegate to extended cache if interaction is present
+            if interaction_id in self.completions:
+                saved_reward = self.completions[interaction_id].reward
+                self.completions.set_rewards(interaction_id, token_rewards)
+                # Restore scalar reward if it was explicitly set via set_reward()
+                if saved_reward is not None:
+                    self.completions[interaction_id].reward = saved_reward
 
     def set_position_rewards(
         self, interaction_id: str, position_rewards: list[PositionRewardInfo]
@@ -147,11 +153,9 @@ class TokenRewardSessionData(SessionData):
         """
         Set position-wise rewards for an interaction.
 
-        Position-level rewards are stored separately for distillation loss.
-        The scalar (trajectory-level) reward is NOT overwritten here — it
-        should be set independently via set_reward(). This separation ensures
-        tree backup advantage computation uses only trajectory-level rewards,
-        while position-level rewards are used only for distillation.
+        Delegates to the extended cache if the interaction is present.
+        Preserves the scalar (trajectory-level) reward — it is NOT
+        overwritten by position-level rewards.
 
         Raises
         ------
@@ -177,9 +181,9 @@ class TokenRewardSessionData(SessionData):
                 for pr in position_rewards
             ]
             self._token_rewards[interaction_id] = chosen_rewards
-            # Do NOT overwrite scalar reward here. The scalar reward
-            # (trajectory-level) is set via set_reward() and must be
-            # preserved for tree backup advantage computation.
+            # Delegate to extended cache if interaction is present
+            if interaction_id in self.completions:
+                self.completions.set_position_rewards(interaction_id, position_rewards)
 
     def compute_entropy(self, interaction_id: str) -> tuple[list[float], float]:
         """
@@ -225,7 +229,7 @@ class TokenRewardSessionData(SessionData):
 
     def export_interactions(
         self, discount: float, style: str
-    ) -> dict[str, InteractionWithTokenLogpReward]:
+    ) -> dict[str, InteractionWithTokenLevelReward]:
         """
         Export interactions with token-level rewards applied.
 
@@ -234,19 +238,21 @@ class TokenRewardSessionData(SessionData):
         tree backup advantage computation; position-level rewards are
         stored separately for distillation loss only.
         """
-        # Apply token-level rewards to interactions before export
+        # Apply token-level rewards to interactions not yet handled
+        # by set-time delegation (e.g., interaction wasn't in cache yet)
         with self._lock:
             for interaction_id, token_rewards in self._token_rewards.items():
                 if interaction_id in self.completions:
                     interaction = self.completions[interaction_id]
-                    # Set token rewards on the interaction object
-                    if hasattr(interaction, "token_rewards"):
+                    # Use typed setter if available (InteractionWithTokenLevelReward)
+                    if hasattr(interaction, "set_token_rewards"):
+                        try:
+                            interaction.set_token_rewards(token_rewards)
+                        except (ValueError, AttributeError):
+                            interaction.token_rewards = token_rewards
+                    else:
                         interaction.token_rewards = token_rewards
-                    # Preserve the scalar reward (set via set_reward) as the
-                    # trajectory-level reward. Do NOT overwrite it with
-                    # sum(token_rewards) — that conflates position-level
-                    # distillation rewards with trajectory-level rewards
-                    # used by tree backup advantage computation.
+                    # Fallback: set scalar reward from token rewards only if None
                     if interaction.reward is None:
                         interaction.reward = sum(token_rewards)
 
