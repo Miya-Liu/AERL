@@ -255,3 +255,19 @@ def test_bug9_position_clamping_warns():
             "_compute_position_level_grpo_loss should log a warning when "
             "position is clamped to valid range"
         )
+
+
+def test_bug12_chunked_apply_has_shape_assertion():
+    """Bug 12: _chunked_apply should assert that logits is 2D (seq_len first)
+    since it splits along dim=0."""
+    import inspect
+    source = inspect.getsource(
+        __import__(
+            "customized_areal.on_policy_distill.training.logprobs",
+            fromlist=["_chunked_apply"],
+        )._chunked_apply
+    )
+    assert "ndim" in source, (
+        "_chunked_apply should assert logits.ndim == 2 since it splits "
+        "along dim=0 assuming seq_len is the first dimension."
+    )

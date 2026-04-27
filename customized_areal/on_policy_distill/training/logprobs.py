@@ -84,7 +84,16 @@ def _chunked_apply(
     labels: torch.Tensor,
     chunk_size: int = 1024,
 ) -> T:
-    """Apply a function in chunks along the first dimension to reduce peak memory."""
+    """Apply a function in chunks along the first dimension to reduce peak memory.
+
+    Assumes logits is 2D [seq_len, vocab_size] with batch dim already squeezed.
+    The caller must handle batch dimensions before calling this function.
+    """
+    assert logits.ndim == 2, (
+        f"_chunked_apply expects 2D logits [seq_len, vocab_size], "
+        f"got {logits.ndim}D with shape {logits.shape}. "
+        f"Squeeze batch dimension before calling."
+    )
     total_seqlen = logits.shape[0]
     assert total_seqlen > 0, "Input logits must have at least one element"
     results: list = []
