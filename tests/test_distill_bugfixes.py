@@ -41,3 +41,21 @@ def test_bug4_stale_session_uses_configured_timeout():
                 "instead of _session_timeout_seconds. Custom timeout configs "
                 "are silently ignored, causing OOM from uncleaned sessions."
             )
+
+
+def test_bug2_export_does_not_remove_session():
+    """Bug 2: export_trajectories should not remove the session from cache.
+    Session removal should be deferred to _cleanup_stale_sessions to avoid
+    race conditions when export is called after end_session."""
+    module = __import__(
+        "customized_areal.on_policy_distill.proxy.proxy_rollout_server",
+        fromlist=["export_trajectories"],
+    )
+    export_trajectories_source = inspect.getsource(module.export_trajectories)
+    for line in export_trajectories_source.split("\n"):
+        stripped = line.strip()
+        if "_session_cache.pop" in stripped:
+            pytest.fail(
+                "export_trajectories should not remove session from "
+                "_session_cache. Defer removal to _cleanup_stale_sessions."
+            )

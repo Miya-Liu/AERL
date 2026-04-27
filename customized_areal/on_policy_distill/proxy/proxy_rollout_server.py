@@ -703,9 +703,12 @@ async def export_trajectories(
     # Serialize for HTTP response (includes position_rewards)
     serialized = serialize_interactions_with_position_rewards(interactions)
 
-    # Remove session from cache and clean up API key mapping
+    # Session will be removed by _cleanup_stale_sessions after it becomes stale.
+    # Don't remove here — the client may call export_trajectories after
+    # end_session, and removing eagerly causes a race with the cleanup task
+    # that can result in HTTP 404 if cleanup runs between end_session and
+    # export_trajectories.
     with _lock:
-        _session_cache.pop(session_id, None)
         _remove_api_keys_for_session(session_id)
 
     logger.info(f"Exported {len(serialized)} interactions from session {session_id}")
