@@ -1115,7 +1115,7 @@ async def _cleanup_stale_sessions():
             stale_sessions = [
                 sid
                 for sid, session in _session_cache.items()
-                if session.is_stale(SESSION_TIMEOUT_SECONDS)
+                if session.is_stale(_session_timeout_seconds)
             ]
 
             for sid in stale_sessions:
