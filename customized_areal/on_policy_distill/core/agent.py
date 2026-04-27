@@ -5,7 +5,6 @@ This module provides a class-based agent interface consistent with AReaL's
 agentic RL training pattern, using the run_backend function from tpfc.
 """
 
-import hashlib
 from typing import Any
 
 from customized_areal.on_policy_distill.core.reward_compute import (
@@ -213,9 +212,7 @@ class OnPolicyDistillAgent:
                                     teacher_client=self.teacher_client,
                                     top_k=self.teacher_client.config.teacher_top_k,
                                 )
-                                completion_id = hashlib.md5(
-                                    str(completion_messages).encode()
-                                ).hexdigest()[:16]
+                                completion_id = interaction.interaction_id
                                 logger.info(
                                     "Computed position rewards via teacher: %d positions",
                                     len(position_rewards),
