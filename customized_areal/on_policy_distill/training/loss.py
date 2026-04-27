@@ -18,6 +18,9 @@ import torch
 
 from areal.trainer.ppo.stats import infer_token_denominator
 from areal.utils import stats_tracker
+from areal.utils.logging import getLogger
+
+logger = getLogger("DistillLoss")
 
 
 def grpo_distill_loss_fn(
@@ -114,24 +117,16 @@ def grpo_distill_loss_fn(
         distill_loss_weight = input_data.get("distill_loss_weight", 0.005)
 
         # Determine prompt length per sample from loss_mask (0 = prompt, 1 = output)
-        # Bug 3 fix: compute prompt_len per sample for correct position offsetting
+        # Vectorized: find first True position per sample
         if loss_mask.dim() > 1:
-            # [batch, seq_len] -> compute per-sample prompt_len
-            prompt_lens = []
-            for b in range(loss_mask.shape[0]):
-                pl = 0
-                for i in range(loss_mask.shape[1]):
-                    if loss_mask[b, i]:
-                        pl = i
-                        break
-                prompt_lens.append(pl)
+            # [batch, seq_len] -> per-sample prompt_len
+            first_true = (loss_mask.bool().cumsum(dim=1) == 1)
+            prompt_lens = first_true.int().argmax(dim=1).tolist()
         else:
             # [seq_len] -> single sample
-            prompt_len = 0
-            for i in range(loss_mask.shape[0]):
-                if loss_mask[i]:
-                    prompt_len = i
-                    break
+            prompt_len = (
+                (loss_mask.bool().cumsum(dim=0) == 1).int().argmax(dim=0).item()
+            )
             prompt_lens = [prompt_len]
 
         position_grpo_loss = _compute_position_level_grpo_loss(
@@ -152,10 +147,11 @@ def grpo_distill_loss_fn(
     )
 
     if distill_stat is not None:
-        # Expand distill_stat to match the shape of loss_mask for stats_tracker
+        # Expand distill_stat to match the shape of loss_mask for stats_tracker.
+        # Use tensor directly to avoid GPU-CPU sync from .item().
         distill_loss_expanded = torch.full(
             loss_mask.shape,
-            distill_stat.item(),
+            distill_stat,
             dtype=torch.float32,
             device=loss_mask.device,
         )
@@ -289,8 +285,16 @@ def _compute_position_level_grpo_loss(
         else:
             pl = prompt_lens
         position = pr.position + pl
-        # Bug 5 fix: clamp position to valid range instead of silently skipping
         if position >= logprobs.shape[0]:
+            logger.warning(
+                "Position %d + prompt_len=%d = %d exceeds logprobs length %d, "
+                "clamping to last position. This may indicate incorrect "
+                "prompt_len computation.",
+                pr.position,
+                pl,
+                position,
+                logprobs.shape[0],
+            )
             position = logprobs.shape[0] - 1
         if position < 0:
             continue
