@@ -112,3 +112,47 @@ def test_bug5_server_no_save_restore():
         "save/restore pattern for scalar reward. Use preserve_scalar_reward=True "
         "in InteractionCache.set_rewards() instead."
     )
+
+
+def test_bug6_distribute_position_rewards_warns_on_unmapped():
+    """Bug 6: _distribute_position_rewards should warn when a
+    position_reward's sample_index doesn't map to any minibatch."""
+    import torch
+    from unittest.mock import patch
+
+    from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
+    from customized_areal.on_policy_distill.training.actor import (
+        _distribute_position_rewards,
+    )
+
+    mb = {
+        "attention_mask": torch.ones(2, 8, dtype=torch.long),
+    }
+    mb_inputs = type("MB", (), {"mbs": [mb], "forward_indices": [0, 1]})()
+
+    bad_pr = PositionRewardInfo(
+        position=0,
+        candidates=["a", "b"],
+        candidate_token_ids=[1, 2],
+        rewards=[0.5, -0.3],
+        chosen_index=0,
+        sample_index=99,
+    )
+    good_pr = PositionRewardInfo(
+        position=1,
+        candidates=["c", "d"],
+        candidate_token_ids=[3, 4],
+        rewards=[0.2, -0.1],
+        chosen_index=0,
+        sample_index=0,
+    )
+
+    with patch("customized_areal.on_policy_distill.training.actor.logger") as mock_logger:
+        _distribute_position_rewards(mb_inputs, [bad_pr, good_pr])
+        warning_calls = [
+            c for c in mock_logger.method_calls if "warning" in str(c)
+        ]
+        assert len(warning_calls) > 0, (
+            "_distribute_position_rewards should log a warning when "
+            "a position_reward's sample_index doesn't map to any minibatch"
+        )

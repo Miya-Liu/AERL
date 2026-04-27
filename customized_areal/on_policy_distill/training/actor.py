@@ -131,9 +131,25 @@ def _distribute_position_rewards(mb_inputs, position_rewards: list) -> None:
     # Group position_rewards by minibatch
     per_mb_prs: dict[int, list] = {}
     for pr in position_rewards:
+        if pr.sample_index >= len(mb_assignment):
+            logger.warning(
+                "position_reward sample_index=%d exceeds batch_size=%d, "
+                "dropping position=%d",
+                pr.sample_index,
+                len(mb_assignment),
+                pr.position,
+            )
+            continue
         mb_i = mb_assignment[pr.sample_index]
-        if mb_i is not None:
-            per_mb_prs.setdefault(mb_i, []).append(pr)
+        if mb_i is None:
+            logger.warning(
+                "position_reward sample_index=%d not mapped to any minibatch, "
+                "dropping position=%d",
+                pr.sample_index,
+                pr.position,
+            )
+            continue
+        per_mb_prs.setdefault(mb_i, []).append(pr)
 
     # Attach to minibatches
     for i, mb in enumerate(mb_inputs.mbs):
