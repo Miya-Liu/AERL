@@ -139,13 +139,12 @@ class TokenRewardSessionData(SessionData):
             )
         with self._lock:
             self._token_rewards[interaction_id] = token_rewards
-            # Delegate to extended cache if interaction is present
+            # Delegate to extended cache, preserving the scalar reward
+            # to avoid _total_reward drift from save/restore pattern.
             if interaction_id in self.completions:
-                saved_reward = self.completions[interaction_id].reward
-                self.completions.set_rewards(interaction_id, token_rewards)
-                # Restore scalar reward if it was explicitly set via set_reward()
-                if saved_reward is not None:
-                    self.completions[interaction_id].reward = saved_reward
+                self.completions.set_rewards(
+                    interaction_id, token_rewards, preserve_scalar_reward=True
+                )
 
     def set_position_rewards(
         self, interaction_id: str, position_rewards: list[PositionRewardInfo]

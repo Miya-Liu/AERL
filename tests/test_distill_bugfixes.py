@@ -59,3 +59,56 @@ def test_bug2_export_does_not_remove_session():
                 "export_trajectories should not remove session from "
                 "_session_cache. Defer removal to _cleanup_stale_sessions."
             )
+
+
+def test_bug5_set_rewards_preserve_scalar():
+    """Bug 5: InteractionCache.set_rewards should support preserving
+    the scalar reward to avoid _total_reward drift from save/restore."""
+    from customized_areal.on_policy_distill.proxy.cache import (
+        InteractionCache,
+    )
+    from customized_areal.on_policy_distill.proxy.types import (
+        InteractionWithTokenLevelReward,
+    )
+
+    cache = InteractionCache()
+
+    class MockModelResponse:
+        output_tokens = [1, 2, 3]
+        input_tokens = [0]
+        input_len = 1
+        output_len = 3
+        output_logprobs = [-1.0, -0.5, -0.3]
+
+    interaction = InteractionWithTokenLevelReward(
+        messages=[{"role": "user", "content": "hi"}],
+        reward=5.0,
+        model_response=MockModelResponse(),
+    )
+    interaction.interaction_id = "test-1"
+    cache["test-1"] = interaction
+
+    cache.set_rewards("test-1", [0.1, 0.2, 0.3], preserve_scalar_reward=True)
+
+    assert cache["test-1"].reward == 5.0, (
+        f"Scalar reward should be preserved, got {cache['test-1'].reward}"
+    )
+    assert cache.total_reward == 5.0, (
+        f"total_reward should be 5.0, got {cache.total_reward}"
+    )
+
+
+def test_bug5_server_no_save_restore():
+    """Bug 5: TokenRewardSessionData.set_token_rewards should not use
+    save/restore pattern for scalar reward."""
+    source = inspect.getsource(
+        __import__(
+            "customized_areal.on_policy_distill.proxy.server",
+            fromlist=["TokenRewardSessionData"],
+        ).TokenRewardSessionData.set_token_rewards
+    )
+    assert "saved_reward" not in source, (
+        "TokenRewardSessionData.set_token_rewards should not use a "
+        "save/restore pattern for scalar reward. Use preserve_scalar_reward=True "
+        "in InteractionCache.set_rewards() instead."
+    )

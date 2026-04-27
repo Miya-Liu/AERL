@@ -230,6 +230,9 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
                         )
 
             super().__setitem__(key, value)
+            # Update total reward when adding new interaction
+            if value.reward is not None:
+                self._total_reward += value.reward
 
     @property
     def last_interaction_id(self) -> str:
@@ -252,6 +255,7 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         self,
         completion_id: str,
         token_rewards: list[float],
+        preserve_scalar_reward: bool = False,
     ) -> None:
         """
         Set token-wise rewards for a specific completion by its ID.
@@ -266,6 +270,9 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         token_rewards : list[float]
             Token-wise rewards, one per output token in the completion.
             For a completion with N output tokens, this should be a list of N floats.
+        preserve_scalar_reward : bool, optional
+            If True, preserves the existing scalar reward instead of overwriting
+            it with sum(token_rewards), by default False.
 
         Raises
         ------
@@ -280,7 +287,7 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         >>> cache.set_rewards("comp-1", [0.5, 0.3, 0.2])  # 3 token rewards
         """
         with self._lock:
-            self._set_rewards_internal(completion_id, token_rewards)
+            self._set_rewards_internal(completion_id, token_rewards, preserve_scalar_reward)
 
     def set_reward(
         self,
@@ -338,6 +345,7 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         self,
         completion_id: str,
         token_rewards: list[float],
+        preserve_scalar_reward: bool = False,
     ) -> None:
         """Internal version of set_rewards without lock acquisition.
 
@@ -388,11 +396,13 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
                 a + b for a, b in zip(self._total_list_reward, rewards_padded)
             ]
 
-        # Update scalar reward tracking (subtract old, add new)
-        old_reward = interaction.reward or 0.0
-        self._total_reward -= old_reward
-        interaction.reward = float(scalar_reward)
-        self._total_reward += float(scalar_reward)
+        # Update scalar reward tracking only if not preserving
+        if not preserve_scalar_reward:
+            # Update scalar reward tracking (subtract old, add new)
+            old_reward = interaction.reward or 0.0
+            self._total_reward -= old_reward
+            interaction.reward = float(scalar_reward)
+            self._total_reward += float(scalar_reward)
 
     def _set_position_rewards_internal(
         self,
