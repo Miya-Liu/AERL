@@ -1,36 +1,43 @@
 # On-Policy Distillation Bug Fixes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix 12 bugs in the on-policy distillation training pipeline, prioritized by crash risk.
+**Goal:** Fix 12 bugs in the on-policy distillation training pipeline, prioritized by
+crash risk.
 
-**Architecture:** Fix bugs in dependency order — server/client bugs first (they affect the data pipeline), then training-side bugs. Each fix is self-contained with its own test.
+**Architecture:** Fix bugs in dependency order — server/client bugs first (they affect
+the data pipeline), then training-side bugs. Each fix is self-contained with its own
+test.
 
 **Tech Stack:** Python 3.12+ | PyTorch | pytest | aiohttp (for async tests)
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|---------------|
-| `customized_areal/on_policy_distill/core/agent.py` | Modify | Bug 1: Use real interaction ID |
-| `customized_areal/on_policy_distill/proxy/workflow.py` | Modify | Bug 2: Move export inside session |
-| `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` | Modify | Bug 4: Fix timeout constant |
-| `customized_areal/on_policy_distill/proxy/server.py` | Modify | Bug 5: Eliminate save/restore pattern |
-| `customized_areal/on_policy_distill/proxy/cache.py` | Modify | Bug 5: Add preserve_scalar_reward option |
-| `customized_areal/on_policy_distill/training/actor.py` | Modify | Bug 6: Warn on unmapped sample_index |
-| `customized_areal/on_policy_distill/training/loss.py` | Modify | Bugs 9, 10, 11: Clamping warning, vectorized prompt_lens, remove .item() |
-| `customized_areal/on_policy_distill/engine/fsdp_engine.py` | Modify | Bug 8: Avoid model_inputs mutation |
-| `customized_areal/on_policy_distill/training/logprobs.py` | Modify | Bug 12: Add shape assertion |
-| `tests/test_distill_bugfixes.py` | Create | All unit tests |
+| File                                                               | Action | Responsibility                                                           |
+| ------------------------------------------------------------------ | ------ | ------------------------------------------------------------------------ |
+| `customized_areal/on_policy_distill/core/agent.py`                 | Modify | Bug 1: Use real interaction ID                                           |
+| `customized_areal/on_policy_distill/proxy/workflow.py`             | Modify | Bug 2: Move export inside session                                        |
+| `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` | Modify | Bug 4: Fix timeout constant                                              |
+| `customized_areal/on_policy_distill/proxy/server.py`               | Modify | Bug 5: Eliminate save/restore pattern                                    |
+| `customized_areal/on_policy_distill/proxy/cache.py`                | Modify | Bug 5: Add preserve_scalar_reward option                                 |
+| `customized_areal/on_policy_distill/training/actor.py`             | Modify | Bug 6: Warn on unmapped sample_index                                     |
+| `customized_areal/on_policy_distill/training/loss.py`              | Modify | Bugs 9, 10, 11: Clamping warning, vectorized prompt_lens, remove .item() |
+| `customized_areal/on_policy_distill/engine/fsdp_engine.py`         | Modify | Bug 8: Avoid model_inputs mutation                                       |
+| `customized_areal/on_policy_distill/training/logprobs.py`          | Modify | Bug 12: Add shape assertion                                              |
+| `tests/test_distill_bugfixes.py`                                   | Create | All unit tests                                                           |
 
----
+______________________________________________________________________
 
 ### Task 1: Fix Bug 1 — Wrong completion_id in OnPolicyDistillAgent
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/core/agent.py:186-244`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -69,7 +76,8 @@ def test_bug1_completion_id_uses_interaction_id():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug1_completion_id_uses_interaction_id -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug1_completion_id_uses_interaction_id -v`
 Expected: FAIL — `hashlib.md5` found in source
 
 - [ ] **Step 3: Fix agent.py to use real interaction_id**
@@ -90,7 +98,8 @@ Also remove the unused `import hashlib` at the top of the file (line 8).
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug1_completion_id_uses_interaction_id -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug1_completion_id_uses_interaction_id -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -106,12 +115,14 @@ to fail with HTTP 400 every time teacher distillation was enabled.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Fix Bug 4 — Wrong timeout constant in stale session cleanup
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py:1118`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -141,7 +152,8 @@ def test_bug4_stale_session_uses_configured_timeout():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug4_stale_session_uses_configured_timeout -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug4_stale_session_uses_configured_timeout -v`
 Expected: FAIL — `SESSION_TIMEOUT_SECONDS` found in `is_stale` call
 
 - [ ] **Step 3: Fix proxy_rollout_server.py**
@@ -157,7 +169,8 @@ if session.is_stale(_session_timeout_seconds):
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug4_stale_session_uses_configured_timeout -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug4_stale_session_uses_configured_timeout -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -173,12 +186,14 @@ custom timeout configs and risking OOM from uncleaned sessions.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Fix Bug 2 — export_interactions called after session end
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/workflow.py:275-297`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -235,7 +250,8 @@ def test_bug2_export_inside_session_context():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug2_export_inside_session_context -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug2_export_inside_session_context -v`
 Expected: FAIL — `export_indent` is not greater than `async_with_indent`
 
 - [ ] **Step 3: Fix workflow.py — move export_interactions inside async with block**
@@ -293,11 +309,13 @@ In `customized_areal/on_policy_distill/proxy/workflow.py`, replace lines 275-297
 
 - [ ] **Step 3: Fix proxy_rollout_server.py — don't remove session on export**
 
-Moving `export_interactions` inside the `async with` block would cause a deadlock:
-the server's `export_trajectories` calls `wait_for_finish()`, but `end_session`
-hasn't been called yet. Instead, defer session removal to the cleanup task.
+Moving `export_interactions` inside the `async with` block would cause a deadlock: the
+server's `export_trajectories` calls `wait_for_finish()`, but `end_session` hasn't been
+called yet. Instead, defer session removal to the cleanup task.
 
-In `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`, modify the `export_trajectories` endpoint (around lines 706-709). Remove the session removal from `export_trajectories`:
+In `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`, modify the
+`export_trajectories` endpoint (around lines 706-709). Remove the session removal from
+`export_trajectories`:
 
 ```python
 # OLD (lines 706-709):
@@ -341,7 +359,8 @@ def test_bug2_export_does_not_remove_session():
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug2_export_does_not_remove_session -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug2_export_does_not_remove_session -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -359,13 +378,16 @@ the stale session cleanup task.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
-### Task 4: Fix Bug 5 — _total_reward drift from save/restore pattern
+### Task 4: Fix Bug 5 — \_total_reward drift from save/restore pattern
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/cache.py:251-283,337-395`
+
 - Modify: `customized_areal/on_policy_distill/proxy/server.py:140-148`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -433,12 +455,15 @@ def test_bug5_server_no_save_restore():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug5_set_rewards_preserve_scalar tests/test_distill_bugfixes.py::test_bug5_server_no_save_restore -v`
-Expected: FAIL — `preserve_scalar_reward` parameter doesn't exist yet, and `saved_reward` found in source
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug5_set_rewards_preserve_scalar tests/test_distill_bugfixes.py::test_bug5_server_no_save_restore -v`
+Expected: FAIL — `preserve_scalar_reward` parameter doesn't exist yet, and
+`saved_reward` found in source
 
 - [ ] **Step 3: Add preserve_scalar_reward to InteractionCache.set_rewards**
 
-In `customized_areal/on_policy_distill/proxy/cache.py`, modify `set_rewards` (line 251) and `_set_rewards_internal` (line 337):
+In `customized_areal/on_policy_distill/proxy/cache.py`, modify `set_rewards` (line 251)
+and `_set_rewards_internal` (line 337):
 
 ```python
 # Replace set_rewards (line 251-283):
@@ -543,7 +568,8 @@ In `customized_areal/on_policy_distill/proxy/server.py`, replace lines 140-148:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug5_set_rewards_preserve_scalar tests/test_distill_bugfixes.py::test_bug5_server_no_save_restore -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug5_set_rewards_preserve_scalar tests/test_distill_bugfixes.py::test_bug5_server_no_save_restore -v`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
@@ -559,12 +585,14 @@ option to InteractionCache.set_rewards() and use it instead.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
-### Task 5: Fix Bug 6 — Warn on unmapped sample_index in _distribute_position_rewards
+### Task 5: Fix Bug 6 — Warn on unmapped sample_index in \_distribute_position_rewards
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/actor.py:108-143`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -622,7 +650,8 @@ def test_bug6_distribute_position_rewards_warns_on_unmapped():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug6_distribute_position_rewards_warns_on_unmapped -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug6_distribute_position_rewards_warns_on_unmapped -v`
 Expected: FAIL — no warning logged
 
 - [ ] **Step 3: Fix actor.py**
@@ -663,7 +692,8 @@ In `customized_areal/on_policy_distill/training/actor.py`, replace lines 131-136
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug6_distribute_position_rewards_warns_on_unmapped -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug6_distribute_position_rewards_warns_on_unmapped -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -679,12 +709,14 @@ diagnose data flow issues.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Fix Bugs 9, 10, 11 — Loss function correctness and performance
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/loss.py:116-165,292-296`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -778,7 +810,8 @@ def test_bug9_position_clamping_warns():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug10_prompt_lens_vectorized tests/test_distill_bugfixes.py::test_bug11_no_item_in_distill_stat tests/test_distill_bugfixes.py::test_bug9_position_clamping_warns -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug10_prompt_lens_vectorized tests/test_distill_bugfixes.py::test_bug11_no_item_in_distill_stat tests/test_distill_bugfixes.py::test_bug9_position_clamping_warns -v`
 Expected: FAIL on all three
 
 - [ ] **Step 3: Fix loss.py — vectorize prompt_lens**
@@ -888,12 +921,14 @@ Replace lines 292-296 in `customized_areal/on_policy_distill/training/loss.py`:
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug10_prompt_lens_vectorized tests/test_distill_bugfixes.py::test_bug11_no_item_in_distill_stat tests/test_distill_bugfixes.py::test_bug9_position_clamping_warns -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug10_prompt_lens_vectorized tests/test_distill_bugfixes.py::test_bug11_no_item_in_distill_stat tests/test_distill_bugfixes.py::test_bug9_position_clamping_warns -v`
 Expected: PASS
 
 - [ ] **Step 7: Run existing tests to check for regressions**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
 Expected: PASS
 
 - [ ] **Step 8: Commit**
@@ -911,12 +946,14 @@ git commit -m "fix(distill): vectorize prompt_lens, remove .item() sync, warn on
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Fix Bug 8 — model_inputs in-place mutation in fsdp_engine
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/engine/fsdp_engine.py:41-111,299-313`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -943,12 +980,15 @@ def test_bug8_no_model_inputs_mutation():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug8_no_model_inputs_mutation -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug8_no_model_inputs_mutation -v`
 Expected: FAIL — `rolled_input_ids` mutation found
 
-- [ ] **Step 3: Fix fsdp_engine.py — add labels parameter to _compute_logprobs_entropy**
+- [ ] **Step 3: Fix fsdp_engine.py — add labels parameter to
+  \_compute_logprobs_entropy**
 
-In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, modify `_compute_logprobs_entropy` (line 41) to accept optional `labels_override`:
+In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, modify
+`_compute_logprobs_entropy` (line 41) to accept optional `labels_override`:
 
 ```python
 # Replace the method signature at line 41-42:
@@ -961,7 +1001,8 @@ In `customized_areal/on_policy_distill/engine/fsdp_engine.py`, modify `_compute_
     ) -> tuple[torch.Tensor, torch.Tensor]:
 ```
 
-Then, at the beginning of the method (after the docstring), add labels_override logic before the existing labels computation:
+Then, at the beginning of the method (after the docstring), add labels_override logic
+before the existing labels computation:
 
 ```python
         # Use labels_override if provided (avoids mutating inputs)
@@ -976,6 +1017,7 @@ Then, at the beginning of the method (after the docstring), add labels_override 
 ```
 
 Remove the old lines that computed labels (original lines 72-76):
+
 ```python
         # OLD: Remove these lines (they're replaced by the if/else above)
         # Try to get rolled_input_ids (if Ulysses SP is enabled)
@@ -1017,7 +1059,8 @@ Then in `_compute_logprobs_and_loss`, replace the mutation block (lines 299-313)
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug8_no_model_inputs_mutation -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug8_no_model_inputs_mutation -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1034,12 +1077,14 @@ _compute_logprobs_entropy and pass labels directly.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
-### Task 8: Fix Bug 12 — Add shape assertion to _chunked_apply
+### Task 8: Fix Bug 12 — Add shape assertion to \_chunked_apply
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/training/logprobs.py:81-100`
+
 - Test: `tests/test_distill_bugfixes.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -1065,12 +1110,14 @@ def test_bug12_chunked_apply_has_shape_assertion():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug12_chunked_apply_has_shape_assertion -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug12_chunked_apply_has_shape_assertion -v`
 Expected: FAIL — no ndim/dim assertion
 
 - [ ] **Step 3: Fix logprobs.py**
 
-In `customized_areal/on_policy_distill/training/logprobs.py`, modify `_chunked_apply` (line 81):
+In `customized_areal/on_policy_distill/training/logprobs.py`, modify `_chunked_apply`
+(line 81):
 
 ```python
 # Replace the function body:
@@ -1107,7 +1154,8 @@ def _chunked_apply(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug12_chunked_apply_has_shape_assertion -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py::test_bug12_chunked_apply_has_shape_assertion -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1123,28 +1171,32 @@ Add assertion to catch this misuse early.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Run full test suite and pre-commit
 
 - [ ] **Step 1: Run all bugfix tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_distill_bugfixes.py -v`
 Expected: All PASS
 
 - [ ] **Step 2: Run existing offline training tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/training/test_offline_train.py -v`
 Expected: All PASS
 
 - [ ] **Step 3: Run existing proxy tests (no GPU needed)**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/ -v -k "not integration" 2>&1 | head -80`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/ -v -k "not integration" 2>&1 | head -80`
 Expected: Most PASS (some may fail for unrelated reasons)
 
 - [ ] **Step 4: Run pre-commit**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && pre-commit run --all-files 2>&1 | tail -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && pre-commit run --all-files 2>&1 | tail -30`
 Expected: PASS (fix any formatting issues first)
 
 - [ ] **Step 5: Final commit if pre-commit made changes**
@@ -1156,11 +1208,11 @@ git commit -m "style: pre-commit fixes for bugfix changes
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 ```
 
----
+______________________________________________________________________
 
 ## Bugs Not Implemented (Deferred)
 
-| Bug | Reason |
-|-----|--------|
-| Bug 3 (threading.Lock → asyncio) | Requires careful analysis of which code paths are sync vs async; high risk of introducing new deadlocks. Should be a separate task. |
-| Bug 7 (dual PositionRewardInfo) | Refactoring to consolidate types affects serialization throughout proxy server/client. Needs careful coordination. Should be a separate task. |
+| Bug                              | Reason                                                                                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bug 3 (threading.Lock → asyncio) | Requires careful analysis of which code paths are sync vs async; high risk of introducing new deadlocks. Should be a separate task.           |
+| Bug 7 (dual PositionRewardInfo)  | Refactoring to consolidate types affects serialization throughout proxy server/client. Needs careful coordination. Should be a separate task. |

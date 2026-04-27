@@ -308,7 +308,9 @@ class MultiCandidateFSDPEngine(FSDPEngine):
                         # Pass multi-candidate labels directly without mutating
                         # ctx.model_inputs, avoiding potential race conditions.
                         logprobs, entropy = self._compute_logprobs_entropy(
-                            logits, ctx.model_inputs, ctx.ulysses_pad_size,
+                            logits,
+                            ctx.model_inputs,
+                            ctx.ulysses_pad_size,
                             labels_override=multi_candidate_labels,
                         )
                     else:

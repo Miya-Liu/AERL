@@ -287,7 +287,9 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLevelReward]):
         >>> cache.set_rewards("comp-1", [0.5, 0.3, 0.2])  # 3 token rewards
         """
         with self._lock:
-            self._set_rewards_internal(completion_id, token_rewards, preserve_scalar_reward)
+            self._set_rewards_internal(
+                completion_id, token_rewards, preserve_scalar_reward
+            )
 
     def set_reward(
         self,

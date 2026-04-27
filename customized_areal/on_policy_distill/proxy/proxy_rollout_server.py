@@ -51,7 +51,6 @@ from areal.experimental.openai.proxy.server import (
     RL_END_SESSION_PATHNAME,
     RL_SET_REWARD_PATHNAME,
     RL_START_SESSION_PATHNAME,
-    SESSION_TIMEOUT_SECONDS,
     ExportTrajectoriesRequest,
     ExportTrajectoriesResponse,
     SetRewardRequest,

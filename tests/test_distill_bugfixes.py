@@ -117,8 +117,9 @@ def test_bug5_server_no_save_restore():
 def test_bug6_distribute_position_rewards_warns_on_unmapped():
     """Bug 6: _distribute_position_rewards should warn when a
     position_reward's sample_index doesn't map to any minibatch."""
-    import torch
     from unittest.mock import patch
+
+    import torch
 
     from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
     from customized_areal.on_policy_distill.training.actor import (
@@ -147,11 +148,11 @@ def test_bug6_distribute_position_rewards_warns_on_unmapped():
         sample_index=0,
     )
 
-    with patch("customized_areal.on_policy_distill.training.actor.logger") as mock_logger:
+    with patch(
+        "customized_areal.on_policy_distill.training.actor.logger"
+    ) as mock_logger:
         _distribute_position_rewards(mb_inputs, [bad_pr, good_pr])
-        warning_calls = [
-            c for c in mock_logger.method_calls if "warning" in str(c)
-        ]
+        warning_calls = [c for c in mock_logger.method_calls if "warning" in str(c)]
         assert len(warning_calls) > 0, (
             "_distribute_position_rewards should log a warning when "
             "a position_reward's sample_index doesn't map to any minibatch"
@@ -216,8 +217,9 @@ def test_bug8_no_model_inputs_mutation():
 def test_bug9_position_clamping_warns():
     """Bug 9: Position clamping in _compute_position_level_grpo_loss should
     log a warning instead of silently corrupting gradient signal."""
-    import torch
     from unittest.mock import patch
+
+    import torch
 
     from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
     from customized_areal.on_policy_distill.training.loss import (
@@ -241,16 +243,16 @@ def test_bug9_position_clamping_warns():
         ),
     ]
 
-    with patch("customized_areal.on_policy_distill.training.loss.logger") as mock_logger:
+    with patch(
+        "customized_areal.on_policy_distill.training.loss.logger"
+    ) as mock_logger:
         _compute_position_level_grpo_loss(
             position_rewards=position_rewards,
             logprobs=logprobs,
             loss_mask=loss_mask,
             prompt_lens=[0],
         )
-        warning_calls = [
-            c for c in mock_logger.method_calls if "warning" in str(c)
-        ]
+        warning_calls = [c for c in mock_logger.method_calls if "warning" in str(c)]
         assert len(warning_calls) > 0, (
             "_compute_position_level_grpo_loss should log a warning when "
             "position is clamped to valid range"
@@ -261,6 +263,7 @@ def test_bug12_chunked_apply_has_shape_assertion():
     """Bug 12: _chunked_apply should assert that logits is 2D (seq_len first)
     since it splits along dim=0."""
     import inspect
+
     source = inspect.getsource(
         __import__(
             "customized_areal.on_policy_distill.training.logprobs",

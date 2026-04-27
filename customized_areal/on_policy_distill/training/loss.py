@@ -120,7 +120,7 @@ def grpo_distill_loss_fn(
         # Vectorized: find first True position per sample
         if loss_mask.dim() > 1:
             # [batch, seq_len] -> per-sample prompt_len
-            first_true = (loss_mask.bool().cumsum(dim=1) == 1)
+            first_true = loss_mask.bool().cumsum(dim=1) == 1
             prompt_lens = first_true.int().argmax(dim=1).tolist()
         else:
             # [seq_len] -> single sample
