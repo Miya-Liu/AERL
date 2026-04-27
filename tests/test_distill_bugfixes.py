@@ -197,6 +197,22 @@ def test_bug11_no_item_in_distill_stat():
             )
 
 
+def test_bug8_no_model_inputs_mutation():
+    """Bug 8: _compute_logprobs_and_loss should not mutate ctx.model_inputs
+    by temporarily overriding rolled_input_ids. Pass labels separately."""
+    source = inspect.getsource(
+        __import__(
+            "customized_areal.on_policy_distill.engine.fsdp_engine",
+            fromlist=["MultiCandidateFSDPEngine"],
+        ).MultiCandidateFSDPEngine._compute_logprobs_and_loss
+    )
+    assert 'ctx.model_inputs["rolled_input_ids"]' not in source, (
+        "_compute_logprobs_and_loss should not mutate ctx.model_inputs by "
+        "overriding rolled_input_ids. Pass multi_candidate_labels as a "
+        "separate parameter to _compute_logprobs_entropy instead."
+    )
+
+
 def test_bug9_position_clamping_warns():
     """Bug 9: Position clamping in _compute_position_level_grpo_loss should
     log a warning instead of silently corrupting gradient signal."""

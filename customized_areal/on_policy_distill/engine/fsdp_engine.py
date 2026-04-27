@@ -43,6 +43,7 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         logits: torch.Tensor,
         inputs: dict[str, Any],
         ulysses_pad_size: int = 0,
+        labels_override: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute logprobs and entropy with multi-candidate support.
 
@@ -62,6 +63,9 @@ class MultiCandidateFSDPEngine(FSDPEngine):
             - input_ids: Used to compute rolled_input_ids if not provided.
         ulysses_pad_size : int, optional
             Size of Ulysses padding to remove from outputs.
+        labels_override : torch.Tensor | None, optional
+            Override labels for logprob computation. If provided, this will be used
+            instead of the labels from inputs (prevents mutation of inputs dict).
 
         Returns
         -------
@@ -69,11 +73,15 @@ class MultiCandidateFSDPEngine(FSDPEngine):
             - logprobs: Logprobs at label positions, same shape as labels (without vocab dim)
             - entropy: Entropy of the distribution, shape [seq_len] or [batch, seq_len]
         """
-        # Try to get rolled_input_ids (if Ulysses SP is enabled)
-        labels = inputs.get(
-            "rolled_input_ids",
-            torch.roll(inputs["input_ids"], shifts=-1, dims=-1),
-        )
+        # Use labels_override if provided (avoids mutating inputs)
+        if labels_override is not None:
+            labels = labels_override
+        else:
+            # Try to get rolled_input_ids (if Ulysses SP is enabled)
+            labels = inputs.get(
+                "rolled_input_ids",
+                torch.roll(inputs["input_ids"], shifts=-1, dims=-1),
+            )
 
         # Handle batch dimension: inputs (padded_mbs) has batch dim (1, seq_len, ...)
         # We need to match logits shape which may be [seq_len, vocab] or [1, seq_len, vocab]
@@ -297,20 +305,12 @@ class MultiCandidateFSDPEngine(FSDPEngine):
                     )
 
                     if multi_candidate_labels is not None:
-                        # Use multi-candidate labels for gathering
-                        # Temporarily override rolled_input_ids
-                        original_rolled = ctx.model_inputs.get("rolled_input_ids")
-                        ctx.model_inputs["rolled_input_ids"] = multi_candidate_labels
-
-                        try:
-                            logprobs, entropy = self._compute_logprobs_entropy(
-                                logits, ctx.model_inputs, ctx.ulysses_pad_size
-                            )
-                        finally:
-                            if original_rolled is not None:
-                                ctx.model_inputs["rolled_input_ids"] = original_rolled
-                            else:
-                                ctx.model_inputs.pop("rolled_input_ids", None)
+                        # Pass multi-candidate labels directly without mutating
+                        # ctx.model_inputs, avoiding potential race conditions.
+                        logprobs, entropy = self._compute_logprobs_entropy(
+                            logits, ctx.model_inputs, ctx.ulysses_pad_size,
+                            labels_override=multi_candidate_labels,
+                        )
                     else:
                         # Fallback to standard single-candidate
                         logprobs, entropy = self._compute_logprobs_entropy(
