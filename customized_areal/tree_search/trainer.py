@@ -400,7 +400,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.info("Saved MCTS tree checkpoint with rollout cache")
 
-
     def _cache_aware_prepare_batch(
         self,
         dataloader,

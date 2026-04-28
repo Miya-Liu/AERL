@@ -149,11 +149,11 @@ def get_tpfc_rl_dataset(
                 marker = "<User Query>: "
                 idx = content.rfind(marker)
                 if idx != -1:
-                    query = content[idx + len(marker):]
+                    query = content[idx + len(marker) :]
                     # Skip "<context>...<context>" prefix if present
                     ctx_end = query.rfind("<context>")
                     if ctx_end != -1:
-                        query = query[ctx_end + len("<context>"):]
+                        query = query[ctx_end + len("<context>") :]
                 break
 
         result = {

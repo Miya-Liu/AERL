@@ -4,7 +4,7 @@ Verifies that individual trajectory dicts from each workflow.arun_episode()
 call are preserved correctly through:
 
 1. GroupedRolloutWorkflow concatenation (concat_padded_tensors)
-2. _merge_cached_and_new splitting
+2. _split_grouped_trajectories splitting
 3. Full prepare_batch / rollout_batch pipeline with real GPU inference
 
 Tier 1 (CPU): tests 1-8 — no GPU required
@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-from customized_areal.tree_search.trainer import _merge_cached_and_new
+from customized_areal.tree_search.trainer import _split_grouped_trajectories
 
 from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
 from areal.utils.data import concat_padded_tensors
@@ -145,66 +145,59 @@ class TestConcatPaddedTensorsPreservesValues:
         assert result["_mcts_seq_ids"] == [10, 11, 20]
 
 
-class TestMergeCachedAndNew:
-    """Test _merge_cached_and_new preserves data and metadata through splitting."""
+class TestSplitGroupedTrajectories:
+    """Test _split_grouped_trajectories preserves data and metadata through splitting."""
 
-    def test_merge_preserves_count(self):
-        """2 cached (shape [1,s]) + 2 grouped new (shape [2,s] each) = 6 items."""
-        cached = [_make_traj(1, 5, token_offset=i) for i in range(2)]
-        new = [_make_traj(2, 5, token_offset=10 + i * 10) for i in range(2)]
+    def test_split_preserves_count(self):
+        """2 grouped trajs (shape [2,s] each) = 4 items after split."""
+        trajs = [_make_traj(2, 5, token_offset=10 + i * 10) for i in range(2)]
 
-        merged = _merge_cached_and_new(cached, new)
+        result = _split_grouped_trajectories(trajs)
 
-        assert len(merged) == 6  # 2 + 2*2
+        assert len(result) == 4  # 2*2
 
-    def test_merge_preserves_tensor_values(self):
-        """After merge, each individual trajectory's tensor values match the original."""
-        cached = [_make_traj(1, 5, token_offset=0, logprob_val=-0.1)]
+    def test_split_preserves_tensor_values(self):
+        """After split, each individual trajectory's tensor values match the original."""
         # Grouped traj: shape [2, 5] — two agents in one dict
         new_batch = _make_traj(2, 5, token_offset=10, logprob_val=-0.2)
-        new = [new_batch]
+        trajs = [new_batch]
 
-        merged = _merge_cached_and_new(cached, new)
-
-        # Cached item preserved
-        torch.testing.assert_close(merged[0]["input_ids"], cached[0]["input_ids"])
-        torch.testing.assert_close(merged[0]["logprobs"], cached[0]["logprobs"])
+        result = _split_grouped_trajectories(trajs)
 
         # Split items from grouped traj
         for i in range(2):
             torch.testing.assert_close(
-                merged[1 + i]["input_ids"], new_batch["input_ids"][i : i + 1]
+                result[i]["input_ids"], new_batch["input_ids"][i : i + 1]
             )
             torch.testing.assert_close(
-                merged[1 + i]["logprobs"], new_batch["logprobs"][i : i + 1]
+                result[i]["logprobs"], new_batch["logprobs"][i : i + 1]
             )
             torch.testing.assert_close(
-                merged[1 + i]["rewards"], new_batch["rewards"][i : i + 1]
+                result[i]["rewards"], new_batch["rewards"][i : i + 1]
             )
 
-    def test_merge_preserves_metadata(self):
+    def test_split_preserves_metadata(self):
         """Grouped _mcts_seq_ids list is split into per-item _mcts_seq_id."""
-        cached = []
         grouped = _make_traj(2, 5, _mcts_query_id="q1")
         grouped["_mcts_seq_ids"] = [10, 20]
-        new = [grouped]
+        trajs = [grouped]
 
-        merged = _merge_cached_and_new(cached, new)
+        result = _split_grouped_trajectories(trajs)
 
-        assert merged[0]["_mcts_seq_id"] == 10
-        assert merged[0]["_mcts_query_id"] == "q1"
-        assert merged[1]["_mcts_seq_id"] == 20
-        assert merged[1]["_mcts_query_id"] == "q1"
+        assert result[0]["_mcts_seq_id"] == 10
+        assert result[0]["_mcts_query_id"] == "q1"
+        assert result[1]["_mcts_seq_id"] == 20
+        assert result[1]["_mcts_query_id"] == "q1"
 
-    def test_merge_handles_single_batch_trajs(self):
-        """Grouped traj with batch_size=1 should pass through unchanged."""
+    def test_split_handles_single_batch_trajs(self):
+        """Traj with batch_size=1 should pass through unchanged."""
         single = _make_traj(1, 5, token_offset=42, _mcts_query_id="q0")
-        merged = _merge_cached_and_new([], [single])
+        result = _split_grouped_trajectories([single])
 
-        assert len(merged) == 1
-        assert merged[0] is single  # Same object, no splitting
+        assert len(result) == 1
+        assert result[0] is single  # Same object, no splitting
 
-    def test_merge_different_seq_lengths_with_padding(self):
+    def test_split_different_seq_lengths_with_padding(self):
         """Grouped traj with padding (from concat_padded_tensors) splits correctly."""
         # Simulate what GroupedRolloutWorkflow produces:
         # two agents with different seq lengths, concatenated and padded
@@ -214,26 +207,25 @@ class TestMergeCachedAndNew:
         grouped["_mcts_seq_ids"] = [100, 200]
         grouped["_mcts_query_id"] = "qx"
 
-        merged = _merge_cached_and_new([], [grouped])
+        result = _split_grouped_trajectories([grouped])
 
-        assert len(merged) == 2
+        assert len(result) == 2
         # First agent: original 3 tokens (padded to 5 by concat)
-        assert merged[0]["_mcts_seq_id"] == 100
-        assert merged[0]["_mcts_query_id"] == "qx"
+        assert result[0]["_mcts_seq_id"] == 100
+        assert result[0]["_mcts_query_id"] == "qx"
         # input_ids shape should be [1, 5] (the full padded dim from concat)
-        assert merged[0]["input_ids"].shape[0] == 1
+        assert result[0]["input_ids"].shape[0] == 1
         # Check original values at non-padded positions
-        torch.testing.assert_close(merged[0]["input_ids"][0, :3], t1["input_ids"][0])
+        torch.testing.assert_close(result[0]["input_ids"][0, :3], t1["input_ids"][0])
         # Second agent: original 5 tokens
-        assert merged[1]["_mcts_seq_id"] == 200
-        torch.testing.assert_close(merged[1]["input_ids"][0], t2["input_ids"][0])
+        assert result[1]["_mcts_seq_id"] == 200
+        torch.testing.assert_close(result[1]["input_ids"][0], t2["input_ids"][0])
 
-    def test_merge_empty_cases(self):
-        """Empty inputs produce correct results."""
-        assert _merge_cached_and_new([], []) == []
+    def test_split_empty(self):
+        """Empty input produces empty result."""
+        assert _split_grouped_trajectories([]) == []
         single = _make_traj(1, 5)
-        assert len(_merge_cached_and_new([], [single])) == 1
-        assert len(_merge_cached_and_new([single], [])) == 1
+        assert len(_split_grouped_trajectories([single])) == 1
 
 
 class TestGroupedRolloutWorkflow:
@@ -332,8 +324,8 @@ class TestEndToEndRoundtrip:
         grouped["_mcts_seq_ids"] = [100, 200, 300]
         grouped["_mcts_query_id"] = "q_roundtrip"
 
-        # Step 2: _merge_cached_and_new splits back into individual items
-        merged = _merge_cached_and_new([], [grouped])
+        # Step 2: _split_grouped_trajectories splits back into individual items
+        merged = _split_grouped_trajectories([grouped])
 
         # Verify count
         assert len(merged) == 3
@@ -359,35 +351,27 @@ class TestEndToEndRoundtrip:
             assert merged[i]["_mcts_seq_id"] == [100, 200, 300][i]
             assert merged[i]["_mcts_query_id"] == "q_roundtrip"
 
-    def test_roundtrip_with_cached_and_new(self):
-        """Full path with both cached and new trajectories."""
-        cached = [
-            _make_traj(1, 4, token_offset=0, logprob_val=-0.5, reward=0.9),
-        ]
-
-        # New: 2 agents grouped
-        new_individuals = [
+    def test_roundtrip_split_grouped(self):
+        """Full path: concat then split grouped trajectories."""
+        # 2 agents grouped
+        individuals = [
             _make_traj(1, 3, token_offset=10, logprob_val=-0.1, reward=1.0),
             _make_traj(1, 5, token_offset=20, logprob_val=-0.2, reward=0.5),
         ]
-        grouped_new = concat_padded_tensors(new_individuals)
+        grouped = concat_padded_tensors(individuals)
 
-        merged = _merge_cached_and_new(cached, [grouped_new])
+        merged = _split_grouped_trajectories([grouped])
 
-        assert len(merged) == 3  # 1 cached + 2 split from grouped
+        assert len(merged) == 2
 
-        # Cached preserved exactly
-        torch.testing.assert_close(merged[0]["input_ids"], cached[0]["input_ids"])
-        torch.testing.assert_close(merged[0]["logprobs"], cached[0]["logprobs"])
-
-        # New split items
-        for i, orig in enumerate(new_individuals):
+        # Split items
+        for i, orig in enumerate(individuals):
             seqlen = orig["attention_mask"].sum().item()
             torch.testing.assert_close(
-                merged[1 + i]["input_ids"][0, :seqlen], orig["input_ids"][0]
+                merged[i]["input_ids"][0, :seqlen], orig["input_ids"][0]
             )
             torch.testing.assert_close(
-                merged[1 + i]["logprobs"][0, :seqlen], orig["logprobs"][0]
+                merged[i]["logprobs"][0, :seqlen], orig["logprobs"][0]
             )
 
 
@@ -565,7 +549,7 @@ class TestGPUBatchConsistency:
         assert total_bs == 4  # 2 prompts * 2 samples
 
         # Split back into individual trajectories and verify each has valid data
-        merged = _merge_cached_and_new([], batch_results)
+        merged = _split_grouped_trajectories(batch_results)
 
         # Each split item should have batch_size=1
         for item in merged:
