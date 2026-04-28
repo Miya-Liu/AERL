@@ -1,11 +1,13 @@
 # customized_areal/tree_search/trainer.py
 """MCTS Tree Backup PPOTrainer.
 
-Subclass of PPOTrainer that replaces GAE advantage computation with MCTS
-tree backup. Patches the outer PPOActor.compute_advantages method so that:
+Subclass of PPOTrainer that adds MCTS tree backup to PPO training.
+Patches the outer PPOActor.compute_advantages method so that:
 1. The original GAE runs first (KL rewards, scaling, normalization)
 2. Trajectories are inserted into the tree with raw rewards
-3. Tree Q-values overwrite advantages/returns
+3. Depending on advantage_mode config:
+   - TREE: tree Q-values overwrite advantages/returns
+   - GAE: original GAE advantages/returns are preserved
 4. KL metadata (kl_rewards, tot_rewards) is preserved for logging
 """
 
@@ -18,6 +20,7 @@ import torch
 from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
+    AdvantageMode,
     RolloutCacheConfig,
     TreeBackupConfig,
     TreeBackupMode,
@@ -102,18 +105,21 @@ def _unpatch_wrap_openai_agent(actor: PPOActor) -> None:
 
 
 def patch_ppo_actor_for_tree_backup(
-    tree_store: MCTSTreeStore, tree_advantage_computer: TreeAdvantageComputer
+    tree_store: MCTSTreeStore,
+    tree_advantage_computer: TreeAdvantageComputer,
+    advantage_mode: AdvantageMode = AdvantageMode.TREE,
 ) -> None:
     """Patch PPOActor.compute_advantages to add MCTS tree backup after GAE.
 
     The patched method:
     1. Calls the original compute_advantages (full GAE pipeline)
     2. Inserts trajectories into the tree with raw rewards
-    3. Overwrites advantages/returns with tree Q-values
+    3. If advantage_mode is TREE, overwrites advantages/returns with tree Q-values
     4. Marks trajectories as trained
 
-    The original method's kl_rewards, tot_rewards, loss_mask, logprobs
-    are preserved for logging and downstream use.
+    When advantage_mode is GAE, trajectories are still inserted into the tree
+    (for caching and MCTS statistics), but the original GAE advantages/returns
+    are preserved unchanged.
     """
     # Preserve the true original if patching twice (don't stack patches)
     if hasattr(PPOActor, "_original_compute_advantages"):
@@ -127,19 +133,22 @@ def patch_ppo_actor_for_tree_backup(
         # 1. Run original GAE pipeline (KL rewards, scaling, normalization, etc.)
         result = original_compute_advantages(self, data)
 
-        # 2. Insert trajectories into tree with raw rewards, compute tree Q-values
+        # 2. Insert trajectories into tree with raw rewards
         tree_store.insert_batch(result)
-        tree_advantage_computer.compute(result)
 
-        # 3. Mark trajectories as trained so they won't be loaded from cache again
+        # 3. Overwrite advantages/returns with tree Q-values if TREE mode
+        if advantage_mode == AdvantageMode.TREE:
+            tree_advantage_computer.compute(result)
+
+        # 4. Mark trajectories as trained so they won't be loaded from cache again
         _mark_batch_trained(tree_store, result)
 
-        # 4. Record training step order for replay (skip during replay to avoid duplicates)
-        if not getattr(tree_store, "_replay_mode", False):
-            global_step = result[0].get("_global_step") if result else None
-            tree_store.record_training_step(global_step, result)
+        # 5. Record training step order for replay/debugging
+        global_step = result[0].get("_global_step") if result else None
+        tree_store.record_training_step(global_step, result)
 
-        # advantages/returns already overwritten by compute()
+        # advantages/returns already overwritten by compute() in TREE mode,
+        # or preserved from GAE in GAE mode.
         # kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
         return result
 
@@ -155,44 +164,34 @@ def unpatch_ppo_actor() -> None:
         del PPOActor._original_compute_advantages
 
 
-def _merge_cached_and_new(
-    cached_trajs: list[dict[str, Any]],
-    new_trajs: list[dict[str, Any]],
+def _split_grouped_trajectories(
+    trajs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Merge cached and newly-generated trajectory dicts.
+    """Split grouped trajectory dicts into individual items.
 
-    Returns a list of trajectory dicts (not merged into a single dict).
-    Cached trajectories have shape [1, seq_len] each. New trajectories
-    may be grouped (shape [group_size, seq_len]) or individual.
-
-    We avoid merging everything via concat_padded_tensors because
-    non-tensor keys like _mcts_seq_id and _mcts_query_id would be
-    lost (concat_padded_tensors keeps only the first dict's value
-    for non-tensor, non-list keys). Keeping them as separate items
-    in the list preserves per-trajectory metadata.
+    Grouped trajectories may have shape [group_size, seq_len].
+    We avoid concat_padded_tensors because non-tensor keys like
+    _mcts_seq_id would be lost. Keeping them as separate items
+    preserves per-trajectory metadata.
     """
-    all_trajs = list(cached_trajs)
-
-    for traj in new_trajs:
+    result: list[dict[str, Any]] = []
+    for traj in trajs:
         batch_size = traj["input_ids"].shape[0]
         if batch_size == 1:
-            all_trajs.append(traj)
-        else:
-            # Split grouped trajectory into individual items to
-            # preserve per-sample _mcts_seq_ids metadata
-            for i in range(batch_size):
-                single = {}
-                for k, v in traj.items():
-                    if isinstance(v, torch.Tensor) and v.dim() >= 1:
-                        single[k] = v[i : i + 1]
-                    elif isinstance(v, list) and k == "_mcts_seq_ids":
-                        single["_mcts_seq_id"] = v[i]
-                        single["_mcts_query_id"] = traj.get("_mcts_query_id")
-                    else:
-                        single[k] = v
-                all_trajs.append(single)
-
-    return all_trajs
+            result.append(traj)
+            continue
+        for i in range(batch_size):
+            single: dict[str, Any] = {}
+            for k, v in traj.items():
+                if isinstance(v, torch.Tensor) and v.dim() >= 1:
+                    single[k] = v[i : i + 1]
+                elif isinstance(v, list) and k == "_mcts_seq_ids":
+                    single["_mcts_seq_id"] = v[i]
+                    single["_mcts_query_id"] = traj.get("_mcts_query_id")
+                else:
+                    single[k] = v
+            result.append(single)
+    return result
 
 
 class _CacheAwareBatchBuilder:
@@ -320,7 +319,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
             # Patch PPOActor for tree backup
             patch_ppo_actor_for_tree_backup(
-                self.tree_store, self.tree_advantage_computer
+                self.tree_store,
+                self.tree_advantage_computer,
+                advantage_mode=self.tree_backup_config.advantage_mode,
             )
 
             # Patch _wrap_openai_agent to use QueryIDProxyWorkflow instead
@@ -330,25 +331,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
             # concat_padded_tensors drops non-tensor keys.
             _patch_wrap_openai_agent_for_query_id(self.actor)
 
-            if self.cache_config.replay:
-                self.tree_store._replay_mode = True
-                if not self.tree_store._training_history:
-                    self.tree_store.build_training_history()
-                if not self.tree_store._training_history:
-                    raise ValueError(
-                        "Cannot replay: no training history found in tree "
-                        "checkpoint. Run a training session first."
-                    )
-                self._replay_global_step = 0
-                logger.info(
-                    f"Replay mode enabled: {len(self.tree_store._training_history)} "
-                    f"training steps available"
-                )
-            else:
-                logger.info(
-                    f"Cache-aware training enabled (mode={self.tree_backup_config.mode.value}, "
-                    f"n_samples={self.cache_config.n_samples})"
-                )
+            logger.info(
+                f"Cache-aware training enabled (mode={self.tree_backup_config.mode.value}, "
+                f"advantage={self.tree_backup_config.advantage_mode.value}, "
+                f"n_samples={self.cache_config.n_samples})"
+            )
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -363,28 +350,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.info("Saved MCTS tree checkpoint with rollout cache")
 
-    def _mark_trajectories_trained(self, rollout_batch: list[dict[str, Any]]) -> None:
-        """Mark all trajectories in the batch as trained.
-
-        Handles both single trajectories (with _mcts_seq_id) and grouped
-        trajectories (with _mcts_seq_ids list).
-        """
-        if not self.cache_config.enabled:
-            return
-        for traj in rollout_batch:
-            query_id = traj.get("_mcts_query_id")
-            if query_id is None:
-                continue
-            # Single trajectory
-            seq_id = traj.get("_mcts_seq_id")
-            if seq_id is not None:
-                self.tree_store.set_trained(query_id, seq_id, True)
-                continue
-            # Grouped trajectory
-            seq_ids = traj.get("_mcts_seq_ids")
-            if seq_ids is not None:
-                for sid in seq_ids:
-                    self.tree_store.set_trained(query_id, sid, True)
 
     def _cache_aware_prepare_batch(
         self,
@@ -417,7 +382,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
             cached_trajs = self._batch_builder.load_cached_trajectories(cached_items)
             n_cached = len(cached_trajs)
             logger.info(f"Cache-aware rollout: {n_cached} cached (all from cache)")
-            return _merge_cached_and_new(cached_trajs, [])
+            return list(cached_trajs)
 
         # Any prompt lacks cache -> regenerate all prompts via rollout_batch
         n_samples = self.cache_config.n_samples
@@ -438,125 +403,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
         logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
-        return _merge_cached_and_new([], new_trajs)
-
-    def _load_untrained_from_tree_store(self) -> list[dict[str, Any]]:
-        """Load untrained trajectories from all tree store queries."""
-        all_trajs: list[dict[str, Any]] = []
-        for query_id in list(self.tree_store.trees.keys()):
-            count = self.tree_store.get_untrained_count(query_id)
-            if count > 0:
-                n = min(count, self.cache_config.n_samples)
-                trajs = self.tree_store.load_trajectories(query_id, n)
-                all_trajs.extend(trajs)
-        return all_trajs
-
-    def _generate_from_dataloader(
-        self,
-        dataloader,
-        workflow,
-        workflow_kwargs=None,
-        group_size=1,
-    ) -> list[dict[str, Any]]:
-        """Generate new rollouts from dataloader prompts.
-
-        Prioritizes prompts whose query_id does not already exist in the tree
-        store, so Level 3 expands coverage to new queries before re-generating
-        for existing ones.
-        """
-        from areal.utils.data import cycle_dataloader
-
-        if not hasattr(self, "_replay_dataloader_iter"):
-            self._replay_dataloader_iter = iter(cycle_dataloader(dataloader))
-
-        raw_batch = next(self._replay_dataloader_iter)
-        prompts = [item for item in raw_batch]
-        if not prompts:
-            return []
-
-        # Separate prompts into novel (not in tree store) vs existing
-        novel_prompts = []
-        existing_prompts = []
-        for prompt in prompts:
-            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id")
-            if not query_id:
-                messages = prompt.get("messages", [])
-                if messages:
-                    query_id = get_query_id_from_messages(messages, self.tokenizer)
-                else:
-                    query_id = ""
-
-            if query_id and query_id not in self.tree_store.trees:
-                novel_prompts.append(prompt)
-            else:
-                existing_prompts.append(prompt)
-
-        # Generate for novel queries first; fall back to full batch if none
-        gen_prompts = novel_prompts if novel_prompts else prompts
-        new_trajs = self.actor.rollout_batch(
-            gen_prompts,
-            workflow=workflow,
-            workflow_kwargs=workflow_kwargs,
-            group_size=group_size,
-        )
-        n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
-        n_novel = len(novel_prompts)
-        n_total = len(prompts)
-        logger.info(
-            f"Replay fallback: generated {n_new} trajectories from "
-            f"{n_novel}/{n_total} novel queries"
-        )
-        return new_trajs
-
-    def _replay_prepare_batch(
-        self,
-        dataloader,
-        workflow,
-        workflow_kwargs=None,
-        should_accept_fn=None,
-        group_size=1,
-        dynamic_bs=False,
-    ):
-        """Replay mode with 3-level fallback: history -> cached untrained -> fresh generation."""
-        global_step = self._replay_global_step
-
-        # Level 1: Replay from training history
-        if global_step in self.tree_store._training_history:
-            pairs = self.tree_store._training_history[global_step]
-            trajs = []
-            for query_id, seq_id in pairs:
-                traj = self.tree_store.load_trajectory_by_seq_id(query_id, seq_id)
-                if traj is not None:
-                    trajs.append(traj)
-                else:
-                    logger.warning(
-                        f"Replay: trajectory (query_id={query_id}, seq_id={seq_id}) "
-                        f"not found, skipping"
-                    )
-            if trajs:
-                self._replay_global_step += 1
-                logger.info(
-                    f"Replay step {global_step}: {len(trajs)} trajectories from history"
-                )
-                return trajs
-            logger.warning(
-                f"Replay step {global_step}: all trajectories missing, falling back"
-            )
-
-        # Level 2: Cached untrained from tree store
-        cached_trajs = self._load_untrained_from_tree_store()
-        if cached_trajs:
-            self._replay_global_step += 1
-            logger.info(
-                f"Replay step {global_step}: {len(cached_trajs)} cached untrained"
-            )
-            return cached_trajs
-
-        # Level 3: Fresh generation from dataloader
-        self._replay_global_step += 1
-        return self._generate_from_dataloader(
-            dataloader, workflow, workflow_kwargs, group_size
-        )
+        return _split_grouped_trajectories(new_trajs)
 
     def train(
         self,
@@ -584,29 +431,25 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 total_epochs=total_epochs,
             )
 
-        # Monkey-patch prepare_batch with cache-aware or replay version
+        # Monkey-patch prepare_batch with cache-aware version
         original_prepare_batch = self.actor.prepare_batch
 
-        if self.cache_config.replay:
-            _prepare_batch_fn = self._replay_prepare_batch
-        else:
-
-            def _prepare_batch_fn(
-                dataloader,
-                workflow,
-                workflow_kwargs=None,
-                should_accept_fn=None,
-                group_size=1,
-                dynamic_bs=False,
-            ):
-                return self._cache_aware_prepare_batch(
-                    dataloader=dataloader,
-                    workflow=workflow,
-                    workflow_kwargs=workflow_kwargs,
-                    should_accept_fn=should_accept_fn,
-                    group_size=group_size,
-                    dynamic_bs=dynamic_bs,
-                )
+        def _prepare_batch_fn(
+            dataloader,
+            workflow,
+            workflow_kwargs=None,
+            should_accept_fn=None,
+            group_size=1,
+            dynamic_bs=False,
+        ):
+            return self._cache_aware_prepare_batch(
+                dataloader=dataloader,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                should_accept_fn=should_accept_fn,
+                group_size=group_size,
+                dynamic_bs=dynamic_bs,
+            )
 
         self.actor.prepare_batch = _prepare_batch_fn
 
@@ -622,11 +465,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
         finally:
             # Always restore original prepare_batch
             self.actor.prepare_batch = original_prepare_batch
-            # Clean up the dataloader iterator(s)
+            # Clean up the dataloader iterator
             if hasattr(self, "_cache_dataloader_iter"):
                 del self._cache_dataloader_iter
-            if hasattr(self, "_replay_dataloader_iter"):
-                del self._replay_dataloader_iter
 
     def close(self) -> None:
         if (
