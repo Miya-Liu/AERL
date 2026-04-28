@@ -116,7 +116,9 @@ def clip_cov_ppo_actor_loss_fn(
 
     # Build stat dict (AReaL-compatible)
     clip_mask = clip_by_origin & loss_mask
-    dual_clip_mask = dual_clip_mask & loss_mask if c_clip is not None else dual_clip_mask
+    dual_clip_mask = (
+        dual_clip_mask & loss_mask if c_clip is not None else dual_clip_mask
+    )
     clip_cov_mask = (corr == 0) & loss_mask
 
     stat = dict(
