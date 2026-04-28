@@ -272,7 +272,12 @@ class CacheAwarePPOTrainer(PPOTrainer):
     3. Merge cached + new trajectories
     4. Run tree backup advantages on merged batch
     5. Mark used trajectories as trained
-    6. Save tree checkpoint
+    6. Save tree checkpoint (CROSS_TRAINING mode)
+
+    Monkey-patches ``PPOActor.compute_advantages`` at the class level (not
+    instance level) so that all PPOActor instances — including those created
+    internally by the base PPOTrainer — use the tree backup version. Patches
+    are cleaned up in ``close()``.
     """
 
     def __init__(
@@ -286,56 +291,62 @@ class CacheAwarePPOTrainer(PPOTrainer):
         self.cache_config = cache_config or RolloutCacheConfig()
         self.tree_backup_config = tree_backup_config or TreeBackupConfig()
 
-        # Initialize base PPOTrainer first
         super().__init__(config, train_dataset, valid_dataset)
 
-        # Set up tree backup and cache after base init
         if (
             self.cache_config.enabled
             and self.tree_backup_config.mode != TreeBackupMode.OFF
         ):
-            turn_splitter = make_turn_splitter(
-                self.tokenizer, self.tree_backup_config.assistant_marker
-            )
-            self.tree_store = MCTSTreeStore(turn_splitter)
-            self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
-            self.tree_checkpoint_manager = TreeCheckpointManager(
-                self.cache_config.cache_dir or self.tree_backup_config.checkpoint_dir
-            )
-
-            # Load existing tree checkpoint if available
-            if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
-                if self.tree_checkpoint_manager.exists():
-                    self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
-                    logger.info("Loaded MCTS tree checkpoint with cached rollouts")
-
-            # Reset trained flags for new training run from scratch
-            self.tree_store.reset_trained_flags()
-
-            # Set up batch builder
-            self._batch_builder = _CacheAwareBatchBuilder(
-                self.tree_store, self.cache_config.n_samples, self.tokenizer
-            )
-
-            # Patch PPOActor for tree backup
-            patch_ppo_actor_for_tree_backup(
-                self.tree_store,
-                self.tree_advantage_computer,
-                advantage_mode=self.tree_backup_config.advantage_mode,
-            )
-
-            # Patch _wrap_openai_agent to use QueryIDProxyWorkflow instead
-            # of OpenAIProxyWorkflow, so that dataset query_id strings are
-            # injected into trajectories as _mcts_query_id. Without this,
-            # the async rollout pipeline would lose the query_id because
-            # concat_padded_tensors drops non-tensor keys.
-            _patch_wrap_openai_agent_for_query_id(self.actor)
-
+            self._init_tree_components()
+            self._init_patches()
             logger.info(
-                f"Cache-aware training enabled (mode={self.tree_backup_config.mode.value}, "
+                f"Cache-aware training enabled "
+                f"(mode={self.tree_backup_config.mode.value}, "
                 f"advantage={self.tree_backup_config.advantage_mode.value}, "
                 f"n_samples={self.cache_config.n_samples})"
             )
+
+    def _init_tree_components(self) -> None:
+        """Create tree store, advantage computer, and checkpoint manager."""
+        turn_splitter = make_turn_splitter(
+            self.tokenizer, self.tree_backup_config.assistant_marker
+        )
+        self.tree_store = MCTSTreeStore(turn_splitter)
+        self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
+        self.tree_checkpoint_manager = TreeCheckpointManager(
+            self.cache_config.cache_dir or self.tree_backup_config.checkpoint_dir
+        )
+
+        # Load existing tree checkpoint if available (CROSS_TRAINING mode)
+        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+            if self.tree_checkpoint_manager.exists():
+                self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
+                logger.info("Loaded MCTS tree checkpoint with cached rollouts")
+
+        # Reset trained flags for a fresh training run
+        self.tree_store.reset_trained_flags()
+
+        self._batch_builder = _CacheAwareBatchBuilder(
+            self.tree_store, self.cache_config.n_samples, self.tokenizer
+        )
+
+    def _init_patches(self) -> None:
+        """Apply monkey-patches for tree backup and query_id injection."""
+        patch_ppo_actor_for_tree_backup(
+            self.tree_store,
+            self.tree_advantage_computer,
+            advantage_mode=self.tree_backup_config.advantage_mode,
+        )
+        logger.info(
+            f"Patched compute_advantages for tree backup "
+            f"(advantage_mode={self.tree_backup_config.advantage_mode.value})"
+        )
+
+        # Patch _wrap_openai_agent to use QueryIDProxyWorkflow so that
+        # dataset query_id strings are injected into trajectories as
+        # _mcts_query_id. Without this, the async rollout pipeline would
+        # lose the query_id because concat_padded_tensors drops non-tensor keys.
+        _patch_wrap_openai_agent_for_query_id(self.actor)
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -362,8 +373,14 @@ class CacheAwarePPOTrainer(PPOTrainer):
     ):
         """Cache-aware replacement for prepare_batch.
 
-        If all prompts in the batch have enough cached trajectories, use cache only.
-        Otherwise, regenerate all prompts via rollout_batch and use new trajectories only.
+        Strategy: if *all* prompts in the batch have enough cached trajectories,
+        use cache only. If *any* prompt lacks sufficient cache, regenerate all
+        prompts via rollout_batch (all-or-nothing). This avoids mixing cached
+        and freshly-generated trajectories in a single batch.
+
+        Returns:
+            Flat list of per-sample trajectory dicts, each with shape [1, seq_len],
+            carrying ``_mcts_query_id`` and ``_mcts_seq_id`` metadata.
         """
         from areal.utils.data import cycle_dataloader
 
@@ -416,10 +433,10 @@ class CacheAwarePPOTrainer(PPOTrainer):
     ):
         """Train with cache-aware rollout generation.
 
-        Temporarily monkey-patches ``self.actor.prepare_batch`` with a
-        cache-aware version that loads cached trajectories and only
-        generates missing ones. After training completes (or on error),
-        the original prepare_batch is restored.
+        Monkey-patches ``self.actor.prepare_batch`` with a cache-aware version
+        that loads cached trajectories and only generates missing ones. The
+        original ``prepare_batch`` is always restored in the ``finally`` block,
+        so the patch never leaks on error.
         """
         if not self.cache_config.enabled:
             return super().train(
