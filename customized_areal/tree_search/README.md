@@ -201,12 +201,12 @@ When `cache_config.enabled` and `tree_backup_config.mode != OFF`:
 
 **Other methods:**
 
-| Method                         | Description                                                                                    |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `train()`                      | Monkey-patches `self.actor.prepare_batch` with cache-aware version; restores on exit           |
-| `_save_recover_checkpoint()`   | Saves MCTS tree checkpoint on `CROSS_TRAINING` mode (via `TreeCheckpointManager`)              |
-| `_mark_batch_trained()` | Marks rollout trajectories as trained (single or grouped via `_mcts_seq_id` / `_mcts_seq_ids`) |
-| `close()`                      | Calls `unpatch_ppo_actor()` to restore original `PPOActor`, then `super().close()`             |
+| Method                       | Description                                                                                    |
+| ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `train()`                    | Monkey-patches `self.actor.prepare_batch` with cache-aware version; restores on exit           |
+| `_save_recover_checkpoint()` | Saves MCTS tree checkpoint on `CROSS_TRAINING` mode (via `TreeCheckpointManager`)              |
+| `_mark_batch_trained()`      | Marks rollout trajectories as trained (single or grouped via `_mcts_seq_id` / `_mcts_seq_ids`) |
+| `close()`                    | Calls `unpatch_ppo_actor()` to restore original `PPOActor`, then `super().close()`             |
 
 #### Patching mechanism
 
