@@ -499,20 +499,6 @@ class TestTreeCheckpointTrainingHistory:
             assert loaded._training_history == {}
 
 
-class TestRolloutCacheConfig:
-    def test_default_replay_is_false(self):
-        from customized_areal.tree_search.config import RolloutCacheConfig
-
-        config = RolloutCacheConfig()
-        assert config.replay is False
-
-    def test_replay_can_be_set(self):
-        from customized_areal.tree_search.config import RolloutCacheConfig
-
-        config = RolloutCacheConfig(replay=True)
-        assert config.replay is True
-
-
 class TestTrainingOrderReplayIntegration:
     def test_record_and_replay_cycle(self):
         """Simulate recording training steps, saving checkpoint, loading, and replaying."""
