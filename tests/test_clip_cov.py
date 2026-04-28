@@ -89,8 +89,7 @@ class TestClipCovPpoActorLossFn:
         assert torch.allclose(loss, torch.tensor(0.0), atol=1e-6)
 
     def test_no_clip_cov_equals_standard_ppo_loss(self):
-        """When clip_cov_lb=-inf and clip_cov_ub=inf, no tokens are selected
-        for cov clipping, so clip_cov loss equals standard PPO loss."""
+        """When no tokens fall within the cov range, clip_cov loss equals standard PPO loss."""
         torch.manual_seed(0)
         logprobs = torch.randn(2, 4)
         proximal_logprobs = torch.randn(2, 4)
@@ -111,6 +110,7 @@ class TestClipCovPpoActorLossFn:
             behave_imp_weight_mode="disabled",
         )
 
+        # Use bounds that exclude all covariance values (very tight range)
         cov_loss, stat = clip_cov_ppo_actor_loss_fn(
             logprobs=logprobs,
             proximal_logprobs=proximal_logprobs,
@@ -118,10 +118,10 @@ class TestClipCovPpoActorLossFn:
             advantages=advantages,
             eps_clip=eps_clip,
             loss_mask=loss_mask,
-            clip_cov_lb=float("-inf"),
-            clip_cov_ub=float("inf"),
+            clip_cov_lb=1e10,
+            clip_cov_ub=1e11,
         )
-        # No tokens selected for cov clipping when bounds are infinite
+        # No tokens selected for cov clipping when bounds exclude all
         assert stat["clip_cov_mask"].sum() == 0
         assert torch.allclose(cov_loss, ppo_loss, atol=1e-5)
 

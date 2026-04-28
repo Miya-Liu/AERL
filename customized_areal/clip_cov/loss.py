@@ -94,7 +94,7 @@ def clip_cov_ppo_actor_loss_fn(
     candidate_indices = torch.nonzero(candidates)
 
     # Randomly select up to clip_num tokens
-    clip_num = int(clip_ratio * loss_mask_count) if isinstance(loss_mask_count, torch.Tensor) else int(clip_ratio * loss_mask_count)
+    clip_num = max(int(clip_ratio * loss_mask_count), 1)
 
     if len(candidate_indices) > 0:
         perm = torch.randperm(len(candidate_indices))
