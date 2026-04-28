@@ -4,7 +4,10 @@ import pytest
 import torch
 
 from customized_areal.clip_cov.config import ClipCovConfig
-from customized_areal.clip_cov.loss import clip_cov_grpo_loss_fn, clip_cov_ppo_actor_loss_fn
+from customized_areal.clip_cov.loss import (
+    clip_cov_grpo_loss_fn,
+    clip_cov_ppo_actor_loss_fn,
+)
 
 
 class TestClipCovPpoActorLossFn:
@@ -184,6 +187,7 @@ class TestClipCovGrpoLossFn:
         torch.manual_seed(42)
         return {
             "logprobs": torch.randn(batch_size, seq_len),
+            "prox_logp": torch.randn(batch_size, seq_len),
             "advantages": torch.randn(batch_size, seq_len),
             "loss_mask": torch.ones(batch_size, seq_len, dtype=torch.bool),
             "attention_mask": torch.ones(batch_size, seq_len, dtype=torch.bool),
