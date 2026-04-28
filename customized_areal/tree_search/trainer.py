@@ -26,6 +26,7 @@ from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
     get_query_id_from_messages,
 )
+from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
 from customized_areal.tree_search.turn_splitter import make_turn_splitter
 
 from areal import PPOTrainer
@@ -50,6 +51,54 @@ def _mark_batch_trained(
         if seq_ids is not None:
             for sid in seq_ids:
                 tree_store.set_trained(query_id, sid, True)
+
+
+def _patch_wrap_openai_agent_for_query_id(actor: PPOActor) -> None:
+    """Patch the engine's _wrap_openai_agent to return QueryIDProxyWorkflow.
+
+    QueryIDProxyWorkflow subclasses OpenAIProxyWorkflow and overrides
+    arun_episode to inject data["query_id"] into the trajectory dict as
+    ``_mcts_query_id``. This is needed because the async rollout pipeline
+    shuffles results, so we cannot match queries to trajectories by position,
+    and concat_padded_tensors drops non-tensor keys.
+    """
+    engine = actor.engine
+    if not hasattr(engine, "_wrap_openai_agent"):
+        logger.warning(
+            "Engine has no _wrap_openai_agent method; "
+            "query_id injection will not be available"
+        )
+        return
+
+    original_wrap = engine._wrap_openai_agent
+
+    def _query_id_wrap(agent: Any, proxy_addr: str):
+        from areal.api.cli_args import OpenAIProxyConfig
+
+        openai_cfg = engine.config.openai or OpenAIProxyConfig()
+        return QueryIDProxyWorkflow(
+            mode=openai_cfg.mode,
+            agent=agent,
+            proxy_addr=proxy_addr,
+            admin_api_key=openai_cfg.admin_api_key,
+            discount=openai_cfg.turn_discount,
+            export_style=openai_cfg.export_style,
+            subproc_max_workers=openai_cfg.subproc_max_workers,
+            proxy_gateway_addr=getattr(engine, "_proxy_gateway_addr", None),
+        )
+
+    engine._wrap_openai_agent = _query_id_wrap
+    engine._original_wrap_openai_agent = original_wrap
+    logger.info("Patched _wrap_openai_agent to use QueryIDProxyWorkflow")
+
+
+def _unpatch_wrap_openai_agent(actor: PPOActor) -> None:
+    """Restore the original _wrap_openai_agent method."""
+    engine = actor.engine
+    if hasattr(engine, "_original_wrap_openai_agent"):
+        engine._wrap_openai_agent = engine._original_wrap_openai_agent
+        del engine._original_wrap_openai_agent
+        logger.info("Restored original _wrap_openai_agent")
 
 
 def patch_ppo_actor_for_tree_backup(
@@ -159,8 +208,9 @@ class _CacheAwareBatchBuilder:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Split prompts into cached and needs-generation groups.
 
-        Derives _mcts_query_id from the messages in each prompt using
-        the tokenizer, then checks the tree store for cached rollouts.
+        Derives query_id from the dataset (``prompt["query_id"]``) when
+        available, falling back to an MD5 hash from the prompt messages via
+        the tokenizer. Then checks the tree store for cached rollouts.
 
         Returns:
             cached: list of dicts with keys: prompt, query_id, cached_count, need_gen_count
@@ -170,12 +220,14 @@ class _CacheAwareBatchBuilder:
         need_gen = []
 
         for prompt in prompts:
-            # Derive query_id from messages via tokenizer
-            messages = prompt.get("messages", [])
-            if messages:
-                query_id = get_query_id_from_messages(messages, self.tokenizer)
-            else:
-                query_id = prompt.get("_mcts_query_id", "")
+            # Prefer dataset query_id string; fall back to MD5 hash from tokenizer
+            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id")
+            if not query_id:
+                messages = prompt.get("messages", [])
+                if messages:
+                    query_id = get_query_id_from_messages(messages, self.tokenizer)
+                else:
+                    query_id = ""
 
             untrained_count = (
                 self.tree_store.get_untrained_count(query_id) if query_id else 0
@@ -188,15 +240,6 @@ class _CacheAwareBatchBuilder:
                         "query_id": query_id,
                         "cached_count": self.n_samples,
                         "need_gen_count": 0,
-                    }
-                )
-            elif untrained_count > 0:
-                cached.append(
-                    {
-                        "prompt": prompt,
-                        "query_id": query_id,
-                        "cached_count": untrained_count,
-                        "need_gen_count": self.n_samples - untrained_count,
                     }
                 )
             else:
@@ -279,6 +322,14 @@ class CacheAwarePPOTrainer(PPOTrainer):
             patch_ppo_actor_for_tree_backup(
                 self.tree_store, self.tree_advantage_computer
             )
+
+            # Patch _wrap_openai_agent to use QueryIDProxyWorkflow instead
+            # of OpenAIProxyWorkflow, so that dataset query_id strings are
+            # injected into trajectories as _mcts_query_id. Without this,
+            # the async rollout pipeline would lose the query_id because
+            # concat_padded_tensors drops non-tensor keys.
+            _patch_wrap_openai_agent_for_query_id(self.actor)
+
             if self.cache_config.replay:
                 self.tree_store._replay_mode = True
                 if not self.tree_store._training_history:
@@ -346,12 +397,8 @@ class CacheAwarePPOTrainer(PPOTrainer):
     ):
         """Cache-aware replacement for prepare_batch.
 
-        1. Pulls a batch from the dataloader
-        2. Derives query IDs from prompt messages
-        3. Splits prompts into cached / needs-generation
-        4. Loads cached trajectories from tree store
-        5. Generates missing trajectories via rollout_batch
-        6. Merges and returns combined list
+        If all prompts in the batch have enough cached trajectories, use cache only.
+        Otherwise, regenerate all prompts via rollout_batch and use new trajectories only.
         """
         from areal.utils.data import cycle_dataloader
 
@@ -365,28 +412,33 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Split into cached / needs-generation
         cached_items, need_gen_items = self._batch_builder.split_prompts(raw_batch)
 
-        # Load cached trajectories
-        cached_trajs = self._batch_builder.load_cached_trajectories(cached_items)
+        # All prompts have enough cache -> use cache only
+        if not need_gen_items:
+            cached_trajs = self._batch_builder.load_cached_trajectories(cached_items)
+            n_cached = len(cached_trajs)
+            logger.info(f"Cache-aware rollout: {n_cached} cached (all from cache)")
+            return _merge_cached_and_new(cached_trajs, [])
 
-        # Generate missing trajectories
-        need_gen_prompts = [item["prompt"] for item in need_gen_items]
-        if need_gen_prompts:
-            # Use rollout_batch to generate with distributed coordination
-            new_trajs = self.actor.rollout_batch(
-                need_gen_prompts,
-                workflow=workflow,
-                workflow_kwargs=workflow_kwargs,
-                group_size=group_size,
-            )
-        else:
-            new_trajs = []
+        # Any prompt lacks cache -> regenerate all prompts via rollout_batch
+        n_samples = self.cache_config.n_samples
+        all_prompts = [item["prompt"] for item in cached_items] + [
+            item["prompt"] for item in need_gen_items
+        ]
 
-        n_cached = len(cached_trajs)
+        logger.info(
+            f"Generating trajectories for {len(all_prompts)} query "
+            f"(group_size={n_samples})"
+        )
+        new_trajs = self.actor.rollout_batch(
+            all_prompts,
+            workflow=workflow,
+            workflow_kwargs=workflow_kwargs,
+            group_size=n_samples,
+        )
+
         n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
-        logger.info(f"Cache-aware rollout: {n_cached} cached, {n_new} newly generated")
-
-        # Merge cached and new trajectories
-        return _merge_cached_and_new(cached_trajs, new_trajs)
+        logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
+        return _merge_cached_and_new([], new_trajs)
 
     def _load_untrained_from_tree_store(self) -> list[dict[str, Any]]:
         """Load untrained trajectories from all tree store queries."""
@@ -426,11 +478,13 @@ class CacheAwarePPOTrainer(PPOTrainer):
         novel_prompts = []
         existing_prompts = []
         for prompt in prompts:
-            messages = prompt.get("messages", [])
-            if messages:
-                query_id = get_query_id_from_messages(messages, self.tokenizer)
-            else:
-                query_id = prompt.get("_mcts_query_id", "")
+            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id")
+            if not query_id:
+                messages = prompt.get("messages", [])
+                if messages:
+                    query_id = get_query_id_from_messages(messages, self.tokenizer)
+                else:
+                    query_id = ""
 
             if query_id and query_id not in self.tree_store.trees:
                 novel_prompts.append(prompt)
@@ -580,6 +634,5 @@ class CacheAwarePPOTrainer(PPOTrainer):
             and self.tree_backup_config.mode != TreeBackupMode.OFF
         ):
             unpatch_ppo_actor()
+            _unpatch_wrap_openai_agent(self.actor)
         super().close()
-
-

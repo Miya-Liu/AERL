@@ -5,13 +5,13 @@
 `TokenRewardSessionData.export_interactions` declares return type
 `dict[str, InteractionWithTokenLogpReward]` (base type), but the method enriches
 interactions with `token_rewards` and `position_rewards` before returning them.
-Downstream consumers need `InteractionWithTokenLevelReward` — the declared type
-hides the extended fields.
+Downstream consumers need `InteractionWithTokenLevelReward` — the declared type hides
+the extended fields.
 
 ## End-to-End Data Flow
 
-The full round-trip from server to workflow must preserve position-level tokens
-and rewards:
+The full round-trip from server to workflow must preserve position-level tokens and
+rewards:
 
 ```
 Server                              Client / Workflow
@@ -44,33 +44,36 @@ TokenRewardSessionData
 
 ### What works today
 
-- `token_rewards` flows through `to_tensor_dict()` because it's stored in `_cache`
-  at deserialization time, and the serialized tensor dict includes the `token_rewards`
-  key (set server-side by `InteractionWithTokenLevelReward.to_tensor_dict()`).
+- `token_rewards` flows through `to_tensor_dict()` because it's stored in `_cache` at
+  deserialization time, and the serialized tensor dict includes the `token_rewards` key
+  (set server-side by `InteractionWithTokenLevelReward.to_tensor_dict()`).
 - `position_rewards` flows as a Python dynamic attribute: serialized separately,
   deserialized and set on the interaction object, extracted via `getattr` in
   `workflow.arun_episode()`.
 
 ### What's broken
 
-1. **Wrong return type**: `export_interactions` returns `dict[str, InteractionWithTokenLogpReward]`
-   but the objects have `token_rewards` and `position_rewards` — consumers can't see these.
+1. **Wrong return type**: `export_interactions` returns
+   `dict[str, InteractionWithTokenLogpReward]` but the objects have `token_rewards` and
+   `position_rewards` — consumers can't see these.
 
-2. **Wrong deserialization type**: `deserialize_interactions_with_position_rewards()` creates
-   `InteractionWithTokenLogpReward()` objects instead of `InteractionWithTokenLevelReward()`.
-   This means:
-   - `token_rewards` is set as a dynamic attribute, not through the typed `set_token_rewards()`
-     method — no length validation, no `_cache` invalidation.
-   - If `to_tensor_dict()` is ever called without `_cache` (recomputed from scratch), the
-     base class implementation won't include `token_rewards` or `token_reward_mask` keys —
-     they'd be silently lost.
-   - `position_rewards` is always a dynamic attribute (not a dataclass field on either type),
-     but `InteractionWithTokenLevelReward` is the semantically correct container.
+1. **Wrong deserialization type**: `deserialize_interactions_with_position_rewards()`
+   creates `InteractionWithTokenLogpReward()` objects instead of
+   `InteractionWithTokenLevelReward()`. This means:
 
-3. **Wrong cache type on server**: `TokenRewardSessionData` inherits `self._completions =
-   InteractionCache()` from `SessionData.__init__`, which creates the **base**
-   `InteractionCache` from `areal.experimental.openai.cache`. The `export_interactions`
-   override sets `token_rewards` via `hasattr` guard — fragile and untyped.
+   - `token_rewards` is set as a dynamic attribute, not through the typed
+     `set_token_rewards()` method — no length validation, no `_cache` invalidation.
+   - If `to_tensor_dict()` is ever called without `_cache` (recomputed from scratch),
+     the base class implementation won't include `token_rewards` or `token_reward_mask`
+     keys — they'd be silently lost.
+   - `position_rewards` is always a dynamic attribute (not a dataclass field on either
+     type), but `InteractionWithTokenLevelReward` is the semantically correct container.
+
+1. **Wrong cache type on server**: `TokenRewardSessionData` inherits
+   `self._completions = InteractionCache()` from `SessionData.__init__`, which creates
+   the **base** `InteractionCache` from `areal.experimental.openai.cache`. The
+   `export_interactions` override sets `token_rewards` via `hasattr` guard — fragile and
+   untyped.
 
 ## Changes
 
@@ -117,8 +120,8 @@ set-time, instead of staging in separate dicts and replaying during export.
 **Preserve scalar reward invariant**: The extended cache's `set_rewards()` overwrites
 `interaction.reward` with `sum(token_rewards)` (see `cache.py:394`). The current
 `TokenRewardSessionData` explicitly preserves the scalar reward set via `set_reward()`
-and only falls back to `sum(token_rewards)` when `reward is None`. Save and restore
-the scalar reward after delegation.
+and only falls back to `sum(token_rewards)` when `reward is None`. Save and restore the
+scalar reward after delegation.
 
 **File**: `customized_areal/on_policy_distill/proxy/server.py`
 
@@ -206,10 +209,10 @@ def deserialize_interactions_with_position_rewards(data: dict) -> dict:
 **Why this matters for `to_tensor_dict()`**: Currently, if `_cache` is populated,
 `to_tensor_dict()` returns the cached dict directly. This works because the serialized
 tensor dict already contains `token_rewards` and `token_reward_mask` keys. But if
-`_cache` is ever invalidated (e.g., by `set_token_rewards()` via `interaction._cache = None`),
-the next `to_tensor_dict()` call would recompute from scratch. With a base-type object,
-this recomputation would NOT include `token_rewards` keys. With
-`InteractionWithTokenLevelReward`, the override correctly includes them.
+`_cache` is ever invalidated (e.g., by `set_token_rewards()` via
+`interaction._cache = None`), the next `to_tensor_dict()` call would recompute from
+scratch. With a base-type object, this recomputation would NOT include `token_rewards`
+keys. With `InteractionWithTokenLevelReward`, the override correctly includes them.
 
 ### Change 5: Client `export_interactions` — Type the return value
 
@@ -232,39 +235,43 @@ This gives the workflow proper type information when accessing `.token_rewards`,
 
 **File**: `customized_areal/on_policy_distill/proxy/workflow.py`
 
-The `arun_episode` method currently does `getattr(interaction, "position_rewards", None)`
-because the declared type is `InteractionWithTokenLogpReward`. After Changes 4–5,
-the type is `InteractionWithTokenLevelReward`, and `position_rewards` is a documented
-dynamic attribute. No logic change needed — the `getattr` call remains correct since
+The `arun_episode` method currently does
+`getattr(interaction, "position_rewards", None)` because the declared type is
+`InteractionWithTokenLogpReward`. After Changes 4–5, the type is
+`InteractionWithTokenLevelReward`, and `position_rewards` is a documented dynamic
+attribute. No logic change needed — the `getattr` call remains correct since
 `position_rewards` is a dynamic attribute (not a dataclass field on any type).
 
 ## Summary of what flows through after all changes
 
-| Data | Server → Serialize | Client Deserialize | Workflow Access |
-|------|-------------------|-------------------|-----------------|
-| `token_rewards` (in tensor_dict) | `InteractionWithTokenLevelReward.to_tensor_dict()` includes `token_rewards` key | `_cache` has `token_rewards` key; `to_tensor_dict()` returns it | `concat_padded_tensors()` includes it |
-| `token_rewards` (field) | Set via `set_token_rewards()` on `InteractionWithTokenLevelReward` | Set via `InteractionWithTokenLevelReward.token_rewards` field | Available as `.token_rewards` with proper type |
-| `position_rewards` | Set as dynamic attr during export; serialized separately | Set as dynamic attr on `InteractionWithTokenLevelReward` | `getattr(interaction, "position_rewards")` — same as today |
-| `token_reward_mask` | `InteractionWithTokenLevelReward.to_tensor_dict()` includes it | `_cache` has it | `concat_padded_tensors()` includes it |
+| Data                             | Server → Serialize                                                              | Client Deserialize                                              | Workflow Access                                            |
+| -------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------- |
+| `token_rewards` (in tensor_dict) | `InteractionWithTokenLevelReward.to_tensor_dict()` includes `token_rewards` key | `_cache` has `token_rewards` key; `to_tensor_dict()` returns it | `concat_padded_tensors()` includes it                      |
+| `token_rewards` (field)          | Set via `set_token_rewards()` on `InteractionWithTokenLevelReward`              | Set via `InteractionWithTokenLevelReward.token_rewards` field   | Available as `.token_rewards` with proper type             |
+| `position_rewards`               | Set as dynamic attr during export; serialized separately                        | Set as dynamic attr on `InteractionWithTokenLevelReward`        | `getattr(interaction, "position_rewards")` — same as today |
+| `token_reward_mask`              | `InteractionWithTokenLevelReward.to_tensor_dict()` includes it                  | `_cache` has it                                                 | `concat_padded_tensors()` includes it                      |
 
 ## Affected callers
 
-| File | Line | Impact |
-|------|------|--------|
-| `proxy_rollout_server.py:695` | `session_data.export_interactions()` | Return type widens |
-| `proxy_rollout_server.py:513` | `completions.set_reward()` | Extended cache has same API |
-| `proxy_rollout_server.py:507` | `completions.last_interaction_id` | Extended cache has same property |
-| `client.py:312-339` | `export_interactions()` | Return type narrows to `TokenRewardInteractions` |
-| `workflow.py:294-297` | `client.export_interactions()` | Gets `TokenRewardInteractions` — proper typing |
-| `workflow.py:332` | `getattr(interaction, "position_rewards")` | Still dynamic attr; works the same |
+| File                          | Line                                       | Impact                                           |
+| ----------------------------- | ------------------------------------------ | ------------------------------------------------ |
+| `proxy_rollout_server.py:695` | `session_data.export_interactions()`       | Return type widens                               |
+| `proxy_rollout_server.py:513` | `completions.set_reward()`                 | Extended cache has same API                      |
+| `proxy_rollout_server.py:507` | `completions.last_interaction_id`          | Extended cache has same property                 |
+| `client.py:312-339`           | `export_interactions()`                    | Return type narrows to `TokenRewardInteractions` |
+| `workflow.py:294-297`         | `client.export_interactions()`             | Gets `TokenRewardInteractions` — proper typing   |
+| `workflow.py:332`             | `getattr(interaction, "position_rewards")` | Still dynamic attr; works the same               |
 
 ## Tests
 
 Existing tests should pass. Key scenarios to verify:
 
-1. `set_token_rewards` → `export_interactions` → serialize → deserialize → `to_tensor_dict()` includes `token_rewards` key
-2. `set_position_rewards` → `export_interactions` → serialize → deserialize → `getattr(interaction, "position_rewards")` returns `PositionRewardInfo` list
-3. Scalar reward set via `set_reward()` is NOT overwritten by token rewards
-4. `set_token_rewards` after session `finish()` raises `RuntimeError`
-5. `export_interactions` on empty session returns `{}`
-6. `to_tensor_dict()` works correctly when `_cache` is invalidated (recomputed from `InteractionWithTokenLevelReward`)
+1. `set_token_rewards` → `export_interactions` → serialize → deserialize →
+   `to_tensor_dict()` includes `token_rewards` key
+1. `set_position_rewards` → `export_interactions` → serialize → deserialize →
+   `getattr(interaction, "position_rewards")` returns `PositionRewardInfo` list
+1. Scalar reward set via `set_reward()` is NOT overwritten by token rewards
+1. `set_token_rewards` after session `finish()` raises `RuntimeError`
+1. `export_interactions` on empty session returns `{}`
+1. `to_tensor_dict()` works correctly when `_cache` is invalidated (recomputed from
+   `InteractionWithTokenLevelReward`)

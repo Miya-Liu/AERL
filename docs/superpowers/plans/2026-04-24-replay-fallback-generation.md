@@ -1,10 +1,18 @@
 # Replay Fallback Generation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add 3-level fallback to `_replay_prepare_batch` so training doesn't stall when replay history is exhausted: replay → cached untrained from tree store → fresh dataloader generation.
+**Goal:** Add 3-level fallback to `_replay_prepare_batch` so training doesn't stall when
+replay history is exhausted: replay → cached untrained from tree store → fresh
+dataloader generation.
 
-**Architecture:** Modify `_replay_prepare_batch` to try three sources per step. Add two new private helpers (`_load_untrained_from_tree_store`, `_generate_from_dataloader`) to `CacheAwarePPOTrainer`. Update `train()` finally block to clean up the new dataloader iterator. Tests use `MCTSTreeStore` directly (no distributed mocking needed for the fallback logic).
+**Architecture:** Modify `_replay_prepare_batch` to try three sources per step. Add two
+new private helpers (`_load_untrained_from_tree_store`, `_generate_from_dataloader`) to
+`CacheAwarePPOTrainer`. Update `train()` finally block to clean up the new dataloader
+iterator. Tests use `MCTSTreeStore` directly (no distributed mocking needed for the
+fallback logic).
 
 **Tech Stack:** Python 3.12+ | PyTorch | unittest.mock
 
@@ -12,10 +20,10 @@ ______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|----------------|
+| File                                              | Responsibility                                                                                                                   |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `customized_areal/tree_search/trainer.py:391-499` | Modify `_replay_prepare_batch`, add `_load_untrained_from_tree_store`, add `_generate_from_dataloader`, update `train()` cleanup |
-| `tests/test_tree_search/test_cache_trainer.py` | Add unit tests for fallback behavior |
+| `tests/test_tree_search/test_cache_trainer.py`    | Add unit tests for fallback behavior                                                                                             |
 
 ______________________________________________________________________
 
@@ -23,7 +31,9 @@ ______________________________________________________________________
 
 **Files:**
 
-- Modify: `customized_areal/tree_search/trainer.py:389` (insert after `_cache_aware_prepare_batch`)
+- Modify: `customized_areal/tree_search/trainer.py:389` (insert after
+  `_cache_aware_prepare_batch`)
+
 - Test: `tests/test_tree_search/test_cache_trainer.py`
 
 - [x] **Step 1: Write the failing test**
@@ -143,12 +153,15 @@ from unittest.mock import MagicMock
 
 - [x] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestLoadUntrainedFromTreeStore -v`
-Expected: FAIL — `AttributeError: type object 'CacheAwarePPOTrainer' has no attribute '_load_untrained_from_tree_store'`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestLoadUntrainedFromTreeStore -v`
+Expected: FAIL —
+`AttributeError: type object 'CacheAwarePPOTrainer' has no attribute '_load_untrained_from_tree_store'`
 
 - [x] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/trainer.py`, add the method to `CacheAwarePPOTrainer` class, right after `_cache_aware_prepare_batch` (after line 389):
+In `customized_areal/tree_search/trainer.py`, add the method to `CacheAwarePPOTrainer`
+class, right after `_cache_aware_prepare_batch` (after line 389):
 
 ```python
     def _load_untrained_from_tree_store(self) -> list[dict[str, Any]]:
@@ -165,13 +178,14 @@ In `customized_areal/tree_search/trainer.py`, add the method to `CacheAwarePPOTr
 
 - [x] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestLoadUntrainedFromTreeStore -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestLoadUntrainedFromTreeStore -v`
 Expected: PASS
 
 - [x] **Step 5: Run existing tests to verify no regressions**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: All tests
+PASS
 
 - [x] **Step 6: Commit**
 
@@ -187,6 +201,7 @@ ______________________________________________________________________
 **Files:**
 
 - Modify: `customized_areal/tree_search/trainer.py` (after the method from Task 1)
+
 - Test: `tests/test_tree_search/test_cache_trainer.py`
 
 - [x] **Step 1: Write the failing test**
@@ -293,12 +308,15 @@ class TestGenerateFromDataloader:
 
 - [x] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestGenerateFromDataloader -v`
-Expected: FAIL — `AttributeError: type object 'CacheAwarePPOTrainer' has no attribute '_generate_from_dataloader'`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestGenerateFromDataloader -v`
+Expected: FAIL —
+`AttributeError: type object 'CacheAwarePPOTrainer' has no attribute '_generate_from_dataloader'`
 
 - [x] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/trainer.py`, add after `_load_untrained_from_tree_store`:
+In `customized_areal/tree_search/trainer.py`, add after
+`_load_untrained_from_tree_store`:
 
 ```python
     def _generate_from_dataloader(
@@ -333,13 +351,14 @@ In `customized_areal/tree_search/trainer.py`, add after `_load_untrained_from_tr
 
 - [x] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestGenerateFromDataloader -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestGenerateFromDataloader -v`
 Expected: PASS
 
 - [x] **Step 5: Run existing tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: All tests
+PASS
 
 - [x] **Step 6: Commit**
 
@@ -355,6 +374,7 @@ ______________________________________________________________________
 **Files:**
 
 - Modify: `customized_areal/tree_search/trainer.py:391-431`
+
 - Test: `tests/test_tree_search/test_cache_trainer.py`
 
 - [x] **Step 1: Write the failing test**
@@ -499,12 +519,14 @@ class TestReplayPrepareBatchFallback:
 
 - [x] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayPrepareBatchFallback -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayPrepareBatchFallback -v`
 Expected: FAIL — tests expect fallback behavior that doesn't exist yet
 
 - [x] **Step 3: Write minimal implementation**
 
-In `customized_areal/tree_search/trainer.py`, replace the existing `_replay_prepare_batch` method (lines 391-431) with:
+In `customized_areal/tree_search/trainer.py`, replace the existing
+`_replay_prepare_batch` method (lines 391-431) with:
 
 ```python
     def _replay_prepare_batch(
@@ -560,13 +582,14 @@ In `customized_areal/tree_search/trainer.py`, replace the existing `_replay_prep
 
 - [x] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayPrepareBatchFallback -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayPrepareBatchFallback -v`
 Expected: PASS
 
 - [x] **Step 5: Run all cache trainer tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: All tests
+PASS
 
 - [x] **Step 6: Commit**
 
@@ -582,6 +605,7 @@ ______________________________________________________________________
 **Files:**
 
 - Modify: `customized_areal/tree_search/trainer.py:494-499`
+
 - Test: `tests/test_tree_search/test_cache_trainer.py`
 
 - [x] **Step 1: Write the failing test**
@@ -617,14 +641,18 @@ class TestReplayTrainCleanup:
         assert not hasattr(trainer, "_replay_dataloader_iter")
 ```
 
-- [x] **Step 2: Run test to verify it passes** (this is a behavioral test for the cleanup pattern)
+- [x] **Step 2: Run test to verify it passes** (this is a behavioral test for the
+  cleanup pattern)
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayTrainCleanup -v`
-Expected: PASS (the test verifies the cleanup pattern we're about to add to the real code)
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayTrainCleanup -v`
+Expected: PASS (the test verifies the cleanup pattern we're about to add to the real
+code)
 
 - [x] **Step 3: Update the `train()` finally block**
 
-In `customized_areal/tree_search/trainer.py`, update the finally block (lines 494-499) from:
+In `customized_areal/tree_search/trainer.py`, update the finally block (lines 494-499)
+from:
 
 ```python
         finally:
@@ -650,8 +678,8 @@ to:
 
 - [x] **Step 4: Run all cache trainer tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: All tests
+PASS
 
 - [x] **Step 5: Commit**
 
@@ -774,23 +802,22 @@ class TestReplayFallbackProgression:
 
 - [x] **Step 2: Run the integration test**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayFallbackProgression -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestReplayFallbackProgression -v`
 Expected: PASS
 
 - [x] **Step 3: Run full test suite**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: All tests
+PASS
 
 - [x] **Step 4: Run all tree search tests**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All tests PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All tests PASS
 
 - [x] **Step 5: Run pre-commit**
 
-Run: `pre-commit run --all-files`
-Expected: All checks PASS (fix any issues)
+Run: `pre-commit run --all-files` Expected: All checks PASS (fix any issues)
 
 - [x] **Step 6: Commit**
 
@@ -809,10 +836,14 @@ ______________________________________________________________________
 - `_load_untrained_from_tree_store` helper → Task 1
 - `_generate_from_dataloader` helper → Task 2
 - `train()` cleanup of `_replay_dataloader_iter` → Task 4
-- Replay returns trajectories when available → Task 3 (`test_level1_replay_returns_when_history_available`)
-- Falls to Level 2 when replay missing → Task 3 (`test_level2_falls_to_cached_untrained`)
-- Falls to Level 3 when both exhausted → Task 3 (`test_level3_falls_to_dataloader_generation`)
-- `_load_untrained_from_tree_store` multi-query → Task 1 (`test_loads_from_multiple_queries`)
+- Replay returns trajectories when available → Task 3
+  (`test_level1_replay_returns_when_history_available`)
+- Falls to Level 2 when replay missing → Task 3
+  (`test_level2_falls_to_cached_untrained`)
+- Falls to Level 3 when both exhausted → Task 3
+  (`test_level3_falls_to_dataloader_generation`)
+- `_load_untrained_from_tree_store` multi-query → Task 1
+  (`test_loads_from_multiple_queries`)
 - `_generate_from_dataloader` lazy init → Task 2 (`test_lazy_init_and_generation`)
 - Integration test (full progression) → Task 5
 
@@ -820,8 +851,11 @@ ______________________________________________________________________
 
 **3. Type consistency:**
 
-- `_load_untrained_from_tree_store() -> list[dict[str, Any]]` — consistent in Task 1 impl and Task 3 usage
-- `_generate_from_dataloader(dataloader, workflow, workflow_kwargs, group_size) -> list[dict[str, Any]]` — consistent in Task 2 impl and Task 3 usage
-- `_replay_prepare_batch` signature unchanged — consistent with monkey-patch in `train()`
+- `_load_untrained_from_tree_store() -> list[dict[str, Any]]` — consistent in Task 1
+  impl and Task 3 usage
+- `_generate_from_dataloader(dataloader, workflow, workflow_kwargs, group_size) -> list[dict[str, Any]]`
+  — consistent in Task 2 impl and Task 3 usage
+- `_replay_prepare_batch` signature unchanged — consistent with monkey-patch in
+  `train()`
 - `cache_config.n_samples` used consistently in Tasks 1 and 3
 - `_replay_global_step: int` incremented consistently in all fallback branches

@@ -170,37 +170,63 @@ Serializes/deserializes the full MCTS tree state to disk.
 | `save(tree_store)`    | Save each tree as `query_{id}.json` + `metadata.json` (trained flags, rewards, training history)                             |
 | `load(turn_splitter)` | Restore `MCTSTreeStore` from disk. Calls `rebuild_mcts_stats()` after load because `id(node)` values change across processes |
 
-### 7. Trainers (`trainer.py`)
-
-#### `TreeBackupPPOTrainer`
-
-PPO trainer with MCTS tree backup replacing GAE. No caching.
-
-- When `mode=OFF`, behaves exactly like `PPOTrainer`
-- When `mode=IN_TRAINING` or `CROSS_TRAINING`, patches `PPOActor.compute_advantages` to
-  run tree backup after GAE
-- Saves/loads tree checkpoint on `CROSS_TRAINING` mode
+### 7. Trainer (`trainer.py`)
 
 #### `CacheAwarePPOTrainer`
 
-PPO trainer with rollout caching **and** tree backup. Extends `TreeBackupPPOTrainer`'s
-functionality with a cache-aware batch builder.
+PPO trainer with rollout caching **and** tree backup. Extends `PPOTrainer` directly.
 
-**Training flow (per step):**
+**Initialization (`__init__`):**
+
+When `cache_config.enabled` and `tree_backup_config.mode != OFF`:
+
+1. Creates `MCTSTreeStore` with a turn splitter derived from the tokenizer
+1. Creates `TreeAdvantageComputer` wrapping the tree store
+1. Creates `TreeCheckpointManager` for the cache/checkpoint directory
+1. On `CROSS_TRAINING` mode, loads an existing tree checkpoint if one exists
+1. Resets all trained flags for a fresh training run
+1. Patches `PPOActor.compute_advantages` via `patch_ppo_actor_for_tree_backup()`
+1. If `cache_config.replay=True`, enables replay mode (see below)
+
+**Training flow — cache-aware mode (per step):**
 
 1. **Split prompts** into cached / needs-generation via
    `_CacheAwareBatchBuilder.split_prompts()`
 1. **Load cached** trajectories from tree store (untrained rollouts for same query)
 1. **Generate missing** trajectories via `rollout_batch()` (only for prompts without
    enough cached rollouts)
-1. **Merge** cached + new trajectories (preserves per-sample `_mcts_seq_id` metadata)
+1. **Merge** cached + new trajectories via `_merge_cached_and_new()` (preserves
+   per-sample `_mcts_seq_id` / `_mcts_query_id` metadata)
 1. **Tree backup** runs via patched `compute_advantages()` (insert into trie, compute
    Q-value advantages, mark trained)
 1. **Save checkpoint** (on `CROSS_TRAINING` mode)
 
-**Replay mode** (`RolloutCacheConfig.replay=True`): Instead of generating new rollouts,
-replays trajectories in the exact order recorded during a previous training session.
-Useful for debugging and reproducibility.
+**Training flow — replay mode** (`RolloutCacheConfig.replay=True`):
+
+Instead of generating new rollouts, `_replay_prepare_batch()` replays trajectories with
+a 3-level fallback:
+
+| Level | Source                   | Method                              | Description                                                               |
+| ----- | ------------------------ | ----------------------------------- | ------------------------------------------------------------------------- |
+| 1     | Training history         | `_training_history[global_step]`    | Exact replay of recorded step order (query_id, seq_id pairs)              |
+| 2     | Cached untrained in tree | `_load_untrained_from_tree_store()` | Fallback: load any untrained trajectories still in the tree               |
+| 3     | Fresh generation         | `_generate_from_dataloader()`       | Fallback: generate new rollouts, prioritizing novel queries (not in tree) |
+
+`_generate_from_dataloader()` separates prompts into novel (query_id not in tree store)
+vs existing, and generates for novel queries first to expand tree coverage before
+re-generating for existing ones.
+
+Useful for debugging, reproducibility, and re-running with different advantage
+computations on the same rollout data.
+
+**Other methods:**
+
+| Method                         | Description                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `train()`                      | Monkey-patches `self.actor.prepare_batch` with cache-aware or replay version; restores on exit |
+| `_save_recover_checkpoint()`   | Saves MCTS tree checkpoint on `CROSS_TRAINING` mode (via `TreeCheckpointManager`)              |
+| `_mark_trajectories_trained()` | Marks rollout trajectories as trained (single or grouped via `_mcts_seq_id` / `_mcts_seq_ids`) |
+| `close()`                      | Calls `unpatch_ppo_actor()` to restore original `PPOActor`, then `super().close()`             |
 
 #### Patching mechanism
 
@@ -212,48 +238,246 @@ Useful for debugging and reproducibility.
 1. Marks trajectories as trained
 1. Records training step order (skipped during replay)
 
-`unpatch_ppo_actor()` restores the original method. Called in `trainer.close()`.
+The patch is idempotent — if `PPOActor._original_compute_advantages` already exists
+(from a prior patch), it reuses the true original instead of stacking patches.
+
+`unpatch_ppo_actor()` restores the original method. Called in
+`CacheAwarePPOTrainer.close()`.
 
 ## Data Flow
 
+### Mode 1: Cache-Aware Training (`replay=False`)
+
 ```
-                    ┌──────────────┐
-                    │  Dataloader   │
-                    └──────┬───────┘
-                           │ raw prompts
-                    ┌──────▼───────┐
-                    │ split_prompts │
-                    └──┬───────┬───┘
-                       │       │
-              cached   │       │  needs generation
-                       │       │
-            ┌──────────▼──┐  ┌─▼──────────────┐
-            │ load_cached  │  │  rollout_batch  │
-            │ trajectories │  │  (generate new) │
-            └──────┬───────┘  └───────┬─────────┘
-                   │                  │
-                   └───────┬──────────┘
-                           │ merged trajectories
-                    ┌──────▼───────┐
-                    │  GAE + KL    │  (original compute_advantages)
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │ insert_batch  │  (insert into trie, MCTS backup)
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │ compute()     │  (overwrite advantages with Q-values)
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │ mark_trained  │  (prevent re-use in future steps)
-                    └──────┬───────┘
-                           │
-                    ┌──────▼───────┐
-                    │ PPO update    │  (standard PPO loss with tree advantages)
-                    └──────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CacheAwarePPOTrainer.train()                         │
+│                                                                             │
+│  monkey-patches self.actor.prepare_batch → _cache_aware_prepare_batch()    │
+│  monkey-patches PPOActor.compute_advantages → _tree_backup_compute_advantages() │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │
+                                  │  per training step
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  1. BATCH PREPARATION  (_cache_aware_prepare_batch)                         │
+│                                                                             │
+│  ┌──────────────┐                                                          │
+│  │  Dataloader   │  raw prompts (list[dict])                                │
+│  └──────┬───────┘                                                          │
+│         │                                                                   │
+│  ┌──────▼────────────────────────────────┐                                  │
+│  │  _CacheAwareBatchBuilder.split_prompts│                                  │
+│  │                                       │                                  │
+│  │  For each prompt:                     │                                  │
+│  │   • get_query_id_from_messages()      │── MD5(tokenize(messages))        │
+│  │   • tree_store.get_untrained_count()  │── check cached rollouts          │
+│  │                                       │                                  │
+│  │   fully cached (≥ n_samples)  ──────► │  cached_items[]                  │
+│  │   partially cached           ──────► │  cached_items[] (+ need_gen)      │
+│  │   not cached                 ──────► │  need_gen_items[]                 │
+│  └──┬───────────────────────────────┬───┘                                  │
+│     │                               │                                       │
+│     │  cached prompts               │  prompts needing generation           │
+│     ▼                               ▼                                       │
+│  ┌──────────────────────┐  ┌──────────────────────┐                        │
+│  │ load_cached_trajs()  │  │  rollout_batch()     │                        │
+│  │                      │  │  (inference engine)   │                        │
+│  │ tree_store.load_     │  │                      │                        │
+│  │  trajectories(qid,n) │  │ Returns grouped dicts │                        │
+│  │                      │  │ shape [group, seq]    │                        │
+│  │ Returns individual   │  │ + _mcts_seq_ids list  │                        │
+│  │ dicts shape [1,seq]  │  │ + _mcts_query_id      │                        │
+│  └──────┬───────────────┘  └──────────┬───────────┘                        │
+│         │                             │                                      │
+│         └──────────┬──────────────────┘                                      │
+│                    ▼                                                         │
+│  ┌──────────────────────────────────────┐                                   │
+│  │  _merge_cached_and_new()             │                                   │
+│  │                                      │                                   │
+│  │  • Cached: kept as-is (shape [1,seq])│                                   │
+│  │  • New (batch=1): kept as-is         │                                   │
+│  │  • New (batch>1): split into         │                                   │
+│  │    individual dicts, extracting      │                                   │
+│  │    _mcts_seq_id from _mcts_seq_ids   │                                   │
+│  │                                      │                                   │
+│  │  Result: flat list of per-sample     │                                   │
+│  │  dicts, each with _mcts_query_id     │                                   │
+│  │  and _mcts_seq_id                    │                                   │
+│  └──────────────────┬───────────────────┘                                   │
+│                     │                                                        │
+│                     │  merged trajectories                                   │
+└─────────────────────┼────────────────────────────────────────────────────────┘
+                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  2. ADVANTAGE COMPUTATION  (patched compute_advantages)                     │
+│                                                                             │
+│  ┌──────────────────────────────────────────┐                              │
+│  │  Step A: Original GAE pipeline           │                              │
+│  │  (PPOActor.compute_advantages)           │                              │
+│  │                                          │                              │
+│  │  • Compute KL rewards (ref vs policy)    │                              │
+│  │  • Scale rewards                         │                              │
+│  │  • GAE λ-returns → advantages, returns   │                              │
+│  │  • Compute loss_mask, logprobs           │                              │
+│  │                                          │                              │
+│  │  Preserved for logging: kl_rewards,      │                              │
+│  │  tot_rewards, loss_mask, logprobs        │                              │
+│  └──────────────────────┬───────────────────┘                              │
+│                         │                                                   │
+│  ┌──────────────────────▼───────────────────┐                              │
+│  │  Step B: Insert into MCTS tree           │                              │
+│  │  (tree_store.insert_batch)               │                              │
+│  │                                          │                              │
+│  │  For each trajectory:                    │                              │
+│  │   • _get_query_id() ─ MD5(prompt tokens) │                              │
+│  │   • turn_splitter(input_ids) → [Turn]    │                              │
+│  │   • start_sequence(query_id) → seq_id    │                              │
+│  │   • add_turn(query_id, seq_id, turn)     │                              │
+│  │     for each turn (cursor walks trie)    │                              │
+│  │   • finish_sequence(query_id, seq_id,    │                              │
+│  │     reward) → triggers MCTS backup       │                              │
+│  │                                          │                              │
+│  │  MCTS _backup (leaf → root):             │                              │
+│  │   • Increment visit_count at each node   │                              │
+│  │   • Update total_value += traj reward    │                              │
+│  │   • Q_value = total_value / visit_count  │                              │
+│  │                                          │                              │
+│  │  Attaches to each traj dict:             │                              │
+│  │   • _mcts_query_id (str)                 │                              │
+│  │   • _mcts_seq_id (int) or                │                              │
+│  │     _mcts_seq_ids (list[int])            │                              │
+│  └──────────────────────┬───────────────────┘                              │
+│                         │                                                   │
+│  ┌──────────────────────▼───────────────────┐                              │
+│  │  Step C: Overwrite advantages            │                              │
+│  │  (tree_advantage_computer.compute)       │                              │
+│  │                                          │                              │
+│  │  For each trajectory:                    │                              │
+│  │   • get_advantages(qid, seq_id)          │                              │
+│  │     → per-token Q-values expanded by     │                              │
+│  │       turn boundaries (same Q for all    │                              │
+│  │       tokens in a turn's response)       │                              │
+│  │   • Zero out prompt tokens via           │                              │
+│  │     get_prompt_mask() (True=response)    │                              │
+│  │   • traj["advantages"] = Q * mask        │                              │
+│  │   • traj["returns"]     = advantages     │                              │
+│  │     (clone, since V=Q for tree backup)   │                              │
+│  └──────────────────────┬───────────────────┘                              │
+│                         │                                                   │
+│  ┌──────────────────────▼───────────────────┐                              │
+│  │  Step D: Mark trained                    │                              │
+│  │  (_mark_batch_trained)                   │                              │
+│  │                                          │                              │
+│  │  tree_store.set_trained(query_id,        │                              │
+│  │    seq_id, True) for each trajectory     │                              │
+│  │                                          │                              │
+│  │  → future split_prompts() will skip      │                              │
+│  │    these and not load them again         │                              │
+│  └──────────────────────┬───────────────────┘                              │
+│                         │                                                   │
+│  ┌──────────────────────▼───────────────────┐                              │
+│  │  Step E: Record training step            │                              │
+│  │  (tree_store.record_training_step)       │                              │
+│  │                                          │                              │
+│  │  _training_history[global_step] =        │                              │
+│  │    [(query_id, seq_id), ...]             │                              │
+│  │                                          │                              │
+│  │  Skipped if tree_store._replay_mode      │                              │
+│  └──────────────────────┬───────────────────┘                              │
+│                         │                                                   │
+└─────────────────────────┼───────────────────────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  3. PPO UPDATE  (standard PPOTrainer, unchanged)                            │
+│                                                                             │
+│  • PPO clipped loss on tree-Q advantages                                   │
+│  • Value function loss on tree-Q returns                                   │
+│  • KL metadata (kl_rewards, tot_rewards) available for logging              │
+│  • Optimizer step, gradient accumulation, etc.                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+After PPO update (on CROSS_TRAINING mode):
+
+┌──────────────────────────────────────────────┐
+│  _save_recover_checkpoint()                  │
+│  └─ TreeCheckpointManager.save(tree_store)   │
+│     • Each tree → query_{id}.json            │
+│     • metadata.json (trained flags, rewards, │
+│       training history)                      │
+└──────────────────────────────────────────────┘
 ```
+
+### Mode 2: Replay Training (`replay=True`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                CacheAwarePPOTrainer.train() (replay mode)                   │
+│                                                                             │
+│  monkey-patches self.actor.prepare_batch → _replay_prepare_batch()         │
+│  Sets tree_store._replay_mode = True                                       │
+│  (Step E: record_training_step is skipped to avoid duplicates)             │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │
+                                  │  per training step
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  _replay_prepare_batch() — 3-level fallback                                 │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Level 1: Replay from training history                              │   │
+│  │                                                                     │   │
+│  │  if global_step in _training_history:                               │   │
+│  │    for (query_id, seq_id) in _training_history[global_step]:        │   │
+│  │      load_trajectory_by_seq_id(query_id, seq_id)                    │   │
+│  │    → returns exact same trajectories as original training           │   │
+│  │    → global_step++ and return                                       │   │
+│  └──────────────────────────────┬──────────────────────────────────────┘   │
+│                                 │ not found or all missing                  │
+│                                 ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Level 2: Load untrained from tree store                            │   │
+│  │                                                                     │   │
+│  │  _load_untrained_from_tree_store()                                  │   │
+│  │    for each query_id in tree_store.trees:                           │   │
+│  │      get_untrained_count(query_id)                                  │   │
+│  │      load_trajectories(query_id, min(count, n_samples))             │   │
+│  │    → returns any trajectories not yet trained                       │   │
+│  │    → global_step++ and return                                       │   │
+│  └──────────────────────────────┬──────────────────────────────────────┘   │
+│                                 │ none available                            │
+│                                 ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  Level 3: Fresh generation from dataloader                          │   │
+│  │                                                                     │   │
+│  │  _generate_from_dataloader()                                        │   │
+│  │    • Pull batch from dataloader                                     │   │
+│  │    • Derive query_id for each prompt                                │   │
+│  │    • Separate: novel (query_id ∉ tree_store.trees)                 │   │
+│  │                 vs existing (already in tree)                        │   │
+│  │    • Generate for novel queries first → expand tree coverage        │   │
+│  │    • Fall back to full batch if no novel queries                    │   │
+│  │    → global_step++ and return                                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  All 3 levels feed into the same patched compute_advantages pipeline       │
+│  (Steps A–E above), but Step E is a no-op in replay mode.                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Metadata Propagation
+
+Key metadata fields attached to trajectory dicts throughout the pipeline:
+
+| Field            | Attached by                          | Type        | Used by                                         |
+| ---------------- | ------------------------------------ | ----------- | ----------------------------------------------- |
+| `_mcts_query_id` | `insert_batch()` / `split_prompts()` | `str`       | Tree lookup, cache splitting, advantage compute |
+| `_mcts_seq_id`   | `insert_batch()` (single)            | `int`       | Advantage lookup, mark trained                  |
+| `_mcts_seq_ids`  | `insert_batch()` (grouped)           | `list[int]` | Per-sample advantage in grouped dict            |
+| `_global_step`   | PPOTrainer (base)                    | `int`       | Training history recording                      |
+
+`_merge_cached_and_new()` converts `_mcts_seq_ids` → individual `_mcts_seq_id` when
+splitting grouped dicts (batch > 1), ensuring downstream code always has per-sample
+access.
 
 ## Usage Example
 
@@ -301,4 +525,4 @@ training script.
 | `mcts_tree_store.py` | `MCTSTreeStore` — trie-backed MCTS tree with cursor API, backup, caching |
 | `advantage.py`       | `TreeAdvantageComputer` — replaces GAE advantages with MCTS Q-values     |
 | `checkpoint.py`      | `TreeCheckpointManager` — serialize/deserialize tree state to JSON       |
-| `trainer.py`         | `TreeBackupPPOTrainer`, `CacheAwarePPOTrainer` — customized PPO trainers |
+| `trainer.py`         | `CacheAwarePPOTrainer` — PPO trainer with rollout caching + tree backup  |

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
-import pytest
 import torch
 
 from customized_areal.on_policy_distill.proxy.cache import (
@@ -91,9 +90,7 @@ class TestDeserializationCreatesCorrectType:
             "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]),
             "loss_mask": torch.tensor([[0, 0, 0, 0, 0, 1, 1, 1]]),
             "rewards": torch.tensor([1.0]),
-            "logprobs": torch.tensor(
-                [[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8]]
-            ),
+            "logprobs": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8]]),
             "versions": torch.tensor([[-1, -1, -1, -1, -1, 0, 0, 0]]),
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1]]),
         }
@@ -119,9 +116,7 @@ class TestDeserializationCreatesCorrectType:
             "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]),
             "loss_mask": torch.tensor([[0, 0, 0, 0, 0, 1, 1, 1]]),
             "rewards": torch.tensor([0.0]),
-            "logprobs": torch.tensor(
-                [[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8]]
-            ),
+            "logprobs": torch.tensor([[0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -0.3, -0.8]]),
             "versions": torch.tensor([[-1, -1, -1, -1, -1, 0, 0, 0]]),
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1, 1, 1]]),
         }

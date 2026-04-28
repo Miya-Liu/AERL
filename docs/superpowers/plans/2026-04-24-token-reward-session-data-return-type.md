@@ -1,29 +1,37 @@
 # TokenRewardSessionData Return Type Fix — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `TokenRewardSessionData.export_interactions` return `dict[str, InteractionWithTokenLevelReward]` with correct type annotations and proper data flow through serialization/deserialization.
+**Goal:** Make `TokenRewardSessionData.export_interactions` return
+`dict[str, InteractionWithTokenLevelReward]` with correct type annotations and proper
+data flow through serialization/deserialization.
 
-**Architecture:** Override `TokenRewardSessionData.__init__` to use the extended `InteractionCache`, widen return types across the server/client/workflow chain, delegate reward application to the cache at set-time, and fix deserialization to create `InteractionWithTokenLevelReward` objects instead of base-type objects.
+**Architecture:** Override `TokenRewardSessionData.__init__` to use the extended
+`InteractionCache`, widen return types across the server/client/workflow chain, delegate
+reward application to the cache at set-time, and fix deserialization to create
+`InteractionWithTokenLevelReward` objects instead of base-type objects.
 
 **Tech Stack:** Python 3.12+ | Pydantic | pytest
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Change | Responsibility |
-|------|--------|----------------|
-| `customized_areal/on_policy_distill/proxy/server.py` | Modify | Override `__init__`, widen return type, delegate rewards to cache |
-| `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` | Modify | Fix deserialization to create `InteractionWithTokenLevelReward` |
-| `customized_areal/on_policy_distill/proxy/client.py` | Modify | Type `export_interactions` return as `TokenRewardInteractions` |
-| `customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py` | Create | New tests for return type fix and data flow |
+| File                                                                     | Change | Responsibility                                                    |
+| ------------------------------------------------------------------------ | ------ | ----------------------------------------------------------------- |
+| `customized_areal/on_policy_distill/proxy/server.py`                     | Modify | Override `__init__`, widen return type, delegate rewards to cache |
+| `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`       | Modify | Fix deserialization to create `InteractionWithTokenLevelReward`   |
+| `customized_areal/on_policy_distill/proxy/client.py`                     | Modify | Type `export_interactions` return as `TokenRewardInteractions`    |
+| `customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py` | Create | New tests for return type fix and data flow                       |
 
----
+______________________________________________________________________
 
 ### Task 1: Write failing tests for the return type fix
 
 **Files:**
+
 - Create: `customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py`
 
 - [ ] **Step 1: Write tests that verify the current behavior is broken**
@@ -301,9 +309,15 @@ class TestScalarRewardPreservedAfterDelegation:
 
 - [ ] **Step 2: Run the new tests to verify they fail**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py -v 2>&1 | head -80`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py -v 2>&1 | head -80`
 
-Expected: Several tests FAIL — `test_completions_is_extended_cache` fails because `session.completions` is the base `InteractionCache`; `test_returned_interaction_is_correct_type` may pass or fail depending on runtime types; `test_deserialized_is_extended_type` fails because deserialization creates `InteractionWithTokenLogpReward`; `test_scalar_reward_preserved_after_delegation` may fail because `set_token_rewards` doesn't delegate to cache yet.
+Expected: Several tests FAIL — `test_completions_is_extended_cache` fails because
+`session.completions` is the base `InteractionCache`;
+`test_returned_interaction_is_correct_type` may pass or fail depending on runtime types;
+`test_deserialized_is_extended_type` fails because deserialization creates
+`InteractionWithTokenLogpReward`; `test_scalar_reward_preserved_after_delegation` may
+fail because `set_token_rewards` doesn't delegate to cache yet.
 
 - [ ] **Step 3: Commit the test file**
 
@@ -312,20 +326,25 @@ git add customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py
 git commit -m "test: add failing tests for TokenRewardSessionData return type fix"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Server — Override `__init__`, widen return type, delegate rewards
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/server.py`
 
-This task implements Changes 1, 2, and 3 from the spec: override `__init__` to use the extended `InteractionCache`, widen the return type of `export_interactions`, and delegate reward application to the cache at set-time.
+This task implements Changes 1, 2, and 3 from the spec: override `__init__` to use the
+extended `InteractionCache`, widen the return type of `export_interactions`, and
+delegate reward application to the cache at set-time.
 
 - [ ] **Step 1: Add the extended InteractionCache import and override `__init__`**
 
-In `customized_areal/on_policy_distill/proxy/server.py`, add the import at the top (after the existing imports) and modify `TokenRewardSessionData.__init__`:
+In `customized_areal/on_policy_distill/proxy/server.py`, add the import at the top
+(after the existing imports) and modify `TokenRewardSessionData.__init__`:
 
 Replace:
+
 ```python
 from areal.experimental.openai.proxy.server import (
     EXPORT_TRAJECTORIES_PATHNAME,
@@ -349,6 +368,7 @@ if TYPE_CHECKING:
 ```
 
 With:
+
 ```python
 from areal.experimental.openai.proxy.server import (
     EXPORT_TRAJECTORIES_PATHNAME,
@@ -398,7 +418,10 @@ Replace the method signature:
 
 - [ ] **Step 3: Delegate reward application in `set_token_rewards`**
 
-Replace the `set_token_rewards` method body. The key invariant: scalar reward set via `set_reward()` must NOT be overwritten by token rewards. The extended cache's `set_rewards()` method overwrites `interaction.reward` with `sum(token_rewards)`, so we save and restore the scalar reward.
+Replace the `set_token_rewards` method body. The key invariant: scalar reward set via
+`set_reward()` must NOT be overwritten by token rewards. The extended cache's
+`set_rewards()` method overwrites `interaction.reward` with `sum(token_rewards)`, so we
+save and restore the scalar reward.
 
 ```python
     def set_token_rewards(
@@ -482,7 +505,8 @@ Replace the `set_token_rewards` method body. The key invariant: scalar reward se
 
 - [ ] **Step 5: Update `export_interactions` body**
 
-The export method still needs a fallback loop for interactions that weren't in the cache at set-time (timing race). But now it can use the typed setter as the primary path:
+The export method still needs a fallback loop for interactions that weren't in the cache
+at set-time (timing race). But now it can use the typed setter as the primary path:
 
 ```python
     def export_interactions(
@@ -528,13 +552,15 @@ The export method still needs a fallback loop for interactions that weren't in t
 
 - [ ] **Step 6: Run the server-focused tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestSessionDataUsesExtendedCache customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestExportInteractionsReturnType customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestScalarRewardPreservedAfterDelegation -v 2>&1 | tail -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestSessionDataUsesExtendedCache customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestExportInteractionsReturnType customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestScalarRewardPreservedAfterDelegation -v 2>&1 | tail -30`
 
 Expected: PASS
 
 - [ ] **Step 7: Run the existing server tests to verify no regressions**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_server.py customized_areal/on_policy_distill/proxy/tests/test_bug_fixes.py -v 2>&1 | tail -40`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_server.py customized_areal/on_policy_distill/proxy/tests/test_bug_fixes.py -v 2>&1 | tail -40`
 
 Expected: All PASS
 
@@ -545,18 +571,21 @@ git add customized_areal/on_policy_distill/proxy/server.py
 git commit -m "feat(proxy): use extended InteractionCache and type export_interactions as InteractionWithTokenLevelReward"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Deserialization — Create `InteractionWithTokenLevelReward` objects
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py:154-207`
 
-Change `deserialize_interactions_with_position_rewards` to create `InteractionWithTokenLevelReward` instead of `InteractionWithTokenLogpReward`.
+Change `deserialize_interactions_with_position_rewards` to create
+`InteractionWithTokenLevelReward` instead of `InteractionWithTokenLogpReward`.
 
 - [ ] **Step 1: Update the deserialization function**
 
-In `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`, replace `deserialize_interactions_with_position_rewards` (lines 154-207):
+In `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`, replace
+`deserialize_interactions_with_position_rewards` (lines 154-207):
 
 ```python
 def deserialize_interactions_with_position_rewards(
@@ -620,15 +649,18 @@ def deserialize_interactions_with_position_rewards(
 
 - [ ] **Step 2: Run deserialization tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestDeserializationCreatesCorrectType -v 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py::TestDeserializationCreatesCorrectType -v 2>&1 | tail -20`
 
 Expected: PASS
 
 - [ ] **Step 3: Run the Bug 4 serialization tests (they directly test the round-trip)**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_bug_fixes.py::TestBug4_TokenRewardsLostInSerialization -v 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_bug_fixes.py::TestBug4_TokenRewardsLostInSerialization -v 2>&1 | tail -20`
 
-Expected: PASS (the mock-based tests should work because `Mock` objects still have `token_rewards` and `to_tensor_dict` as set up)
+Expected: PASS (the mock-based tests should work because `Mock` objects still have
+`token_rewards` and `to_tensor_dict` as set up)
 
 - [ ] **Step 4: Commit**
 
@@ -637,16 +669,18 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): deserialize as InteractionWithTokenLevelReward for proper token_rewards support"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Client — Type `export_interactions` return as `TokenRewardInteractions`
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/client.py:312-316`
 
 - [ ] **Step 1: Add the type import and update the return type**
 
-In `customized_areal/on_policy_distill/proxy/client.py`, add the import at the top (after existing imports from `.proxy_rollout_server` and `.server`):
+In `customized_areal/on_policy_distill/proxy/client.py`, add the import at the top
+(after existing imports from `.proxy_rollout_server` and `.server`):
 
 ```python
 from .types import TokenRewardInteractions
@@ -677,7 +711,8 @@ And update the docstring:
 
 - [ ] **Step 2: Run the full new test suite**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py -v 2>&1 | tail -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py -v 2>&1 | tail -30`
 
 Expected: All PASS
 
@@ -688,28 +723,33 @@ git add customized_areal/on_policy_distill/proxy/client.py
 git commit -m "feat(proxy): type export_interactions return as TokenRewardInteractions"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Run full test suite and verify end-to-end
 
 **Files:**
+
 - No new files
 
 - [ ] **Step 1: Run all proxy tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/ -v --timeout=60 -k "not GPU" 2>&1 | tail -60`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/ -v --timeout=60 -k "not GPU" 2>&1 | tail -60`
 
 Expected: All PASS
 
 - [ ] **Step 2: Run the integration tests (excluding GPU tests)**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_server_integration.py -v --timeout=120 -k "not GPU" 2>&1 | tail -40`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest customized_areal/on_policy_distill/proxy/tests/test_server_integration.py -v --timeout=120 -k "not GPU" 2>&1 | tail -40`
 
-Expected: All PASS — these tests verify the full HTTP round-trip including serialization/deserialization with token_rewards and position_rewards
+Expected: All PASS — these tests verify the full HTTP round-trip including
+serialization/deserialization with token_rewards and position_rewards
 
 - [ ] **Step 3: Run linter**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pre-commit run --files customized_areal/on_policy_distill/proxy/server.py customized_areal/on_policy_distill/proxy/proxy_rollout_server.py customized_areal/on_policy_distill/proxy/client.py customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py 2>&1 | tail -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pre-commit run --files customized_areal/on_policy_distill/proxy/server.py customized_areal/on_policy_distill/proxy/proxy_rollout_server.py customized_areal/on_policy_distill/proxy/client.py customized_areal/on_policy_distill/proxy/tests/test_return_type_fix.py 2>&1 | tail -30`
 
 Expected: No errors
 

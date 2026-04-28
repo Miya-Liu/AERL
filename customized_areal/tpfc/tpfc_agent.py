@@ -142,10 +142,15 @@ class TPFCAgent:
         The http_client from extra_kwargs is used to route LLM calls through
         AReaL's proxy server for token-level tracking.
 
+        The ``query_id`` from ``data`` is logged and preserved in the data
+        dict so that ``QueryIDProxyWorkflow`` can inject it into the
+        trajectory as ``_mcts_query_id`` for tree search.
+
         Args:
             data: Input data for the agent. Expected keys:
                 - "messages": List of message dicts (last message contains the task)
                 - "answer": Ground truth for reward calculation
+                - "query_id": String identifier from the dataset
             **extra_kwargs: Additional keyword arguments passed by OpenAIProxyWorkflow:
                 - http_client: httpx.AsyncClient for proxy routing
                 - base_url: Proxy server base URL
@@ -159,12 +164,9 @@ class TPFCAgent:
             TimeoutError: If agent run doesn't complete within timeout.
         """
         try:
-            # Extract task description from messages
-            messages = data.get("messages", [])
-            if messages:
-                task_description = messages[-1].get("content", "")
-            else:
-                task_description = data.get("prompt", "")
+            # Extract task description from dataset query field (clean query text)
+            task_description = data.get("query", "")
+            query_id = data.get("query_id", "")
 
             # Extract ground truth for reward calculation
             gt = data.get("answer", "")
@@ -176,12 +178,12 @@ class TPFCAgent:
 
             # Get OpenAI proxy parameters (passed by OpenAIProxyWorkflow._run_agent)
             base_url = extra_kwargs.get("base_url")
-            http_client = extra_kwargs.get("http_client")
             api_key = extra_kwargs.get("api_key")
 
             logger.info(
-                "TPFCAgent starting run: task=%s, has_ground_truth=%s, base_url=%s, n_images=%d",
+                "TPFCAgent starting run: task=%s, query_id=%s, has_ground_truth=%s, base_url=%s, n_images=%d",
                 task_description[:100] if task_description else None,
+                query_id,
                 bool(gt),
                 base_url,
                 len(task_file_path),
@@ -222,8 +224,9 @@ class TPFCAgent:
             )
 
             logger.info(
-                "TPFCAgent run completed: message_count=%d, reward=%.4f",
+                "TPFCAgent run completed: message_count=%d, query_id=%s, reward=%.4f",
                 len(completion_messages),
+                query_id,
                 reward,
             )
 

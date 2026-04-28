@@ -1,29 +1,39 @@
 # Proxy Rollout Server Parity Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add all missing base server functionality (inference endpoints, engine management, cluster integration, helpers) to the custom token-reward proxy rollout server.
+**Goal:** Add all missing base server functionality (inference endpoints, engine
+management, cluster integration, helpers) to the custom token-reward proxy rollout
+server.
 
-**Architecture:** Direct copy-port from `areal/experimental/openai/proxy/proxy_rollout_server.py` into `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`. Each function is adapted to coexist with existing token-reward features. No changes to other files.
+**Architecture:** Direct copy-port from
+`areal/experimental/openai/proxy/proxy_rollout_server.py` into
+`customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`. Each function is
+adapted to coexist with existing token-reward features. No changes to other files.
 
 **Tech Stack:** Python 3.12+ | FastAPI | OpenAI SDK | Anthropic SDK | LiteLLM | uvicorn
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Action | Responsibility |
-|---|---|---|
+| File                                                               | Action | Responsibility                                     |
+| ------------------------------------------------------------------ | ------ | -------------------------------------------------- |
 | `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` | Modify | Add imports, globals, helpers, endpoints, CLI args |
 
-Only one file is modified. All additions are appended or inserted into the existing structure.
+Only one file is modified. All additions are appended or inserted into the existing
+structure.
 
----
+______________________________________________________________________
 
 ### Task 1: Add new imports and globals
 
 **Files:**
-- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py:1-54` (imports) and `:186-197` (globals)
+
+- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py:1-54`
+  (imports) and `:186-197` (globals)
 
 - [ ] **Step 1: Add new stdlib and third-party imports**
 
@@ -112,7 +122,8 @@ _adapter = AnthropicAdapter()
 
 - [ ] **Step 6: Verify the file still parses**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 Expected: No output (success)
 
 - [ ] **Step 7: Commit**
@@ -122,12 +133,14 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add imports and globals for base server parity"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Add `validate_json_request` helper
 
 **Files:**
-- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` (helper functions section)
+
+- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` (helper
+  functions section)
 
 - [ ] **Step 1: Add `validate_json_request` function**
 
@@ -152,7 +165,8 @@ async def validate_json_request(raw_request: Request):
 
 - [ ] **Step 2: Verify parse**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 
 - [ ] **Step 3: Commit**
 
@@ -161,11 +175,12 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add validate_json_request helper"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Add engine management functions and endpoints
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 
 - [ ] **Step 1: Add `_setup_openai_client` function**
@@ -310,7 +325,8 @@ async def call_engine_method(raw_request: Request):
 
 - [ ] **Step 8: Verify parse**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 
 - [ ] **Step 9: Commit**
 
@@ -319,11 +335,12 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add engine management endpoints (health, alloc_ports, configure, set_env, create_engine, call)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Add inference helper functions
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 
 - [ ] **Step 1: Add `_call_client_create` function**
@@ -473,7 +490,8 @@ def cleanup_engine():
 
 - [ ] **Step 5: Verify parse**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 
 - [ ] **Step 6: Commit**
 
@@ -482,11 +500,12 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add inference helper functions (call_client_create, translate_anthropic, safe_stream, cleanup_engine)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Add inference endpoints
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 
 - [ ] **Step 1: Add `/chat/completions` endpoint**
@@ -681,7 +700,8 @@ async def anthropic_messages(
 
 - [ ] **Step 4: Verify parse**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 
 - [ ] **Step 5: Commit**
 
@@ -690,11 +710,12 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add inference endpoints (chat/completions, responses, anthropic messages)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Update lifespan and CLI/main()
 
 **Files:**
+
 - Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 
 - [ ] **Step 1: Update `lifespan` to call `cleanup_engine` on shutdown**
@@ -825,11 +846,13 @@ def main():
 
 - [ ] **Step 3: Verify parse**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/on_policy_distill/proxy/proxy_rollout_server.py').read())"`
 
 - [ ] **Step 4: Run pre-commit on the file**
 
-Run: `pre-commit run --files customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
+Run:
+`pre-commit run --files customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 Expected: All checks pass (formatting, linting)
 
 - [ ] **Step 5: Commit**
@@ -839,26 +862,31 @@ git add customized_areal/on_policy_distill/proxy/proxy_rollout_server.py
 git commit -m "feat(proxy): add cluster integration, update lifespan and CLI for base server parity"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Smoke test and final verification
 
 **Files:**
-- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py` (verification only)
+
+- Modify: `customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
+  (verification only)
 
 - [ ] **Step 1: Verify the module can be imported**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.on_policy_distill.proxy.proxy_rollout_server import app; print(f'Routes: {len(app.routes)}')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && python -c "from customized_areal.on_policy_distill.proxy.proxy_rollout_server import app; print(f'Routes: {len(app.routes)}')"`
 Expected: Successfully imports and shows route count (>10 routes)
 
 - [ ] **Step 2: Verify all expected routes are registered**
 
-Run: `python -c "from customized_areal.on_policy_distill.proxy.proxy_rollout_server import app; routes = [r.path for r in app.routes if hasattr(r, 'path')]; expected = ['/health', '/alloc_ports', '/configure', '/set_env', '/create_engine', '/call']; print('Missing:', [p for p in expected if p not in routes]); print('All routes:', sorted(routes))"`
+Run:
+`python -c "from customized_areal.on_policy_distill.proxy.proxy_rollout_server import app; routes = [r.path for r in app.routes if hasattr(r, 'path')]; expected = ['/health', '/alloc_ports', '/configure', '/set_env', '/create_engine', '/call']; print('Missing:', [p for p in expected if p not in routes]); print('All routes:', sorted(routes))"`
 Expected: No missing routes; all expected + existing RL endpoints present
 
 - [ ] **Step 3: Run pre-commit on the full file**
 
-Run: `pre-commit run --files customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
+Run:
+`pre-commit run --files customized_areal/on_policy_distill/proxy/proxy_rollout_server.py`
 Expected: All checks pass
 
 - [ ] **Step 4: Final commit (if any formatting fixes needed)**

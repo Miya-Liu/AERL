@@ -133,27 +133,27 @@ OpenAIProxyWorkflow.arun_episode()
 
 ### Role of Each File
 
-| File | Role | Key Classes/Functions | Production? |
-|------|------|-----------------------|-------------|
-| `workflow.py` | Orchestration layer | `OpenAIProxyWorkflow` — episode lifecycle, reward processing, tensor conversion | Yes |
-| `client.py` | HTTP client | `OpenAIProxyClient` — sends reward/export requests to server | Yes |
-| `proxy_rollout_server.py` | HTTP server | FastAPI app with all endpoints, serialization, engine management | Yes |
-| `server.py` | Data models & logic | `TokenRewardSessionData`, `PositionRewardInfo`, request/response models | Yes |
-| `cache.py` | Local test cache | `InteractionCache`, `PositionRewardInfo` (dataclass) | No (testing only) |
+| File                      | Role                | Key Classes/Functions                                                           | Production?       |
+| ------------------------- | ------------------- | ------------------------------------------------------------------------------- | ----------------- |
+| `workflow.py`             | Orchestration layer | `OpenAIProxyWorkflow` — episode lifecycle, reward processing, tensor conversion | Yes               |
+| `client.py`               | HTTP client         | `OpenAIProxyClient` — sends reward/export requests to server                    | Yes               |
+| `proxy_rollout_server.py` | HTTP server         | FastAPI app with all endpoints, serialization, engine management                | Yes               |
+| `server.py`               | Data models & logic | `TokenRewardSessionData`, `PositionRewardInfo`, request/response models         | Yes               |
+| `cache.py`                | Local test cache    | `InteractionCache`, `PositionRewardInfo` (dataclass)                            | No (testing only) |
 
 ### Dual Implementation: cache.py vs. server.py
 
 The same reward concepts exist in two parallel implementations:
 
-| Concept | `cache.py` (Local/Testing) | `server.py` + `proxy_rollout_server.py` (Production/HTTP) |
-|---------|---------------------------|----------------------------------------------------------|
-| Position rewards | `PositionRewardInfo` (dataclass) | `PositionRewardInfo` (Pydantic model) |
-| Reward storage | `InteractionCache._lock` + dict | `TokenRewardSessionData._lock` + dict |
-| Set token rewards | `InteractionCache.set_rewards()` | `POST /rl/set_token_rewards` → `SessionData.set_token_rewards()` |
-| Set position rewards | `InteractionCache.set_position_rewards()` | `POST /rl/set_position_rewards` → `SessionData.set_position_rewards()` |
-| Compute entropy | `InteractionCache.compute_and_store_entropy()` | `POST /rl/compute_entropy` → `SessionData.compute_entropy()` |
-| Export | `InteractionCache.export_interactions()` | `POST /export_trajectories` → `SessionData.export_interactions()` |
-| Parent-child tree | Built in `__setitem__` via prefix matching | Built in base `SessionData.completions` (same `InteractionCache`) |
+| Concept              | `cache.py` (Local/Testing)                     | `server.py` + `proxy_rollout_server.py` (Production/HTTP)              |
+| -------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
+| Position rewards     | `PositionRewardInfo` (dataclass)               | `PositionRewardInfo` (Pydantic model)                                  |
+| Reward storage       | `InteractionCache._lock` + dict                | `TokenRewardSessionData._lock` + dict                                  |
+| Set token rewards    | `InteractionCache.set_rewards()`               | `POST /rl/set_token_rewards` → `SessionData.set_token_rewards()`       |
+| Set position rewards | `InteractionCache.set_position_rewards()`      | `POST /rl/set_position_rewards` → `SessionData.set_position_rewards()` |
+| Compute entropy      | `InteractionCache.compute_and_store_entropy()` | `POST /rl/compute_entropy` → `SessionData.compute_entropy()`           |
+| Export               | `InteractionCache.export_interactions()`       | `POST /export_trajectories` → `SessionData.export_interactions()`      |
+| Parent-child tree    | Built in `__setitem__` via prefix matching     | Built in base `SessionData.completions` (same `InteractionCache`)      |
 
 `cache.py` is used for **unit tests** where you want to test reward logic without
 running an HTTP server. The production path goes through `client.py` →
@@ -173,8 +173,8 @@ dict[str, dict]    → client.set_position_rewards(...)  → POST /rl/set_positi
                     + client.set_reward(id, scalar)     → POST /rl/set_reward
 ```
 
-The `dict[str, dict]` format (with `"position_rewards"` and `"scalar_reward"` keys)
-is used by distillation agents (OnPolicyDistillAgent, TreeDistillAgent). Scalar and
+The `dict[str, dict]` format (with `"position_rewards"` and `"scalar_reward"` keys) is
+used by distillation agents (OnPolicyDistillAgent, TreeDistillAgent). Scalar and
 position rewards are set independently so tree backup advantage computation uses only
 the trajectory-level scalar reward, while position rewards feed the distillation loss.
 
@@ -186,19 +186,19 @@ letting AReaL's default `workflow_executor` handle it. This is because:
 1. `position_rewards` is a Python attribute (not in `to_tensor_dict()`) to avoid
    `concat_padded_tensors` key consistency issues when some interactions have
    position_rewards and others don't (e.g., multi-turn conversations).
-2. Each `PositionRewardInfo` gets a `sample_index` indicating which batch item it
+1. Each `PositionRewardInfo` gets a `sample_index` indicating which batch item it
    belongs to, so minibatch splitting can correctly partition them.
 
 ## File Structure
 
-| File | Purpose |
-|------|---------|
-| `workflow.py` | `OpenAIProxyWorkflow` — orchestrates episodes with token-level reward support |
-| `client.py` | `OpenAIProxyClient` — HTTP client with methods for setting token/position rewards |
-| `server.py` | Data models and session logic (`TokenRewardSessionData`, `PositionRewardInfo`, etc.) |
-| `proxy_rollout_server.py` | FastAPI server with token-level reward endpoints + serialization |
-| `cache.py` | `InteractionCache` — local in-memory cache for testing (not used in production) |
-| `types.py` | `InteractionWithTokenLevelReward` — extended interaction type with token reward fields |
+| File                      | Purpose                                                                                |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| `workflow.py`             | `OpenAIProxyWorkflow` — orchestrates episodes with token-level reward support          |
+| `client.py`               | `OpenAIProxyClient` — HTTP client with methods for setting token/position rewards      |
+| `server.py`               | Data models and session logic (`TokenRewardSessionData`, `PositionRewardInfo`, etc.)   |
+| `proxy_rollout_server.py` | FastAPI server with token-level reward endpoints + serialization                       |
+| `cache.py`                | `InteractionCache` — local in-memory cache for testing (not used in production)        |
+| `types.py`                | `InteractionWithTokenLevelReward` — extended interaction type with token reward fields |
 
 ## Key Features
 
@@ -320,62 +320,62 @@ class PositionRewardAgent:
 
 ### Session Management
 
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /rl/start_session` | Admin | Start a new session, get session_api_key |
-| `POST /rl/end_session` | Session | End session, mark as completed |
-| `POST /rl/grant_capacity` | Admin | Increment session capacity |
-| `POST /export_trajectories` | Admin | Export interactions with rewards applied |
+| Endpoint                    | Auth    | Description                              |
+| --------------------------- | ------- | ---------------------------------------- |
+| `POST /rl/start_session`    | Admin   | Start a new session, get session_api_key |
+| `POST /rl/end_session`      | Session | End session, mark as completed           |
+| `POST /rl/grant_capacity`   | Admin   | Increment session capacity               |
+| `POST /export_trajectories` | Admin   | Export interactions with rewards applied |
 
 ### LLM Generation (OpenAI-Compatible)
 
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /chat/completions` | Session | OpenAI chat completions (streaming supported) |
-| `POST /responses` | Session | OpenAI responses API |
-| `POST /anthropic/messages` | Session | Anthropic Messages API (auto-translated) |
+| Endpoint                   | Auth    | Description                                   |
+| -------------------------- | ------- | --------------------------------------------- |
+| `POST /chat/completions`   | Session | OpenAI chat completions (streaming supported) |
+| `POST /responses`          | Session | OpenAI responses API                          |
+| `POST /anthropic/messages` | Session | Anthropic Messages API (auto-translated)      |
 
 ### Reward Endpoints
 
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /rl/set_reward` | Session | Set scalar reward for an interaction |
-| `POST /rl/set_token_rewards` | Session | Set per-token rewards for an interaction |
-| `POST /rl/set_position_rewards` | Session | Set position-wise candidate rewards |
-| `POST /rl/compute_entropy` | Session | Compute entropy from position rewards |
+| Endpoint                        | Auth    | Description                              |
+| ------------------------------- | ------- | ---------------------------------------- |
+| `POST /rl/set_reward`           | Session | Set scalar reward for an interaction     |
+| `POST /rl/set_token_rewards`    | Session | Set per-token rewards for an interaction |
+| `POST /rl/set_position_rewards` | Session | Set position-wise candidate rewards      |
+| `POST /rl/compute_entropy`      | Session | Compute entropy from position rewards    |
 
 ### Engine Management
 
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `GET /health` | None | Health check |
-| `POST /alloc_ports` | None | Allocate free ports |
-| `POST /configure` | None | Set server configuration |
-| `POST /set_env` | None | Set environment variables |
-| `POST /create_engine` | None | Create inference engine instance |
-| `POST /call` | None | Call engine method (e.g., initialize) |
+| Endpoint              | Auth | Description                           |
+| --------------------- | ---- | ------------------------------------- |
+| `GET /health`         | None | Health check                          |
+| `POST /alloc_ports`   | None | Allocate free ports                   |
+| `POST /configure`     | None | Set server configuration              |
+| `POST /set_env`       | None | Set environment variables             |
+| `POST /create_engine` | None | Create inference engine instance      |
+| `POST /call`          | None | Call engine method (e.g., initialize) |
 
 ## Reward Types Supported
 
 The agent's `run()` method can return rewards in several formats:
 
-| Return Type | Example | Description |
-|-------------|---------|-------------|
-| `float` | `1.0` | Scalar reward for the last completion |
-| `dict[str, float]` | `{"id1": 1.0, "id2": 0.5}` | Completion ID to scalar reward |
-| `dict[str, list[float]]` | `{"id1": [0.0, 0.5, 1.0]}` | Completion ID to token-level rewards |
-| `dict[str, dict]` | `{"id1": {"position_rewards": [...], "scalar_reward": 1.0}}` | For distillation workflows |
+| Return Type              | Example                                                      | Description                           |
+| ------------------------ | ------------------------------------------------------------ | ------------------------------------- |
+| `float`                  | `1.0`                                                        | Scalar reward for the last completion |
+| `dict[str, float]`       | `{"id1": 1.0, "id2": 0.5}`                                   | Completion ID to scalar reward        |
+| `dict[str, list[float]]` | `{"id1": [0.0, 0.5, 1.0]}`                                   | Completion ID to token-level rewards  |
+| `dict[str, dict]`        | `{"id1": {"position_rewards": [...], "scalar_reward": 1.0}}` | For distillation workflows            |
 
 ## Comparison with Base AReaL
 
-| Feature | Base AReaL | This Customization |
-|---------|------------|-------------------|
-| Reward type | Scalar only | Token-level + Position-level |
-| Reward storage | Server-side | Server-side (HTTP API) |
-| Cache | None | None (HTTP-based) |
-| Modes | inline, subproc, online | inline only |
-| Entropy computation | Not supported | Via `/rl/compute_entropy` |
-| Distillation support | Not supported | Position rewards for KL loss |
+| Feature              | Base AReaL              | This Customization           |
+| -------------------- | ----------------------- | ---------------------------- |
+| Reward type          | Scalar only             | Token-level + Position-level |
+| Reward storage       | Server-side             | Server-side (HTTP API)       |
+| Cache                | None                    | None (HTTP-based)            |
+| Modes                | inline, subproc, online | inline only                  |
+| Entropy computation  | Not supported           | Via `/rl/compute_entropy`    |
+| Distillation support | Not supported           | Position rewards for KL loss |
 
 ## Configuration
 
@@ -424,9 +424,9 @@ python -m pytest test_token_rewards.py -v
 Token-level rewards are applied during `export_interactions()`:
 
 1. Server stores rewards via `set_token_rewards()` or `set_position_rewards()`
-2. When session ends, `export_interactions()` applies rewards to interactions
-3. Scalar reward is preserved separately from token/position rewards
-4. Position rewards are attached as Python attributes, not in `to_tensor_dict()`
+1. When session ends, `export_interactions()` applies rewards to interactions
+1. Scalar reward is preserved separately from token/position rewards
+1. Position rewards are attached as Python attributes, not in `to_tensor_dict()`
 
 ### Scalar vs. Position Reward Separation
 
@@ -440,6 +440,6 @@ independently. This ensures:
 ### Memory Management
 
 - Rewards are stored on the proxy server, not in the training process
-- Session data is cleaned up after `export_trajectories` or by the stale session
-  cleanup task (runs every 60 seconds, removes sessions idle > `SESSION_TIMEOUT_SECONDS`)
+- Session data is cleaned up after `export_trajectories` or by the stale session cleanup
+  task (runs every 60 seconds, removes sessions idle > `SESSION_TIMEOUT_SECONDS`)
 - Use `max_concurrent_rollouts` config to limit memory usage via capacity grants

@@ -136,10 +136,32 @@ def get_tpfc_rl_dataset(
                         image_path = image_path[7:]
                     files_path.append(image_path)
 
+        # Extract query_id from extra_info
+        extra_info = sample.get("extra_info", {})
+        query_id = extra_info.get("index") if isinstance(extra_info, dict) else None
+
+        # Extract query text from the last user message after "<User Query>: ",
+        # stripping any leading "<context>...<context>" prefix
+        query = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                marker = "<User Query>: "
+                idx = content.rfind(marker)
+                if idx != -1:
+                    query = content[idx + len(marker):]
+                    # Skip "<context>...<context>" prefix if present
+                    ctx_end = query.rfind("<context>")
+                    if ctx_end != -1:
+                        query = query[ctx_end + len("<context>"):]
+                break
+
         result = {
             "messages": messages,
             "answer": answer,
             "files_path": files_path,
+            "query_id": query_id,
+            "query": query,
         }
 
         return result

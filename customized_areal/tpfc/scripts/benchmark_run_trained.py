@@ -49,7 +49,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "trained_0425",
+        "trained_0427_new",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

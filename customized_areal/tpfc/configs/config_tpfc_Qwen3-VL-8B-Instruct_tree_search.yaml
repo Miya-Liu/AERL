@@ -70,12 +70,16 @@ actor:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   attn_impl: flash_attention_2
+  fsdp:
+    offload_params: true
   # path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
   path: /dfs/share-groups/letrain/ckpt/Qwen3-VL-8B-Instruct
   # path: /dfs/share-groups/letrain/ckpt/Qwen3.5-9B
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
+  enable_tree_training: true
+  pad_to_maximum: true
   dtype: bfloat16
   mb_spec:
     max_tokens_per_mb: 40960
@@ -95,7 +99,7 @@ actor:
   reward_bias: -0.5
   kl_ctl: 0.0
   ppo_n_minibatches: 4
-  recompute_logprob: true
+  recompute_logprob: false
   use_decoupled_loss: true
   behave_imp_weight_cap: 5.0
   reward_norm: null
@@ -122,6 +126,8 @@ ref:
   path: ${actor.path}
   init_from_scratch: false
   disable_dropout: true
+  enable_tree_training: true
+  pad_to_maximum: true
   dtype: ${actor.dtype}
   mb_spec:
     max_tokens_per_mb: 81920
@@ -155,7 +161,7 @@ vllm:
 # NOTE: All samples have ~1034-1366 tokens due to long system prompts
 train_dataset:
   batch_size: 2
-  shuffle: true
+  shuffle: false
   pin_memory: true
   num_workers: 2
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
@@ -168,7 +174,7 @@ valid_dataset:
   num_workers: 2
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
-  max_length: 2048
+  max_length: 20000
 
 # Utilities
 saver:

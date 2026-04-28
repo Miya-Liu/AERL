@@ -155,6 +155,10 @@ class MCTSTreeStore:
 
         Trajectories that already carry ``_mcts_seq_id`` or
         ``_mcts_seq_ids`` are skipped (they were loaded from cache).
+
+        If a trajectory already carries ``_mcts_query_id`` (injected by
+        QueryIDProxyWorkflow from the dataset), that string is used as the
+        query key instead of computing an MD5 hash from prompt tokens.
         """
         for traj in trajectories:
             # Skip already-inserted cached trajectories
@@ -167,7 +171,7 @@ class MCTSTreeStore:
 
             if batch_size == 1:
                 # Single trajectory — insert directly
-                query_id = _get_query_id(traj)
+                query_id = traj.get("_mcts_query_id") or _get_query_id(traj)
                 ids_flat = input_ids[0].tolist()
                 reward = rewards.item() if rewards.dim() > 0 else rewards.item()
 
@@ -182,14 +186,14 @@ class MCTSTreeStore:
             else:
                 # Grouped trajectory — insert each sample separately
                 seq_ids = []
-                query_id = None
+                query_id = traj.get("_mcts_query_id")
                 for i in range(batch_size):
                     single = {
                         "input_ids": input_ids[i : i + 1],
                         "loss_mask": traj["loss_mask"][i : i + 1],
                         "rewards": rewards[i : i + 1],
                     }
-                    qid = _get_query_id(single)
+                    qid = query_id or _get_query_id(single)
                     if query_id is None:
                         query_id = qid
                     ids_flat = input_ids[i].tolist()
