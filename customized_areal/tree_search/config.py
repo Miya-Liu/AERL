@@ -8,11 +8,17 @@ class TreeBackupMode(str, Enum):
     CROSS_TRAINING = "cross_training"
 
 
+class AdvantageMode(str, Enum):
+    GAE = "gae"
+    TREE = "tree"
+
+
 @dataclass
 class TreeBackupConfig:
     mode: TreeBackupMode = TreeBackupMode.OFF
     assistant_marker: str = ""
     checkpoint_dir: str = ""
+    advantage_mode: AdvantageMode = AdvantageMode.GAE
 
 
 @dataclass
@@ -20,4 +26,3 @@ class RolloutCacheConfig:
     cache_dir: str = ""
     enabled: bool = True
     n_samples: int = 1
-    replay: bool = False
