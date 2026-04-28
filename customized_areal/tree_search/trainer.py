@@ -43,6 +43,7 @@ def _mark_batch_trained(
     tree_store: MCTSTreeStore, trajectories: list[dict[str, Any]]
 ) -> None:
     """Mark all trajectories in a batch as trained after tree backup."""
+    count = 0
     for traj in trajectories:
         query_id = traj.get("_mcts_query_id")
         if query_id is None:
@@ -50,10 +51,14 @@ def _mark_batch_trained(
         seq_id = traj.get("_mcts_seq_id")
         if seq_id is not None:
             tree_store.set_trained(query_id, seq_id, True)
+            count += 1
         seq_ids = traj.get("_mcts_seq_ids")
         if seq_ids is not None:
             for sid in seq_ids:
                 tree_store.set_trained(query_id, sid, True)
+                count += 1
+    if count:
+        logger.debug(f"Marked {count} trajectories as trained")
 
 
 def _patch_wrap_openai_agent_for_query_id(actor: PPOActor) -> None:
@@ -111,11 +116,21 @@ def patch_ppo_actor_for_tree_backup(
 ) -> None:
     """Patch PPOActor.compute_advantages to add MCTS tree backup after GAE.
 
+    Modifies ``PPOActor.compute_advantages`` at the class level so all
+    instances (including those created internally by the base PPOTrainer)
+    use the tree backup version. A subclass override would only apply if
+    we also subclassed the actor.
+
+    The patch is idempotent — if ``PPOActor._original_compute_advantages``
+    already exists (from a prior patch), it reuses the true original instead
+    of stacking patches. Must be cleaned up via ``unpatch_ppo_actor()``.
+
     The patched method:
     1. Calls the original compute_advantages (full GAE pipeline)
     2. Inserts trajectories into the tree with raw rewards
     3. If advantage_mode is TREE, overwrites advantages/returns with tree Q-values
     4. Marks trajectories as trained
+    5. Records training step order
 
     When advantage_mode is GAE, trajectories are still inserted into the tree
     (for caching and MCTS statistics), but the original GAE advantages/returns
@@ -132,16 +147,26 @@ def patch_ppo_actor_for_tree_backup(
     ) -> list[dict[str, Any]]:
         # 1. Run original GAE pipeline (KL rewards, scaling, normalization, etc.)
         result = original_compute_advantages(self, data)
+        logger.debug(f"Step A: GAE completed for {len(result)} trajectories")
 
         # 2. Insert trajectories into tree with raw rewards
         tree_store.insert_batch(result)
+        logger.debug(f"Step B: Inserted {len(result)} trajectories into tree")
 
         # 3. Overwrite advantages/returns with tree Q-values if TREE mode
+        # In TREE mode, tree Q-values replace GAE advantages. In GAE mode,
+        # trajectories are still inserted (for caching and MCTS statistics)
+        # but the original GAE advantages are preserved.
         if advantage_mode == AdvantageMode.TREE:
             tree_advantage_computer.compute(result)
+            logger.debug(
+                f"Step C: Computed tree advantages for {len(result)} "
+                f"trajectories (mode=TREE)"
+            )
 
         # 4. Mark trajectories as trained so they won't be loaded from cache again
         _mark_batch_trained(tree_store, result)
+        logger.debug(f"Step D: Marked {len(result)} trajectories as trained")
 
         # 5. Record training step order for replay/debugging
         global_step = result[0].get("_global_step") if result else None
@@ -169,17 +194,24 @@ def _split_grouped_trajectories(
 ) -> list[dict[str, Any]]:
     """Split grouped trajectory dicts into individual items.
 
-    Grouped trajectories may have shape [group_size, seq_len].
-    We avoid concat_padded_tensors because non-tensor keys like
-    _mcts_seq_id would be lost. Keeping them as separate items
-    preserves per-trajectory metadata.
+    Grouped trajectories may have shape [group_size, seq_len]. We avoid
+    concat_padded_tensors because it keeps only the first dict's value for
+    non-tensor, non-list keys, which would lose per-trajectory ``_mcts_query_id``
+    and ``_mcts_seq_id``. Keeping them as separate items preserves
+    per-trajectory metadata.
     """
     result: list[dict[str, Any]] = []
     for traj in trajs:
         batch_size = traj["input_ids"].shape[0]
+        # batch_size == 1 means the trajectory is already individual;
+        # appending as-is avoids unnecessary tensor slicing.
         if batch_size == 1:
             result.append(traj)
             continue
+        logger.debug(
+            f"Split grouped trajectory (batch_size={batch_size}) "
+            f"into {batch_size} individual items"
+        )
         for i in range(batch_size):
             single: dict[str, Any] = {}
             for k, v in traj.items():
@@ -207,19 +239,21 @@ class _CacheAwareBatchBuilder:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Split prompts into cached and needs-generation groups.
 
-        Derives query_id from the dataset (``prompt["query_id"]``) when
-        available, falling back to an MD5 hash from the prompt messages via
-        the tokenizer. Then checks the tree store for cached rollouts.
+        Query ID derivation fallback chain:
+        1. ``prompt["query_id"]`` — dataset-provided string (preferred)
+        2. ``prompt["_mcts_query_id"]`` — from prior injection
+        3. MD5 hash of tokenized messages via ``get_query_id_from_messages``
+        4. Empty string (no tree lookup possible)
 
         Returns:
-            cached: list of dicts with keys: prompt, query_id, cached_count, need_gen_count
+            cached: list of dicts with keys: prompt, query_id, cached_count,
+                need_gen_count
             need_gen: list of dicts with keys: prompt, query_id
         """
         cached = []
         need_gen = []
 
         for prompt in prompts:
-            # Prefer dataset query_id string; fall back to MD5 hash from tokenizer
             query_id = prompt.get("query_id") or prompt.get("_mcts_query_id")
             if not query_id:
                 messages = prompt.get("messages", [])
@@ -230,6 +264,11 @@ class _CacheAwareBatchBuilder:
 
             untrained_count = (
                 self.tree_store.get_untrained_count(query_id) if query_id else 0
+            )
+
+            logger.debug(
+                f"Prompt query_id={query_id}: {untrained_count} untrained "
+                f"(need {self.n_samples})"
             )
 
             if untrained_count >= self.n_samples:
@@ -482,6 +521,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         finally:
             # Always restore original prepare_batch
             self.actor.prepare_batch = original_prepare_batch
+            logger.info("Restored original prepare_batch")
             # Clean up the dataloader iterator
             if hasattr(self, "_cache_dataloader_iter"):
                 del self._cache_dataloader_iter
