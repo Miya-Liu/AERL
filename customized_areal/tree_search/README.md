@@ -16,7 +16,7 @@ rollout caching across training steps. It is a customization layer on top of ARe
 │   │    ├─ split_prompts()          → cached / need-generation  │
 │   │    ├─ load_cached_trajectories()                           │
 │   │    ├─ rollout_batch()           → generate missing only    │
-│   │    └─ _merge_cached_and_new()                              │
+│   │    └─ _split_grouped_trajectories()                        │
 │   │                                                            │
 │   └─ [patched] PPOActor.compute_advantages()                   │
 │        ├─ original GAE pipeline (KL, scaling, normalization)   │
@@ -44,7 +44,6 @@ Dataclasses controlling tree backup and caching behavior.
 | `RolloutCacheConfig` | `cache_dir`        | `str`            | `""`    | Directory for rollout cache                               |
 |                      | `enabled`          | `bool`           | `True`  | Enable/disable caching                                    |
 |                      | `n_samples`        | `int`            | `1`     | Number of rollout samples per prompt                      |
-|                      | `replay`           | `bool`           | `False` | Replay recorded training order instead of generating      |
 
 **`TreeBackupMode`** values:
 
@@ -135,7 +134,7 @@ through that node.
 | `get_untrained_count(query_id)`                   | Count untrained trajectories for a query                                       |
 | `load_trajectories(query_id, n_samples)`          | Load up to N untrained trajectories as training dicts                          |
 | `load_trajectory_by_seq_id(query_id, seq_id)`     | Load a single trajectory by exact seq_id (ignores trained flag)                |
-| `record_training_step(global_step, trajectories)` | Record training order for replay; appends step to leaf node's `training_steps` |
+| `record_training_step(global_step, trajectories)` | Record training order; appends step to leaf node's `training_steps`            |
 | `build_training_history()`                        | Reconstruct `_training_history` from leaf nodes (fallback for old checkpoints) |
 
 **Query ID derivation:**
@@ -186,7 +185,6 @@ When `cache_config.enabled` and `tree_backup_config.mode != OFF`:
 1. On `CROSS_TRAINING` mode, loads an existing tree checkpoint if one exists
 1. Resets all trained flags for a fresh training run
 1. Patches `PPOActor.compute_advantages` via `patch_ppo_actor_for_tree_backup()`
-1. If `cache_config.replay=True`, enables replay mode (see below)
 
 **Training flow — cache-aware mode (per step):**
 
@@ -195,35 +193,17 @@ When `cache_config.enabled` and `tree_backup_config.mode != OFF`:
 1. **Load cached** trajectories from tree store (untrained rollouts for same query)
 1. **Generate missing** trajectories via `rollout_batch()` (only for prompts without
    enough cached rollouts)
-1. **Merge** cached + new trajectories via `_merge_cached_and_new()` (preserves
+1. **Split** grouped trajectories via `_split_grouped_trajectories()` (preserves
    per-sample `_mcts_seq_id` / `_mcts_query_id` metadata)
 1. **Tree backup** runs via patched `compute_advantages()` (insert into trie, compute
    Q-value advantages, mark trained)
 1. **Save checkpoint** (on `CROSS_TRAINING` mode)
 
-**Training flow — replay mode** (`RolloutCacheConfig.replay=True`):
-
-Instead of generating new rollouts, `_replay_prepare_batch()` replays trajectories with
-a 3-level fallback:
-
-| Level | Source                   | Method                              | Description                                                               |
-| ----- | ------------------------ | ----------------------------------- | ------------------------------------------------------------------------- |
-| 1     | Training history         | `_training_history[global_step]`    | Exact replay of recorded step order (query_id, seq_id pairs)              |
-| 2     | Cached untrained in tree | `_load_untrained_from_tree_store()` | Fallback: load any untrained trajectories still in the tree               |
-| 3     | Fresh generation         | `_generate_from_dataloader()`       | Fallback: generate new rollouts, prioritizing novel queries (not in tree) |
-
-`_generate_from_dataloader()` separates prompts into novel (query_id not in tree store)
-vs existing, and generates for novel queries first to expand tree coverage before
-re-generating for existing ones.
-
-Useful for debugging, reproducibility, and re-running with different advantage
-computations on the same rollout data.
-
 **Other methods:**
 
 | Method                         | Description                                                                                    |
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `train()`                      | Monkey-patches `self.actor.prepare_batch` with cache-aware or replay version; restores on exit |
+| `train()`                      | Monkey-patches `self.actor.prepare_batch` with cache-aware version; restores on exit           |
 | `_save_recover_checkpoint()`   | Saves MCTS tree checkpoint on `CROSS_TRAINING` mode (via `TreeCheckpointManager`)              |
 | `_mark_trajectories_trained()` | Marks rollout trajectories as trained (single or grouped via `_mcts_seq_id` / `_mcts_seq_ids`) |
 | `close()`                      | Calls `unpatch_ppo_actor()` to restore original `PPOActor`, then `super().close()`             |
@@ -236,7 +216,7 @@ computations on the same rollout data.
 1. Inserts trajectories into tree with raw rewards
 1. Overwrites advantages/returns with tree Q-values
 1. Marks trajectories as trained
-1. Records training step order (skipped during replay)
+1. Records training step order
 
 The patch is idempotent — if `PPOActor._original_compute_advantages` already exists
 (from a prior patch), it reuses the true original instead of stacking patches.
@@ -246,7 +226,7 @@ The patch is idempotent — if `PPOActor._original_compute_advantages` already e
 
 ## Data Flow
 
-### Mode 1: Cache-Aware Training (`replay=False`)
+### Cache-Aware Training
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -292,11 +272,10 @@ The patch is idempotent — if `PPOActor._original_compute_advantages` already e
 │         └──────────┬──────────────────┘                                      │
 │                    ▼                                                         │
 │  ┌──────────────────────────────────────┐                                   │
-│  │  _merge_cached_and_new()             │                                   │
+│  │  _split_grouped_trajectories()       │                                   │
 │  │                                      │                                   │
-│  │  • Cached: kept as-is (shape [1,seq])│                                   │
-│  │  • New (batch=1): kept as-is         │                                   │
-│  │  • New (batch>1): split into         │                                   │
+│  │  • batch=1: kept as-is               │                                   │
+│  │  • batch>1: split into individual    │                                   │
 │  │    individual dicts, extracting      │                                   │
 │  │    _mcts_seq_id from _mcts_seq_ids   │                                   │
 │  │                                      │                                   │
@@ -382,7 +361,6 @@ The patch is idempotent — if `PPOActor._original_compute_advantages` already e
 │  │  _training_history[global_step] =        │                              │
 │  │    [(query_id, seq_id), ...]             │                              │
 │  │                                          │                              │
-│  │  Skipped if tree_store._replay_mode      │                              │
 │  └──────────────────────┬───────────────────┘                              │
 │                         │                                                   │
 └─────────────────────────┼───────────────────────────────────────────────────┘
@@ -407,63 +385,6 @@ After PPO update (on CROSS_TRAINING mode):
 └──────────────────────────────────────────────┘
 ```
 
-### Mode 2: Replay Training (`replay=True`)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                CacheAwarePPOTrainer.train() (replay mode)                   │
-│                                                                             │
-│  monkey-patches self.actor.prepare_batch → _replay_prepare_batch()         │
-│  Sets tree_store._replay_mode = True                                       │
-│  (Step E: record_training_step is skipped to avoid duplicates)             │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-                                  │  per training step
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  _replay_prepare_batch() — 3-level fallback                                 │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Level 1: Replay from training history                              │   │
-│  │                                                                     │   │
-│  │  if global_step in _training_history:                               │   │
-│  │    for (query_id, seq_id) in _training_history[global_step]:        │   │
-│  │      load_trajectory_by_seq_id(query_id, seq_id)                    │   │
-│  │    → returns exact same trajectories as original training           │   │
-│  │    → global_step++ and return                                       │   │
-│  └──────────────────────────────┬──────────────────────────────────────┘   │
-│                                 │ not found or all missing                  │
-│                                 ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Level 2: Load untrained from tree store                            │   │
-│  │                                                                     │   │
-│  │  _load_untrained_from_tree_store()                                  │   │
-│  │    for each query_id in tree_store.trees:                           │   │
-│  │      get_untrained_count(query_id)                                  │   │
-│  │      load_trajectories(query_id, min(count, n_samples))             │   │
-│  │    → returns any trajectories not yet trained                       │   │
-│  │    → global_step++ and return                                       │   │
-│  └──────────────────────────────┬──────────────────────────────────────┘   │
-│                                 │ none available                            │
-│                                 ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Level 3: Fresh generation from dataloader                          │   │
-│  │                                                                     │   │
-│  │  _generate_from_dataloader()                                        │   │
-│  │    • Pull batch from dataloader                                     │   │
-│  │    • Derive query_id for each prompt                                │   │
-│  │    • Separate: novel (query_id ∉ tree_store.trees)                 │   │
-│  │                 vs existing (already in tree)                        │   │
-│  │    • Generate for novel queries first → expand tree coverage        │   │
-│  │    • Fall back to full batch if no novel queries                    │   │
-│  │    → global_step++ and return                                       │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  All 3 levels feed into the same patched compute_advantages pipeline       │
-│  (Steps A–E above), but Step E is a no-op in replay mode.                  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
 ### Metadata Propagation
 
 Key metadata fields attached to trajectory dicts throughout the pipeline:
@@ -475,8 +396,8 @@ Key metadata fields attached to trajectory dicts throughout the pipeline:
 | `_mcts_seq_ids`  | `insert_batch()` (grouped)           | `list[int]` | Per-sample advantage in grouped dict            |
 | `_global_step`   | PPOTrainer (base)                    | `int`       | Training history recording                      |
 
-`_merge_cached_and_new()` converts `_mcts_seq_ids` → individual `_mcts_seq_id` when
-splitting grouped dicts (batch > 1), ensuring downstream code always has per-sample
+`_split_grouped_trajectories()` converts `_mcts_seq_ids` → individual `_mcts_seq_id`
+when splitting grouped dicts (batch > 1), ensuring downstream code always has per-sample
 access.
 
 ## Usage Example
