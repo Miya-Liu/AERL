@@ -2,72 +2,66 @@ import torch
 
 from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
-from customized_areal.tree_search.turn_splitter import Turn
 
 
-def _simple_splitter(input_ids: list[int]) -> list[Turn]:
-    """Split at token 10 -- everything before is prompt, everything from 10 onward is response."""
-    try:
-        split_pos = input_ids.index(10)
-        return [
-            Turn(
-                prompt_tokens=input_ids[:split_pos],
-                response_tokens=input_ids[split_pos:],
-            )
-        ]
-    except ValueError:
-        return [Turn(prompt_tokens=[], response_tokens=list(input_ids))]
+def _make_traj(
+    input_ids: list[int],
+    loss_mask: list[int],
+    *,
+    reward: float = 1.0,
+    query_id: str = "q1",
+) -> dict:
+    seq_len = len(input_ids)
+    return {
+        "input_ids": torch.tensor([input_ids], dtype=torch.int32),
+        "loss_mask": torch.tensor([loss_mask], dtype=torch.int32),
+        "rewards": torch.tensor([reward], dtype=torch.float32),
+        "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
+        "_mcts_query_id": query_id,
+    }
 
 
 class TestTreeAdvantageComputer:
     def test_compute_single_trajectory(self):
-        store = MCTSTreeStore(_simple_splitter)
+        store = MCTSTreeStore()
         computer = TreeAdvantageComputer(store)
-        # _simple_splitter splits at token 10: prompt=[1,2], response=[10,3,4]
-        # Trie node stores [1,2,10,3,4] = 5 tokens total
-        traj = {
-            "input_ids": torch.tensor([1, 2, 10, 3, 4]),
-            "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
-            "rewards": torch.tensor([2.0]),
-        }
+        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0)
         store.insert_batch([traj])
         computer.compute([traj])
         assert "advantages" in traj
         assert "returns" in traj
-        # Advantages should be zeroed for prompt tokens (first 2)
-        assert torch.allclose(traj["advantages"][:2], torch.zeros(2))
-        # Response tokens should have q_value = 2.0
-        assert torch.allclose(traj["advantages"][2:], torch.full((3,), 2.0))
+        assert torch.allclose(traj["advantages"][0, :2], torch.zeros(2))
+        assert torch.allclose(traj["advantages"][0, 2:], torch.full((3,), 2.0))
 
     def test_compute_returns_equal_advantages(self):
-        store = MCTSTreeStore(_simple_splitter)
+        store = MCTSTreeStore()
         computer = TreeAdvantageComputer(store)
-        # _simple_splitter: prompt=[1], response=[10,3]
-        traj = {
-            "input_ids": torch.tensor([1, 10, 3]),
-            "loss_mask": torch.tensor([0, 0, 1]),
-            "rewards": torch.tensor([1.0]),
-        }
+        traj = _make_traj([1, 10, 3], [0, 0, 1], reward=1.0)
         store.insert_batch([traj])
         computer.compute([traj])
         assert torch.allclose(traj["returns"], traj["advantages"])
 
-    def test_compute_two_trajectories(self):
-        store = MCTSTreeStore(_simple_splitter)
+    def test_compute_multi_turn_trajectory(self):
+        store = MCTSTreeStore()
         computer = TreeAdvantageComputer(store)
-        # traj1: prompt=[1,2], response=[10,3,4]
-        traj1 = {
-            "input_ids": torch.tensor([1, 2, 10, 3, 4]),
-            "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
-            "rewards": torch.tensor([2.0]),
-        }
-        # traj2: prompt=[5,6], response=[10,7,8]
-        traj2 = {
-            "input_ids": torch.tensor([5, 6, 10, 7, 8]),
-            "loss_mask": torch.tensor([0, 0, 0, 1, 1]),
-            "rewards": torch.tensor([0.5]),
-        }
-        store.insert_batch([traj1, traj2])
-        computer.compute([traj1, traj2])
-        assert "advantages" in traj1
-        assert "advantages" in traj2
+        traj = _make_traj(
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [0, 0, 1, 1, 0, 0, 1, 1],
+            reward=0.75,
+        )
+        store.insert_batch([traj])
+        computer.compute([traj])
+        assert torch.allclose(traj["advantages"][0, :2], torch.zeros(2))
+        assert torch.allclose(traj["advantages"][0, 2:4], torch.full((2,), 0.75))
+        assert torch.allclose(traj["advantages"][0, 4:6], torch.zeros(2))
+        assert torch.allclose(traj["advantages"][0, 6:8], torch.full((2,), 0.75))
+
+    def test_compute_two_trajectories(self):
+        store = MCTSTreeStore()
+        computer = TreeAdvantageComputer(store)
+        t1 = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
+        t2 = _make_traj([5, 6, 7, 8], [0, 0, 1, 1], reward=0.5, query_id="q2")
+        store.insert_batch([t1, t2])
+        computer.compute([t1, t2])
+        assert "advantages" in t1
+        assert "advantages" in t2

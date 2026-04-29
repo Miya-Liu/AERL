@@ -16,7 +16,6 @@ class AdvantageMode(str, Enum):
 @dataclass
 class TreeBackupConfig:
     mode: TreeBackupMode = TreeBackupMode.OFF
-    assistant_marker: str = ""
     checkpoint_dir: str = ""
     advantage_mode: AdvantageMode = AdvantageMode.GAE
 

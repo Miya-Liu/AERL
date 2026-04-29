@@ -2,13 +2,18 @@
 """MCTS Tree Backup PPOTrainer.
 
 Subclass of PPOTrainer that adds MCTS tree backup to PPO training.
-Patches the outer PPOActor.compute_advantages method so that:
-1. The original GAE runs first (KL rewards, scaling, normalization)
-2. Trajectories are inserted into the tree with raw rewards
-3. Depending on advantage_mode config:
-   - TREE: tree Q-values overwrite advantages/returns
-   - GAE: original GAE advantages/returns are preserved
-4. KL metadata (kl_rewards, tot_rewards) is preserved for logging
+
+Tree insert and advantage computation happen in _cache_aware_prepare_batch
+(where _mcts_query_id / _mcts_seq_id are still available), before the
+concat_padded_tensors pipeline drops non-tensor metadata.
+
+Flow:
+1. _cache_aware_prepare_batch: insert trajectories into tree, compute tree
+   advantages (TREE mode), stash as _tree_advantages/_tree_returns, mark
+   trained, save checkpoint
+2. compute_advantages: GAE runs and overwrites advantages/returns; the patch
+   restores tree values from _tree_advantages/_tree_returns
+3. ppo_update: uses restored tree advantages
 """
 
 from __future__ import annotations
@@ -25,12 +30,8 @@ from customized_areal.tree_search.config import (
     TreeBackupConfig,
     TreeBackupMode,
 )
-from customized_areal.tree_search.mcts_tree_store import (
-    MCTSTreeStore,
-    get_query_id_from_messages,
-)
+from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
-from customized_areal.tree_search.turn_splitter import make_turn_splitter
 
 from areal import PPOTrainer
 from areal.trainer.ppo.actor import PPOActor
@@ -61,7 +62,7 @@ def _mark_batch_trained(
         logger.debug(f"Marked {count} trajectories as trained")
 
 
-def _patch_wrap_openai_agent_for_query_id(actor: PPOActor) -> None:
+def _patch_wrap_openai_agent_for_query_id(rollout_engine: Any) -> None:
     """Patch the engine's _wrap_openai_agent to return QueryIDProxyWorkflow.
 
     QueryIDProxyWorkflow subclasses OpenAIProxyWorkflow and overrides
@@ -69,8 +70,12 @@ def _patch_wrap_openai_agent_for_query_id(actor: PPOActor) -> None:
     ``_mcts_query_id``. This is needed because the async rollout pipeline
     shuffles results, so we cannot match queries to trajectories by position,
     and concat_padded_tensors drops non-tensor keys.
+
+    Args:
+        rollout_engine: The rollout inference engine (e.g. RemoteInfEngine)
+            that has the ``_wrap_openai_agent`` method.
     """
-    engine = actor.engine
+    engine = rollout_engine
     if not hasattr(engine, "_wrap_openai_agent"):
         logger.warning(
             "Engine has no _wrap_openai_agent method; "
@@ -100,9 +105,9 @@ def _patch_wrap_openai_agent_for_query_id(actor: PPOActor) -> None:
     logger.info("Patched _wrap_openai_agent to use QueryIDProxyWorkflow")
 
 
-def _unpatch_wrap_openai_agent(actor: PPOActor) -> None:
+def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
     """Restore the original _wrap_openai_agent method."""
-    engine = actor.engine
+    engine = rollout_engine
     if hasattr(engine, "_original_wrap_openai_agent"):
         engine._wrap_openai_agent = engine._original_wrap_openai_agent
         del engine._original_wrap_openai_agent
@@ -110,31 +115,25 @@ def _unpatch_wrap_openai_agent(actor: PPOActor) -> None:
 
 
 def patch_ppo_actor_for_tree_backup(
-    tree_store: MCTSTreeStore,
-    tree_advantage_computer: TreeAdvantageComputer,
     advantage_mode: AdvantageMode = AdvantageMode.TREE,
 ) -> None:
-    """Patch PPOActor.compute_advantages to add MCTS tree backup after GAE.
+    """Patch PPOActor.compute_advantages to restore tree advantages after GAE.
 
-    Modifies ``PPOActor.compute_advantages`` at the class level so all
-    instances (including those created internally by the base PPOTrainer)
-    use the tree backup version. A subclass override would only apply if
-    we also subclassed the actor.
-
-    The patch is idempotent — if ``PPOActor._original_compute_advantages``
-    already exists (from a prior patch), it reuses the true original instead
-    of stacking patches. Must be cleaned up via ``unpatch_ppo_actor()``.
+    Tree insert and advantage computation already happened in
+    _cache_aware_prepare_batch (where _mcts_query_id / _mcts_seq_id are
+    available). Tree advantages are stashed as ``_tree_advantages`` /
+    ``_tree_returns`` on each trajectory dict so they survive
+    concat_padded_tensors → _compute_advantages → split_batch.
 
     The patched method:
-    1. Calls the original compute_advantages (full GAE pipeline)
-    2. Inserts trajectories into the tree with raw rewards
-    3. If advantage_mode is TREE, overwrites advantages/returns with tree Q-values
-    4. Marks trajectories as trained
-    5. Records training step order
+    1. Calls the original compute_advantages (full GAE pipeline), which
+       overwrites advantages/returns
+    2. If advantage_mode is TREE, restores advantages/returns from
+       _tree_advantages/_tree_returns (computed earlier in prepare_batch)
+    3. Removes the temporary _tree_advantages/_tree_returns keys
 
-    When advantage_mode is GAE, trajectories are still inserted into the tree
-    (for caching and MCTS statistics), but the original GAE advantages/returns
-    are preserved unchanged.
+    When advantage_mode is GAE, the original GAE advantages/returns are
+    preserved unchanged (no _tree_advantages keys are present).
     """
     # Preserve the true original if patching twice (don't stack patches)
     if hasattr(PPOActor, "_original_compute_advantages"):
@@ -147,34 +146,24 @@ def patch_ppo_actor_for_tree_backup(
     ) -> list[dict[str, Any]]:
         # 1. Run original GAE pipeline (KL rewards, scaling, normalization, etc.)
         result = original_compute_advantages(self, data)
-        logger.debug(f"Step A: GAE completed for {len(result)} trajectories")
+        logger.debug(f"GAE completed for {len(result)} trajectories")
 
-        # 2. Insert trajectories into tree with raw rewards
-        tree_store.insert_batch(result)
-        logger.debug(f"Step B: Inserted {len(result)} trajectories into tree")
-
-        # 3. Overwrite advantages/returns with tree Q-values if TREE mode
-        # In TREE mode, tree Q-values replace GAE advantages. In GAE mode,
-        # trajectories are still inserted (for caching and MCTS statistics)
-        # but the original GAE advantages are preserved.
+        # 2. Restore tree advantages if present (TREE mode)
         if advantage_mode == AdvantageMode.TREE:
-            tree_advantage_computer.compute(result)
-            logger.debug(
-                f"Step C: Computed tree advantages for {len(result)} "
-                f"trajectories (mode=TREE)"
-            )
+            restored = 0
+            for traj in result:
+                tree_adv = traj.pop("_tree_advantages", None)
+                tree_ret = traj.pop("_tree_returns", None)
+                if tree_adv is not None:
+                    traj["advantages"] = tree_adv
+                    traj["returns"] = tree_ret
+                    restored += 1
+            if restored:
+                logger.debug(
+                    f"Restored tree advantages for {restored} trajectories "
+                    f"(mode=TREE)"
+                )
 
-        # 4. Mark trajectories as trained so they won't be loaded from cache again
-        _mark_batch_trained(tree_store, result)
-        logger.debug(f"Step D: Marked {len(result)} trajectories as trained")
-
-        # 5. Record training step order for replay/debugging
-        global_step = result[0].get("_global_step") if result else None
-        tree_store.record_training_step(global_step, result)
-
-        # advantages/returns already overwritten by compute() in TREE mode,
-        # or preserved from GAE in GAE mode.
-        # kl_rewards, tot_rewards, loss_mask, logprobs preserved from GAE
         return result
 
     PPOActor.compute_advantages = _tree_backup_compute_advantages
@@ -187,43 +176,6 @@ def unpatch_ppo_actor() -> None:
     if hasattr(PPOActor, "_original_compute_advantages"):
         PPOActor.compute_advantages = PPOActor._original_compute_advantages
         del PPOActor._original_compute_advantages
-
-
-def _split_grouped_trajectories(
-    trajs: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Split grouped trajectory dicts into individual items.
-
-    Grouped trajectories may have shape [group_size, seq_len]. We avoid
-    concat_padded_tensors because it keeps only the first dict's value for
-    non-tensor, non-list keys, which would lose per-trajectory ``_mcts_query_id``
-    and ``_mcts_seq_id``. Keeping them as separate items preserves
-    per-trajectory metadata.
-    """
-    result: list[dict[str, Any]] = []
-    for traj in trajs:
-        batch_size = traj["input_ids"].shape[0]
-        # batch_size == 1 means the trajectory is already individual;
-        # appending as-is avoids unnecessary tensor slicing.
-        if batch_size == 1:
-            result.append(traj)
-            continue
-        logger.debug(
-            f"Split grouped trajectory (batch_size={batch_size}) "
-            f"into {batch_size} individual items"
-        )
-        for i in range(batch_size):
-            single: dict[str, Any] = {}
-            for k, v in traj.items():
-                if isinstance(v, torch.Tensor) and v.dim() >= 1:
-                    single[k] = v[i : i + 1]
-                elif isinstance(v, list) and k == "_mcts_seq_ids":
-                    single["_mcts_seq_id"] = v[i]
-                    single["_mcts_query_id"] = traj.get("_mcts_query_id")
-                else:
-                    single[k] = v
-            result.append(single)
-    return result
 
 
 class _CacheAwareBatchBuilder:
@@ -242,8 +194,7 @@ class _CacheAwareBatchBuilder:
         Query ID derivation fallback chain:
         1. ``prompt["query_id"]`` — dataset-provided string (preferred)
         2. ``prompt["_mcts_query_id"]`` — from prior injection
-        3. MD5 hash of tokenized messages via ``get_query_id_from_messages``
-        4. Empty string (no tree lookup possible)
+        3. Empty string (no tree lookup possible)
 
         Returns:
             cached: list of dicts with keys: prompt, query_id, cached_count,
@@ -254,13 +205,7 @@ class _CacheAwareBatchBuilder:
         need_gen = []
 
         for prompt in prompts:
-            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id")
-            if not query_id:
-                messages = prompt.get("messages", [])
-                if messages:
-                    query_id = get_query_id_from_messages(messages, self.tokenizer)
-                else:
-                    query_id = ""
+            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id") or ""
 
             untrained_count = (
                 self.tree_store.get_untrained_count(query_id) if query_id else 0
@@ -271,13 +216,15 @@ class _CacheAwareBatchBuilder:
                 f"(need {self.n_samples})"
             )
 
-            if untrained_count >= self.n_samples:
+            if untrained_count > 0:
+                cached_count = min(untrained_count, self.n_samples)
+                need_gen_count = max(0, self.n_samples - untrained_count)
                 cached.append(
                     {
                         "prompt": prompt,
                         "query_id": query_id,
-                        "cached_count": self.n_samples,
-                        "need_gen_count": 0,
+                        "cached_count": cached_count,
+                        "need_gen_count": need_gen_count,
                     }
                 )
             else:
@@ -306,12 +253,17 @@ class CacheAwarePPOTrainer(PPOTrainer):
     """PPOTrainer with rollout caching and tree backup.
 
     On each training step:
-    1. Check cache for available trajectories per prompt
-    2. Load cached trajectories, generate only missing ones
-    3. Merge cached + new trajectories
-    4. Run tree backup advantages on merged batch
-    5. Mark used trajectories as trained
-    6. Save tree checkpoint (CROSS_TRAINING mode)
+    1. _cache_aware_prepare_batch:
+       a. Check cache / generate trajectories
+       b. Insert into MCTS tree (while _mcts_query_id is available)
+       c. Compute tree advantages (TREE mode) and stash as
+          _tree_advantages / _tree_returns
+       d. Mark trajectories as trained
+       e. Save tree checkpoint (CROSS_TRAINING mode)
+    2. compute_advantages:
+       a. GAE runs (overwrites advantages/returns)
+       b. Patch restores tree advantages from _tree_advantages/_tree_returns
+    3. ppo_update uses restored tree advantages
 
     Monkey-patches ``PPOActor.compute_advantages`` at the class level (not
     instance level) so that all PPOActor instances — including those created
@@ -347,10 +299,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
     def _init_tree_components(self) -> None:
         """Create tree store, advantage computer, and checkpoint manager."""
-        turn_splitter = make_turn_splitter(
-            self.tokenizer, self.tree_backup_config.assistant_marker
-        )
-        self.tree_store = MCTSTreeStore(turn_splitter)
+        self.tree_store = MCTSTreeStore()
         self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
         self.tree_checkpoint_manager = TreeCheckpointManager(
             self.cache_config.cache_dir or self.tree_backup_config.checkpoint_dir
@@ -359,7 +308,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Load existing tree checkpoint if available (CROSS_TRAINING mode)
         if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
             if self.tree_checkpoint_manager.exists():
-                self.tree_store = self.tree_checkpoint_manager.load(turn_splitter)
+                self.tree_store = self.tree_checkpoint_manager.load()
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
 
         # Reset trained flags for a fresh training run
@@ -372,8 +321,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
     def _init_patches(self) -> None:
         """Apply monkey-patches for tree backup and query_id injection."""
         patch_ppo_actor_for_tree_backup(
-            self.tree_store,
-            self.tree_advantage_computer,
             advantage_mode=self.tree_backup_config.advantage_mode,
         )
         logger.info(
@@ -385,7 +332,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # dataset query_id strings are injected into trajectories as
         # _mcts_query_id. Without this, the async rollout pipeline would
         # lose the query_id because concat_padded_tensors drops non-tensor keys.
-        _patch_wrap_openai_agent_for_query_id(self.actor)
+        _patch_wrap_openai_agent_for_query_id(self.rollout)
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -416,8 +363,17 @@ class CacheAwarePPOTrainer(PPOTrainer):
         prompts via rollout_batch (all-or-nothing). This avoids mixing cached
         and freshly-generated trajectories in a single batch.
 
+        After assembling trajectories, this method also:
+        1. Inserts them into the MCTS tree (where _mcts_query_id / _mcts_seq_id
+           are still available, before concat_padded_tensors drops them)
+        2. If advantage_mode is TREE, computes tree Q-values and stashes them
+           as _tree_advantages / _tree_returns so they survive the GAE pipeline
+        3. Marks trajectories as trained
+        4. Saves tree checkpoint (CROSS_TRAINING mode)
+
         Returns:
-            Flat list of per-sample trajectory dicts, each with shape [1, seq_len],
+            List of trajectory dicts from rollout_batch (may be grouped with
+            shape [group_size, seq_len]) or cache (shape [1, seq_len]),
             carrying ``_mcts_query_id`` and ``_mcts_seq_id`` metadata.
         """
         from areal.utils.data import cycle_dataloader
@@ -434,31 +390,60 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         # All prompts have enough cache -> use cache only
         if not need_gen_items:
-            cached_trajs = self._batch_builder.load_cached_trajectories(cached_items)
-            n_cached = len(cached_trajs)
-            logger.info(f"Cache-aware rollout: {n_cached} cached (all from cache)")
-            return list(cached_trajs)
+            trajs = list(self._batch_builder.load_cached_trajectories(cached_items))
+            logger.info(f"Cache-aware rollout: {len(trajs)} cached (all from cache)")
+        else:
+            # Any prompt lacks cache -> regenerate all prompts via rollout_batch
+            n_samples = self.cache_config.n_samples
+            all_prompts = [item["prompt"] for item in cached_items] + [
+                item["prompt"] for item in need_gen_items
+            ]
 
-        # Any prompt lacks cache -> regenerate all prompts via rollout_batch
-        n_samples = self.cache_config.n_samples
-        all_prompts = [item["prompt"] for item in cached_items] + [
-            item["prompt"] for item in need_gen_items
-        ]
+            logger.info(
+                f"Generating trajectories for {len(all_prompts)} query "
+                f"(group_size={n_samples})"
+            )
+            new_trajs = self.actor.rollout_batch(
+                all_prompts,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                group_size=n_samples,
+            )
 
-        logger.info(
-            f"Generating trajectories for {len(all_prompts)} query "
-            f"(group_size={n_samples})"
-        )
-        new_trajs = self.actor.rollout_batch(
-            all_prompts,
-            workflow=workflow,
-            workflow_kwargs=workflow_kwargs,
-            group_size=n_samples,
-        )
+            n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
+            logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
+            trajs = new_trajs
 
-        n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
-        logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
-        return _split_grouped_trajectories(new_trajs)
+        # --- Tree operations (while _mcts_query_id / _mcts_seq_id are available) ---
+
+        # Insert trajectories into the MCTS tree
+        self.tree_store.insert_batch(trajs)
+        logger.debug(f"Inserted {len(trajs)} trajectories into tree")
+
+        # Compute tree advantages and stash for post-GAE restoration
+        if self.tree_backup_config.advantage_mode == AdvantageMode.TREE:
+            self.tree_advantage_computer.compute(trajs)
+            for traj in trajs:
+                if "advantages" in traj:
+                    traj["_tree_advantages"] = traj["advantages"].clone()
+                    traj["_tree_returns"] = traj["returns"].clone()
+            logger.debug(
+                f"Computed tree advantages for {len(trajs)} trajectories "
+                f"(mode=TREE)"
+            )
+
+        # Mark trajectories as trained so they won't be loaded from cache again
+        _mark_batch_trained(self.tree_store, trajs)
+        logger.debug(f"Marked {len(trajs)} trajectories as trained")
+
+        # Save tree checkpoint (CROSS_TRAINING mode)
+        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+            self.tree_checkpoint_manager.save(self.tree_store)
+            logger.debug("Saved MCTS tree checkpoint after tree operations")
+
+        # --- End tree operations ---
+
+        return trajs
 
     def train(
         self,
@@ -531,5 +516,5 @@ class CacheAwarePPOTrainer(PPOTrainer):
             and self.tree_backup_config.mode != TreeBackupMode.OFF
         ):
             unpatch_ppo_actor()
-            _unpatch_wrap_openai_agent(self.actor)
+            _unpatch_wrap_openai_agent(self.rollout)
         super().close()
