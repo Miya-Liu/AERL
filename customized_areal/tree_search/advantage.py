@@ -78,7 +78,9 @@ class TreeAdvantageComputer:
             q_values = [self.tree_store._rewards.get(sid, 0.0) for sid in seq_ids]
             if len(q_values) < 2:
                 # Single episode: no normalization needed
-                self.tree_store._normalized_advantages[seq_ids[0]] = q_values[0] if q_values else 0.0
+                self.tree_store._normalized_advantages[seq_ids[0]] = (
+                    q_values[0] if q_values else 0.0
+                )
                 continue
             mean_q = sum(q_values) / len(q_values)
             var_q = sum((q - mean_q) ** 2 for q in q_values) / len(q_values)

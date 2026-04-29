@@ -28,8 +28,12 @@ from customized_areal.tree_search.config import (
     TreeBackupConfig,
     TreeBackupMode,
 )
+from customized_areal.tree_search.grouped_workflow import (
+    TreeSearchGroupedRolloutWorkflow,
+)
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
+from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor
 
 from areal import PPOTrainer
 from areal.trainer.ppo.actor import PPOActor
@@ -103,6 +107,46 @@ def _patch_wrap_openai_agent_for_query_id(rollout_engine: Any) -> None:
     logger.info("Patched _wrap_openai_agent to use QueryIDProxyWorkflow")
 
 
+def _patch_wrap_openai_agent_for_tree_search(
+    rollout_engine: Any, group_size: int
+) -> None:
+    """Patch the engine's _wrap_openai_agent to use TreeSearchGroupedRolloutWorkflow.
+
+    Replaces both QueryIDProxyWorkflow and GroupedRolloutWorkflow.
+    TreeSearchGroupedRolloutWorkflow wraps the inner workflow, runs
+    group_size episodes per query, and reconstructs episode metadata
+    from InteractionWithTokenLogpReward parent chains.
+
+    Args:
+        rollout_engine: The rollout inference engine (e.g. RemoteInfEngine).
+        group_size: Number of episodes to run per query.
+    """
+    engine = rollout_engine
+    if not hasattr(engine, "_wrap_openai_agent"):
+        logger.warning(
+            "Engine has no _wrap_openai_agent method; "
+            "tree search workflow will not be available"
+        )
+        return
+
+    original_wrap = engine._wrap_openai_agent
+
+    def _tree_search_wrap(agent: Any, proxy_addr: str):
+        inner = original_wrap(agent, proxy_addr)
+        return TreeSearchGroupedRolloutWorkflow(
+            workflow=inner,
+            group_size=group_size,
+            logger=logger,
+        )
+
+    engine._wrap_openai_agent = _tree_search_wrap
+    engine._original_wrap_openai_agent = original_wrap
+    logger.info(
+        f"Patched _wrap_openai_agent to use TreeSearchGroupedRolloutWorkflow "
+        f"(group_size={group_size})"
+    )
+
+
 def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
     """Restore the original _wrap_openai_agent method."""
     engine = rollout_engine
@@ -110,6 +154,58 @@ def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
         engine._wrap_openai_agent = engine._original_wrap_openai_agent
         del engine._original_wrap_openai_agent
         logger.info("Restored original _wrap_openai_agent")
+
+
+def _patch_workflow_executor(rollout_engine: Any) -> None:
+    """Patch the engine's workflow_executor to use TreeSearchWorkflowExecutor.
+
+    TreeSearchWorkflowExecutor accepts list[dict] returns from arun_episode,
+    which is needed for the new tree search workflow.
+
+    Args:
+        rollout_engine: The rollout inference engine (e.g. RemoteInfEngine).
+    """
+    engine = rollout_engine
+    if not hasattr(engine, "workflow_executor"):
+        logger.warning(
+            "Engine has no workflow_executor attribute; "
+            "tree search workflow executor will not be available"
+        )
+        return
+
+    original_executor = engine.workflow_executor
+
+    # Replace with TreeSearchWorkflowExecutor
+    tree_search_executor = TreeSearchWorkflowExecutor(
+        config=engine.config,
+        inference_engine=engine,
+    )
+
+    # Copy over state from original
+    tree_search_executor._staleness_manager = original_executor._staleness_manager
+    tree_search_executor._expected_trajectory_keys = (
+        original_executor._expected_trajectory_keys
+    )
+    tree_search_executor._task_id_generator = original_executor._task_id_generator
+    tree_search_executor._dispatcher = original_executor._dispatcher
+    tree_search_executor._tokenizer = original_executor._tokenizer
+    tree_search_executor._tokenizer_lock = original_executor._tokenizer_lock
+    tree_search_executor.logger = original_executor.logger
+    tree_search_executor._initialized = True
+
+    engine.workflow_executor = tree_search_executor
+    engine._original_workflow_executor = original_executor
+
+    logger.info("Patched workflow_executor to use TreeSearchWorkflowExecutor")
+
+
+def _unpatch_workflow_executor(rollout_engine: Any) -> None:
+    """Restore the original workflow_executor."""
+    engine = rollout_engine
+    if hasattr(engine, "_original_workflow_executor"):
+        engine.workflow_executor = engine._original_workflow_executor
+        del engine._original_workflow_executor
+        logger.info("Restored original workflow_executor")
 
 
 def patch_ppo_actor_for_tree_backup(
@@ -316,7 +412,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         )
 
     def _init_patches(self) -> None:
-        """Apply monkey-patches for tree backup and query_id injection."""
+        """Apply monkey-patches for tree backup and tree search workflow."""
         patch_ppo_actor_for_tree_backup(
             advantage_mode=self.tree_backup_config.advantage_mode,
         )
@@ -325,11 +421,16 @@ class CacheAwarePPOTrainer(PPOTrainer):
             f"(advantage_mode={self.tree_backup_config.advantage_mode.value})"
         )
 
-        # Patch _wrap_openai_agent to use QueryIDProxyWorkflow so that
-        # dataset query_id strings are injected into trajectories as
-        # _mcts_query_id. Without this, the async rollout pipeline would
-        # lose the query_id because concat_padded_tensors drops non-tensor keys.
-        _patch_wrap_openai_agent_for_query_id(self.rollout)
+        # Patch _wrap_openai_agent to use TreeSearchGroupedRolloutWorkflow
+        # which handles both query_id injection and episode grouping.
+        _patch_wrap_openai_agent_for_tree_search(
+            self.rollout,
+            group_size=self.cache_config.n_samples,
+        )
+
+        # Patch workflow_executor to use TreeSearchWorkflowExecutor
+        # which accepts list[dict] returns from arun_episode.
+        _patch_workflow_executor(self.rollout)
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -407,9 +508,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 group_size=n_samples,
             )
 
-            n_new = sum(t["input_ids"].shape[0] for t in new_trajs) if new_trajs else 0
+            # TreeSearchWorkflowExecutor already returns flat list of per-episode dicts
+            trajs = new_trajs if new_trajs else []
+
+            n_new = sum(t["input_ids"].shape[0] for t in trajs) if trajs else 0
             logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
-            trajs = new_trajs
 
         # --- Tree operations (while _mcts_query_id / _mcts_seq_id are available) ---
 
@@ -513,4 +616,5 @@ class CacheAwarePPOTrainer(PPOTrainer):
         ):
             unpatch_ppo_actor()
             _unpatch_wrap_openai_agent(self.rollout)
+            _unpatch_workflow_executor(self.rollout)
         super().close()

@@ -433,7 +433,9 @@ class MCTSTreeStore:
                     break
         return result
 
-    def load_trajectories(self, query_id: str, n_samples: int, as_list: bool = False) -> list[dict[str, Any]]:
+    def load_trajectories(
+        self, query_id: str, n_samples: int, as_list: bool = False
+    ) -> list[dict[str, Any]]:
         """Load untrained trajectories.
 
         If `as_list=False` (default), returns per-turn dicts with tensors. Each
@@ -475,7 +477,9 @@ class MCTSTreeStore:
                 if record.topk_logp is not None:
                     traj["topk_logp"] = [row.copy() for row in record.topk_logp]
                 if record.distill_reward is not None:
-                    traj["distill_reward"] = [row.copy() for row in record.distill_reward]
+                    traj["distill_reward"] = [
+                        row.copy() for row in record.distill_reward
+                    ]
                 if record.teacher_logp is not None:
                     traj["teacher_logp"] = [row.copy() for row in record.teacher_logp]
                 # Add turn metadata if present
@@ -499,11 +503,31 @@ class MCTSTreeStore:
             full_attention = torch.ones(seq_len, dtype=torch.bool)
 
             # New fields - full tensors
-            full_logp = torch.tensor(record.logp, dtype=torch.float32) if record.logp is not None else None
-            full_topk_ids = torch.tensor(record.topk_ids, dtype=torch.int32) if record.topk_ids is not None else None
-            full_topk_logp = torch.tensor(record.topk_logp, dtype=torch.float32) if record.topk_logp is not None else None
-            full_distill_reward = torch.tensor(record.distill_reward, dtype=torch.float32) if record.distill_reward is not None else None
-            full_teacher_logp = torch.tensor(record.teacher_logp, dtype=torch.float32) if record.teacher_logp is not None else None
+            full_logp = (
+                torch.tensor(record.logp, dtype=torch.float32)
+                if record.logp is not None
+                else None
+            )
+            full_topk_ids = (
+                torch.tensor(record.topk_ids, dtype=torch.int32)
+                if record.topk_ids is not None
+                else None
+            )
+            full_topk_logp = (
+                torch.tensor(record.topk_logp, dtype=torch.float32)
+                if record.topk_logp is not None
+                else None
+            )
+            full_distill_reward = (
+                torch.tensor(record.distill_reward, dtype=torch.float32)
+                if record.distill_reward is not None
+                else None
+            )
+            full_teacher_logp = (
+                torch.tensor(record.teacher_logp, dtype=torch.float32)
+                if record.teacher_logp is not None
+                else None
+            )
 
             # If no turn metadata, return as a single dict (legacy behavior)
             if record.turn_ids is None or not record.turn_response_starts:
@@ -536,9 +560,7 @@ class MCTSTreeStore:
             # Split episode into per-turn dicts
             n_turns = len(record.turn_response_starts)
             for t in range(n_turns):
-                start = record.turn_response_starts[t]
                 end = record.turn_response_ends[t]
-                turn_len = end - start
 
                 # For individual-style, each turn needs its own prompt context.
                 # Include all tokens from beginning to end of this turn's response.
@@ -567,9 +589,7 @@ class MCTSTreeStore:
                     "logprobs": turn_logprobs.unsqueeze(0),
                     "versions": turn_versions.unsqueeze(0),
                     "attention_mask": turn_attention.unsqueeze(0),
-                    "rewards": torch.tensor(
-                        [turn_reward], dtype=torch.float32
-                    ),
+                    "rewards": torch.tensor([turn_reward], dtype=torch.float32),
                     "_mcts_query_id": query_id,
                     "_mcts_seq_id": seq_id,
                     "_episode_idx": idx,
@@ -588,7 +608,9 @@ class MCTSTreeStore:
                 if full_topk_logp is not None:
                     traj["topk_logp"] = full_topk_logp[:turn_seq_len].unsqueeze(0)
                 if full_distill_reward is not None:
-                    traj["distill_reward"] = full_distill_reward[:turn_seq_len].unsqueeze(0)
+                    traj["distill_reward"] = full_distill_reward[
+                        :turn_seq_len
+                    ].unsqueeze(0)
                 if full_teacher_logp is not None:
                     traj["teacher_logp"] = full_teacher_logp[:turn_seq_len].unsqueeze(0)
                 result.append(traj)

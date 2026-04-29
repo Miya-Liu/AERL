@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
-from areal.infra.workflow_executor import WorkflowExecutor, _RolloutTaskInput
 from areal.api import RolloutWorkflow
+from areal.experimental.openai.types import InteractionWithTokenLogpReward
 from areal.infra import workflow_context
 from areal.infra.workflow_context import WorkflowContext
-from areal.experimental.openai.types import InteractionWithTokenLogpReward
-from areal.utils import logging, perf_tracer, stats_tracker
-from areal.utils.perf_tracer import trace_session_event
+from areal.infra.workflow_executor import WorkflowExecutor, _RolloutTaskInput
+from areal.utils import perf_tracer, stats_tracker
 from areal.utils.data import concat_padded_tensors
+from areal.utils.perf_tracer import trace_session_event
 
 
 @dataclass
@@ -99,7 +100,9 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
                         should_accept = True
                     else:
                         # For list returns, we accept if at least one trajectory is accepted
-                        should_accept = any(should_accept_fn(traj) for traj in traj_result)
+                        should_accept = any(
+                            should_accept_fn(traj) for traj in traj_result
+                        )
 
                     should_accept_traj = bool(should_accept)
                     if not should_accept_traj and should_accept_fn is not None:
