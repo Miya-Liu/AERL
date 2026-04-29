@@ -134,11 +134,44 @@ instead of `dict | None`.
 
 #### 5. `mcts_tree_store.py` changes
 
-`insert_batch` and related methods need to handle the new dict format:
-- `input_ids` is `list[int]` instead of `torch.Tensor`
-- Compute `turn_response_starts/ends` from `loss_mask` transitions
-  if not already present
-- Build `TrajectoryRecord` directly from the dict
+**`TrajectoryRecord`** gains new optional fields:
+
+```python
+@dataclass
+class TrajectoryRecord:
+    input_ids: list[int]
+    loss_mask: list[int]
+    logprobs: list[float]
+    versions: list[int]
+    reward: float
+    turn_response_starts: list[int]
+    turn_response_ends: list[int]
+    turn_ids: list[str] | None = None
+    parent_turn_ids: list[str | None] | None = None
+    turn_rewards: list[float] | None = None
+    outcome_reward: float = 0.0
+    # New fields:
+    logp: list[float] | None = None                    # chosen token log probs (response only)
+    topk_ids: list[list[int]] | None = None            # top-k candidate token IDs per response position
+    topk_logp: list[list[float]] | None = None         # top-k candidate log probs per response position
+    distill_reward: list[list[float]] | None = None     # per-response-position distillation reward
+    teacher_logp: list[list[float]] | None = None       # teacher log probs per response position (aligned with topk_ids)
+```
+
+**`insert_batch`**: When receiving per-episode dicts with Python lists, extract
+`logp`, `topk_ids`, `topk_logp`, `distill_reward`, `teacher_logp` directly
+from the dict (no tensor conversion needed). When receiving legacy tensor
+dicts, these fields default to `None`.
+
+**`_insert_per_turn_dicts`**: Merge per-turn `logp`/`topk_ids`/`topk_logp`/
+`distill_reward`/`teacher_logp` lists when reconstructing episodes from
+per-turn dicts (concatenate response-only lists across turns, adjusting
+`topk_ids`/`topk_logp`/`distill_reward`/`teacher_logp` indices to align
+with the full episode sequence).
+
+**`load_trajectories`**: When splitting an episode back into per-turn dicts,
+slice `logp`/`topk_ids`/`topk_logp`/`distill_reward`/`teacher_logp` by
+turn boundaries (`turn_response_starts`/`turn_response_ends`).
 
 ### Out of scope
 
