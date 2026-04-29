@@ -511,7 +511,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
             # TreeSearchWorkflowExecutor already returns flat list of per-episode dicts
             trajs = new_trajs if new_trajs else []
 
-            n_new = sum(t["input_ids"].shape[0] for t in trajs) if trajs else 0
+            n_new = sum(len(t["input_ids"]) for t in trajs) if trajs else 0
             logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
 
         # --- Tree operations (while _mcts_query_id / _mcts_seq_id are available) ---
@@ -525,8 +525,10 @@ class CacheAwarePPOTrainer(PPOTrainer):
             self.tree_advantage_computer.compute(trajs)
             for traj in trajs:
                 if "advantages" in traj:
-                    traj["_tree_advantages"] = traj["advantages"].clone()
-                    traj["_tree_returns"] = traj["returns"].clone()
+                    adv = traj["advantages"]
+                    traj["_tree_advantages"] = adv.clone() if hasattr(adv, "clone") else adv
+                    ret = traj["returns"]
+                    traj["_tree_returns"] = ret.clone() if hasattr(ret, "clone") else ret
             logger.debug(
                 f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
             )

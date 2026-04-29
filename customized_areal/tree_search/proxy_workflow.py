@@ -172,7 +172,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                 "turn_response_ends": turn_response_ends,
                 "turn_ids": [interaction_id],
                 "parent_turn_ids": [
-                    interaction.parent._interaction_id
+                    interaction.parent.interaction_id
                     if interaction.parent and interaction.parent._interaction_id
                     else None
                 ],

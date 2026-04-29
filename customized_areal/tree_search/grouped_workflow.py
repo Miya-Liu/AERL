@@ -4,10 +4,9 @@
 Replaces both QueryIDProxyWorkflow and GroupedRolloutWorkflow for tree search
 training. Subclasses GroupedRolloutWorkflow and overrides arun_episode to:
 
-1. Reconstruct episode metadata from InteractionWithTokenLogpReward parent chains
-2. Convert each turn to an individual-style tensor dict [1, seq_len]
-3. Stack all turns from all group_size episodes into [total_turns, max_seq_len]
-4. Preserve per-episode metadata (turn IDs, parent IDs, rewards) as list-valued keys
+1. Accept list[dict] returns from the inner workflow (proxy_workflow now returns list[dict])
+2. Merge per-turn dicts into per-episode dicts using Python lists (not tensors)
+3. Return list[dict] (one dict per episode)
 """
 
 from __future__ import annotations
@@ -15,81 +14,114 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import torch
-
 from areal.api import InferenceEngine
-from areal.experimental.openai.types import InteractionWithTokenLogpReward
 from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
 from areal.utils import logging
 from areal.utils.data import concat_padded_tensors
+from customized_areal.tree_search.mcts_tree_store import _find_turn_boundaries
 
 logger = logging.getLogger("TreeSearchGroupedWorkflow")
 
-EPISODE_LEVEL_METADATA_KEYS = frozenset(
-    {
-        "_episode_num_turns",
-        "_episode_turn_offsets",
-        "_episode_turn_ids",
-        "_episode_parent_turn_ids",
-        "_episode_turn_rewards",
-        "_episode_outcome_reward",
-    }
-)
 
+def _merge_turn_dicts_to_episode(turn_dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Merge per-turn dictionaries into a single per-episode dictionary.
 
-def _sort_interactions_by_creation(
-    interactions: dict[str, InteractionWithTokenLogpReward],
-) -> list[InteractionWithTokenLogpReward]:
-    """Sort interactions by cache insertion order (dict key order in Python 3.7+)."""
-    return list(interactions.values())
+    Args:
+        turn_dicts: List of per-turn trajectory dicts
 
-
-def _collect_episode_metadata(
-    interactions: list[InteractionWithTokenLogpReward],
-) -> dict[str, Any]:
-    """Extract episode-level metadata from a sorted list of interactions.
-
-    Returns dict with keys:
-        turn_ids: list[str]
-        parent_turn_ids: list[str | None]
-        turn_rewards: list[float]
-        outcome_reward: float
+    Returns:
+        Single per-episode trajectory dict with all turns merged
     """
-    turn_ids: list[str] = []
-    parent_turn_ids: list[str | None] = []
-    turn_rewards: list[float] = []
+    if not turn_dicts:
+        return {}
 
-    for interaction in interactions:
-        iid = interaction.interaction_id
-        turn_ids.append(iid if iid is not None else "")
-        parent_iid = (
-            interaction.parent.interaction_id
-            if interaction.parent is not None
-            else None
-        )
-        parent_turn_ids.append(parent_iid)
-        turn_rewards.append(
-            interaction.reward if interaction.reward is not None else 0.0
-        )
+    # Concatenate sequence fields
+    input_ids = []
+    loss_mask = []
+    logprobs = []
+    versions = []
 
-    outcome_reward = turn_rewards[-1] if turn_rewards else 0.0
+    # Merge turn-specific fields
+    turn_ids = []
+    parent_turn_ids = []
+    turn_rewards = []
 
-    return {
+    # Merge response-only fields
+    response_ids = []
+    logp = []
+    topk_ids = []
+    topk_logp = []
+    distill_reward = []
+    teacher_logp = []
+
+    for turn_dict in turn_dicts:
+        # Sequence fields
+        input_ids.extend(turn_dict["input_ids"])
+        loss_mask.extend(turn_dict["loss_mask"])
+        logprobs.extend(turn_dict["logprobs"])
+        versions.extend(turn_dict["versions"])
+
+        # Turn-specific fields
+        turn_ids.extend(turn_dict["turn_ids"])
+        parent_turn_ids.extend(turn_dict["parent_turn_ids"])
+        turn_rewards.extend(turn_dict["turn_rewards"])
+
+        # Response-only fields
+        if "response_ids" in turn_dict:
+            response_ids.extend(turn_dict["response_ids"])
+        if "logp" in turn_dict:
+            logp.extend(turn_dict["logp"])
+        if "topk_ids" in turn_dict:
+            topk_ids.extend(turn_dict["topk_ids"])
+        if "topk_logp" in turn_dict:
+            topk_logp.extend(turn_dict["topk_logp"])
+        if "distill_reward" in turn_dict:
+            distill_reward.extend(turn_dict["distill_reward"])
+        if "teacher_logp" in turn_dict:
+            teacher_logp.extend(turn_dict["teacher_logp"])
+
+    # Recompute turn boundaries on full loss_mask
+    turn_response_starts, turn_response_ends = _find_turn_boundaries(loss_mask)
+
+    # Create episode dict
+    episode_dict = {
+        "input_ids": input_ids,
+        "loss_mask": loss_mask,
+        "logprobs": logprobs,
+        "versions": versions,
+        "attention_mask": [1] * len(input_ids),
+        "turn_response_starts": turn_response_starts,
+        "turn_response_ends": turn_response_ends,
         "turn_ids": turn_ids,
         "parent_turn_ids": parent_turn_ids,
         "turn_rewards": turn_rewards,
-        "outcome_reward": outcome_reward,
+        "reward": turn_dicts[-1]["reward"],
+        "outcome_reward": turn_dicts[-1]["outcome_reward"],
     }
+
+    # Add response-only fields if present
+    if response_ids:
+        episode_dict["response_ids"] = response_ids
+    if logp:
+        episode_dict["logp"] = logp
+    if topk_ids:
+        episode_dict["topk_ids"] = topk_ids
+    if topk_logp:
+        episode_dict["topk_logp"] = topk_logp
+    if distill_reward:
+        episode_dict["distill_reward"] = distill_reward
+    if teacher_logp:
+        episode_dict["teacher_logp"] = teacher_logp
+
+    return episode_dict
 
 
 class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
     """GroupedRolloutWorkflow that preserves per-turn episode metadata for tree search.
 
     When used with individual export style, each turn from each episode becomes
-    a separate [1, seq_len] tensor dict. All turns are stacked into
-    [total_turns, max_seq_len] with episode-level metadata preserved as
-    list-valued keys so that downstream _split_to_turn_dicts can reconstruct
-    per-turn dicts with full episode context.
+    a separate dict. All turns from an episode are merged into a single per-episode dict
+    using Python lists (not tensors).
     """
 
     async def arun_episode(
@@ -111,99 +143,25 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
                 "trajectories returned None, using remaining results"
             )
 
-        # Check if results are InteractionWithTokenLogpReward dicts
+        # Check if results are list[dict] (new format)
         first = valid_results[0]
-        if not (
-            isinstance(first, dict)
-            and first
-            and all(
-                isinstance(v, InteractionWithTokenLogpReward) for v in first.values()
-            )
-        ):
-            # Tensor dicts — fall back to base class behavior
-            concatenated = concat_padded_tensors(valid_results)
-            return [concatenated] if concatenated else None
+        if isinstance(first, list) and len(first) > 0 and isinstance(first[0], dict):
+            # Merge turn dicts per episode into a single per-episode dict
+            episode_trajs: list[dict[str, Any]] = []
+            query_id = data.get("query_id", "")
 
-        # Individual export style: reconstruct episode metadata per episode,
-        # convert each turn to tensor dict, then concatenate per episode.
-        episode_trajs: list[dict[str, Any]] = []
+            for result in valid_results:
+                merged = _merge_turn_dicts_to_episode(result)
+                if merged:
+                    if query_id:
+                        merged["_mcts_query_id"] = query_id
+                    episode_trajs.append(merged)
 
-        query_id = data.get("query_id", "")
+            if not episode_trajs:
+                return None
 
-        for result in valid_results:
-            sorted_interactions = _sort_interactions_by_creation(result)
-            metadata = _collect_episode_metadata(sorted_interactions)
+            return episode_trajs
 
-            turn_dicts = [
-                interaction.to_tensor_dict() for interaction in sorted_interactions
-            ]
-
-            if not turn_dicts:
-                continue
-
-            # Stack turns for this episode
-            ep_traj = concat_padded_tensors(turn_dicts)
-
-            # Add episode-level metadata
-            if query_id:
-                ep_traj["_mcts_query_id"] = query_id
-            ep_traj["_episode_turn_ids"] = metadata["turn_ids"]
-            ep_traj["_episode_parent_turn_ids"] = metadata["parent_turn_ids"]
-            ep_traj["_episode_turn_rewards"] = metadata["turn_rewards"]
-            ep_traj["_episode_outcome_reward"] = metadata["outcome_reward"]
-            ep_traj["_episode_num_turns"] = len(turn_dicts)
-
-            episode_trajs.append(ep_traj)
-
-        if not episode_trajs:
-            return None
-
-        return episode_trajs
-
-
-def _split_to_turn_dicts(trajs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Split stacked trajectory dicts into flat list of per-turn dicts.
-
-    Each output dict has shape [1, seq_len] and carries episode metadata keys:
-        _mcts_query_id, _episode_idx, _turn_idx_in_episode,
-        _parent_turn_id, _turn_reward, _outcome_reward
-
-    Episode-level metadata keys (prefixed with _episode_) are removed from
-    per-turn dicts; their values are distributed into the turn-level keys.
-    """
-    flat: list[dict[str, Any]] = []
-
-    for traj in trajs:
-        offsets = traj["_episode_turn_offsets"]
-        num_turns_list = traj["_episode_num_turns"]
-        query_id = traj.get("_mcts_query_id", "")
-
-        for ep_idx, num_turns in enumerate(num_turns_list):
-            start = offsets[ep_idx]
-            for local_turn_idx in range(num_turns):
-                t = start + local_turn_idx
-                turn_dict = {}
-                for k, v in traj.items():
-                    if k in EPISODE_LEVEL_METADATA_KEYS:
-                        continue
-                    if isinstance(v, torch.Tensor):
-                        turn_dict[k] = v[t : t + 1]
-                    else:
-                        # Non-tensor values (e.g. _mcts_query_id string)
-                        # are identical across turns — copy as-is
-                        turn_dict[k] = v
-
-                turn_dict["_mcts_query_id"] = query_id
-                turn_dict["_episode_idx"] = ep_idx
-                turn_dict["_turn_idx_in_episode"] = local_turn_idx
-                turn_dict["_parent_turn_id"] = traj["_episode_parent_turn_ids"][ep_idx][
-                    local_turn_idx
-                ]
-                turn_dict["_turn_reward"] = traj["_episode_turn_rewards"][ep_idx][
-                    local_turn_idx
-                ]
-                turn_dict["_outcome_reward"] = traj["_episode_outcome_reward"][ep_idx]
-
-                flat.append(turn_dict)
-
-    return flat
+        # Legacy tensor dicts — fall back to base class behavior
+        concatenated = concat_padded_tensors(valid_results)
+        return [concatenated] if concatenated else None
