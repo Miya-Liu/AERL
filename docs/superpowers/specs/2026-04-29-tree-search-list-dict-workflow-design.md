@@ -36,16 +36,22 @@ schema:
     "parent_turn_ids": list[str | None], # parent interaction ID per turn
     "turn_rewards": list[float],         # per-turn reward
     "outcome_reward": float,             # outcome reward (separate from reward)
-    "response_ids": list[list[int]],     # top-k candidate token IDs per response position
-    "logp": list[list[float]],           # top-k candidate log probs per response position
+    "response_ids": list[int],           # chosen response token IDs
+    "logp": list[float],                 # chosen token log probs
+    "topk_ids": list[list[int]],         # top-k candidate token IDs per response position
+    "topk_logp": list[list[float]],      # top-k candidate log probs per response position
+    "distill_reward": list[list[float]], # per-response-position distillation reward
 }
 ```
 
-`response_ids[i]` and `logp[i]` correspond to the i-th response token position
-(where `loss_mask=1`). Each inner list contains the top-k candidate vocabulary
-tokens and their log probabilities at that position. `logprobs[j]` is the
-chosen token's log prob (equivalent to `logp[j][0]` when the chosen token is
-the top-1 candidate).
+- `response_ids` is the flat list of chosen response token IDs (input_ids
+  where `loss_mask=1`). `logp` is the corresponding chosen token log probs.
+- `topk_ids[i]` and `topk_logp[i]` are the top-k candidate tokens and their
+  log probs at the i-th response position. `logprobs[j]` is the chosen
+  token's log prob at position j (equivalent to `topk_logp[i][0]` when the
+  chosen token is the top-1 candidate).
+- `distill_reward[i]` is the distillation reward at the i-th response
+  position.
 
 Only `individual` export style is supported.
 
@@ -91,8 +97,11 @@ For each `InteractionWithTokenLogpReward` in the result:
 - Convert to a per-turn dict with Python lists
 - Compute `turn_response_starts`, `turn_response_ends` from `loss_mask`
 - Extract `turn_ids`, `parent_turn_ids`, `turn_rewards` from the interaction
-- Extract `response_ids` (top-k candidate token IDs) and `logp` (top-k log
-  probs) per response position from the interaction's token logp data
+- Extract `response_ids` (chosen response token IDs) and `logp` (chosen
+  token log probs) from the interaction's data
+- Extract `topk_ids` and `topk_logp` (top-k candidate tokens and log probs
+  per response position) from the interaction's token logp data
+- Extract `distill_reward` (per-response-position distillation reward)
 - Set `reward` and `outcome_reward`
 - Inject `_mcts_query_id` into each dict
 
