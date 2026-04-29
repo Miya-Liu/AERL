@@ -27,22 +27,36 @@ def patch_fsdp_engine_for_muon(
     global _original_create_optimizer, _muon_config
     from areal.engine.fsdp_engine import FSDPEngine
 
-    _original_create_optimizer = FSDPEngine._create_optimizer
-    _muon_config = {
-        "momentum": momentum,
-        "muon_adam_lr": muon_adam_lr,
-        "ns_steps": ns_steps,
-        "nesterov": nesterov,
-    }
-    FSDPEngine._create_optimizer = _patched_create_optimizer
+    # Check if already patched
+    if _original_create_optimizer is None:
+        _original_create_optimizer = FSDPEngine._create_optimizer
+
+    # Update config regardless of patch status (in-place to keep references valid)
+    _muon_config.clear()
+    _muon_config.update(
+        {
+            "momentum": momentum,
+            "muon_adam_lr": muon_adam_lr,
+            "ns_steps": ns_steps,
+            "nesterov": nesterov,
+        }
+    )
+
+    # Only patch if not already patched
+    if FSDPEngine._create_optimizer is not _patched_create_optimizer:
+        FSDPEngine._create_optimizer = _patched_create_optimizer
 
 
 def unpatch_fsdp_engine_for_muon() -> None:
     """Restore the original FSDPEngine._create_optimizer."""
+    global _original_create_optimizer, _muon_config
     from areal.engine.fsdp_engine import FSDPEngine
 
     if _original_create_optimizer is not None:
         FSDPEngine._create_optimizer = _original_create_optimizer
+        # Reset the original tracker and config
+        _original_create_optimizer = None
+        _muon_config = {}
 
 
 def _patched_create_optimizer(self, ft_spec) -> None:
@@ -53,10 +67,14 @@ def _patched_create_optimizer(self, ft_spec) -> None:
         _original_create_optimizer(self, ft_spec)
         return
 
-    from areal.engine.fsdp_utils import get_cosine_schedule_with_warmup
-    from transformers import get_constant_schedule_with_warmup, get_linear_schedule_with_warmup
+    from transformers import (
+        get_constant_schedule_with_warmup,
+        get_linear_schedule_with_warmup,
+    )
 
     from customized_areal.optimizers.muon import MuonWithAuxAdam
+
+    from areal.engine.fsdp_utils import get_cosine_schedule_with_warmup
 
     assert self.model is not None
     tik = time.perf_counter()

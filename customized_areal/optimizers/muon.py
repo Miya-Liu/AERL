@@ -52,13 +52,14 @@ def muon_update(
     Returns:
         Orthogonalized update of same shape as grad.
     """
+    original_shape = grad.shape
     momentum_buffer.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum_buffer, beta) if nesterov else momentum_buffer
     if update.ndim == 4:
         update = update.view(len(update), -1)
     update = zeropower_via_newtonschulz5(update, steps=ns_steps)
     update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
-    return update
+    return update.view(original_shape)
 
 
 class MuonWithAuxAdam(torch.optim.Optimizer):
