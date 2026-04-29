@@ -25,20 +25,27 @@ schema:
 
 ```python
 {
-    "input_ids": list[int],           # unpadded token IDs
-    "loss_mask": list[int],           # 0=prompt, 1=response
-    "logprobs": list[float],          # token log probabilities
-    "versions": list[int],            # policy version per token
-    "reward": float,                  # outcome reward (for Q-value)
-    "turn_response_starts": list[int], # response start indices per turn
-    "turn_response_ends": list[int],   # response end indices per turn
-    "turn_ids": list[str],            # interaction ID per turn
+    "input_ids": list[int],              # unpadded token IDs
+    "loss_mask": list[int],              # 0=prompt, 1=response
+    "logprobs": list[float],             # chosen token log prob per position
+    "versions": list[int],               # policy version per token
+    "reward": float,                     # outcome reward (for Q-value)
+    "turn_response_starts": list[int],   # response start indices per turn
+    "turn_response_ends": list[int],     # response end indices per turn
+    "turn_ids": list[str],               # interaction ID per turn
     "parent_turn_ids": list[str | None], # parent interaction ID per turn
-    "turn_rewards": list[float],      # per-turn reward
-    "outcome_reward": float,          # outcome reward (separate from reward)
-    "response_ids": list[int],        # response token IDs (input_ids where loss_mask=1)
+    "turn_rewards": list[float],         # per-turn reward
+    "outcome_reward": float,             # outcome reward (separate from reward)
+    "response_ids": list[list[int]],     # top-k candidate token IDs per response position
+    "logp": list[list[float]],           # top-k candidate log probs per response position
 }
 ```
+
+`response_ids[i]` and `logp[i]` correspond to the i-th response token position
+(where `loss_mask=1`). Each inner list contains the top-k candidate vocabulary
+tokens and their log probabilities at that position. `logprobs[j]` is the
+chosen token's log prob (equivalent to `logp[j][0]` when the chosen token is
+the top-1 candidate).
 
 Only `individual` export style is supported.
 
@@ -84,7 +91,8 @@ For each `InteractionWithTokenLogpReward` in the result:
 - Convert to a per-turn dict with Python lists
 - Compute `turn_response_starts`, `turn_response_ends` from `loss_mask`
 - Extract `turn_ids`, `parent_turn_ids`, `turn_rewards` from the interaction
-- Compute `response_ids` from `input_ids` where `loss_mask=1`
+- Extract `response_ids` (top-k candidate token IDs) and `logp` (top-k log
+  probs) per response position from the interaction's token logp data
 - Set `reward` and `outcome_reward`
 - Inject `_mcts_query_id` into each dict
 
