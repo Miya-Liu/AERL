@@ -41,6 +41,7 @@ schema:
     "topk_ids": list[list[int]],         # top-k candidate token IDs per response position
     "topk_logp": list[list[float]],      # top-k candidate log probs per response position
     "distill_reward": list[list[float]], # per-response-position distillation reward
+    "teacher_logp": list[list[float]],   # teacher log probs per response position (aligned with topk_ids)
 }
 ```
 
@@ -52,6 +53,8 @@ schema:
   chosen token is the top-1 candidate).
 - `distill_reward[i]` is the distillation reward at the i-th response
   position.
+- `teacher_logp[i]` is the teacher model's log probs over the top-k
+  candidates at the i-th response position (aligned with `topk_ids[i]`).
 
 Only `individual` export style is supported.
 
