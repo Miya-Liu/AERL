@@ -62,6 +62,49 @@ class TestTrajectoryRecord:
         assert len(record.input_ids) == 5
         assert record.reward == 1.0
 
+    def test_new_fields_default_to_none(self):
+        record = TrajectoryRecord(
+            input_ids=[1, 2, 3, 4, 5],
+            loss_mask=[0, 0, 1, 1, 1],
+            logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            versions=[0, 0, 0, 0, 0],
+            reward=1.0,
+            turn_response_starts=[2],
+            turn_response_ends=[5],
+        )
+        assert record.logp is None
+        assert record.topk_ids is None
+        assert record.topk_logp is None
+        assert record.distill_reward is None
+        assert record.teacher_logp is None
+
+    def test_new_fields_can_be_set(self):
+        logp = [-0.1, -0.2, -0.3]
+        topk_ids = [[10, 20], [30, 40], [50, 60]]
+        topk_logp = [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]]
+        distill_reward = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        teacher_logp = [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]]
+
+        record = TrajectoryRecord(
+            input_ids=[1, 2, 3, 4, 5],
+            loss_mask=[0, 0, 1, 1, 1],
+            logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            versions=[0, 0, 0, 0, 0],
+            reward=1.0,
+            turn_response_starts=[2],
+            turn_response_ends=[5],
+            logp=logp,
+            topk_ids=topk_ids,
+            topk_logp=topk_logp,
+            distill_reward=distill_reward,
+            teacher_logp=teacher_logp,
+        )
+        assert record.logp == logp
+        assert record.topk_ids == topk_ids
+        assert record.topk_logp == topk_logp
+        assert record.distill_reward == distill_reward
+        assert record.teacher_logp == teacher_logp
+
 
 def _make_traj(
     input_ids: list[int],
@@ -89,6 +132,59 @@ def _make_traj(
 
 
 class TestMCTSTreeStoreInsertBatch:
+    def test_insert_list_dict_basic(self):
+        store = MCTSTreeStore()
+        traj = {
+            "input_ids": [1, 2, 3, 4, 5],
+            "loss_mask": [0, 0, 1, 1, 1],
+            "reward": 1.0,
+            "attention_mask": [1, 1, 1, 1, 1],
+        }
+        store.insert_batch([traj])
+        assert "_mcts_seq_id" in traj
+        assert "_mcts_query_id" in traj
+        assert len(store.trajectories) == 1
+        query_id = traj["_mcts_query_id"]
+        assert len(store.trajectories[query_id]) == 1
+        record = store.trajectories[query_id][0]
+        assert record.input_ids == [1, 2, 3, 4, 5]
+        assert record.loss_mask == [0, 0, 1, 1, 1]
+
+    def test_insert_list_dict_with_new_fields(self):
+        store = MCTSTreeStore()
+        traj = {
+            "input_ids": [1, 2, 3],
+            "loss_mask": [0, 0, 1],
+            "reward": 1.0,
+            "attention_mask": [1, 1, 1],
+            "logp": [-0.1, -0.2, -0.3],
+            "topk_ids": [[10, 20], [30, 40], [50, 60]],
+            "topk_logp": [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]],
+            "distill_reward": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
+            "teacher_logp": [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]],
+        }
+        store.insert_batch([traj])
+        query_id = traj["_mcts_query_id"]
+        record = store.trajectories[query_id][0]
+        assert record.logp == [-0.1, -0.2, -0.3]
+        assert record.topk_ids == [[10, 20], [30, 40], [50, 60]]
+        assert record.topk_logp == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]]
+        assert record.distill_reward == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        assert record.teacher_logp == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]]
+
+    def test_insert_list_dict_with_query_id(self):
+        store = MCTSTreeStore()
+        traj = {
+            "input_ids": [1, 2, 3, 4, 5],
+            "loss_mask": [0, 0, 1, 1, 1],
+            "reward": 1.0,
+            "attention_mask": [1, 1, 1, 1, 1],
+            "_mcts_query_id": "custom_query_id",
+        }
+        store.insert_batch([traj])
+        assert traj["_mcts_query_id"] == "custom_query_id"
+        assert "custom_query_id" in store.trajectories
+
     def test_insert_single_trajectory(self):
         store = MCTSTreeStore()
         traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
@@ -226,6 +322,38 @@ class TestMCTSTreeStoreTrainedFlag:
 
 
 class TestMCTSTreeStoreLoadTrajectories:
+    def test_load_trajectories_as_list(self):
+        store = MCTSTreeStore()
+        traj = {
+            "input_ids": [1, 2, 3, 4, 5],
+            "loss_mask": [0, 0, 1, 1, 1],
+            "logprobs": [-0.1, -0.2, -0.3, -0.4, -0.5],
+            "versions": [0, 0, 0, 0, 0],
+            "reward": 1.0,
+            "attention_mask": [1, 1, 1, 1, 1],
+            "logp": [-0.1, -0.2, -0.3, -0.4, -0.5],
+            "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
+            "topk_logp": [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]],
+            "distill_reward": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]],
+            "teacher_logp": [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]],
+        }
+        store.insert_batch([traj])
+        loaded = store.load_trajectories(traj["_mcts_query_id"], n_samples=1, as_list=True)
+        assert len(loaded) == 1
+        loaded_traj = loaded[0]
+        assert isinstance(loaded_traj["input_ids"], list)
+        assert isinstance(loaded_traj["logp"], list)
+        assert isinstance(loaded_traj["topk_ids"], list)
+        assert isinstance(loaded_traj["topk_logp"], list)
+        assert isinstance(loaded_traj["distill_reward"], list)
+        assert isinstance(loaded_traj["teacher_logp"], list)
+        assert loaded_traj["input_ids"] == [1, 2, 3, 4, 5]
+        assert loaded_traj["logp"] == [-0.1, -0.2, -0.3, -0.4, -0.5]
+        assert loaded_traj["topk_ids"] == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
+        assert loaded_traj["topk_logp"] == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]]
+        assert loaded_traj["distill_reward"] == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]]
+        assert loaded_traj["teacher_logp"] == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]]
+
     def test_load_trajectories_basic(self):
         store = MCTSTreeStore()
         traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=1.0, query_id="q1")

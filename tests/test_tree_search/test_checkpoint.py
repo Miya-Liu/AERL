@@ -122,3 +122,30 @@ class TestTreeCheckpointManager:
         record = loaded.trajectories["q1"][0]
         assert record.turn_response_starts == [2, 6]
         assert record.turn_response_ends == [4, 8]
+
+    def test_save_and_load_new_fields(self, tmp_path):
+        manager = TreeCheckpointManager(str(tmp_path))
+        store = MCTSTreeStore()
+        # Insert list-based traj with new fields
+        traj = {
+            "input_ids": [1, 2, 3, 4, 5],
+            "loss_mask": [0, 0, 1, 1, 1],
+            "reward": 1.0,
+            "attention_mask": [1, 1, 1, 1, 1],
+            "logp": [-0.1, -0.2, -0.3, -0.4, -0.5],
+            "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
+            "topk_logp": [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]],
+            "distill_reward": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]],
+            "teacher_logp": [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]],
+            "_mcts_query_id": "q1",
+        }
+        store.insert_batch([traj])
+        manager.save(store)
+
+        loaded = manager.load()
+        record = loaded.trajectories["q1"][0]
+        assert record.logp == [-0.1, -0.2, -0.3, -0.4, -0.5]
+        assert record.topk_ids == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
+        assert record.topk_logp == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]]
+        assert record.distill_reward == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]]
+        assert record.teacher_logp == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]]
