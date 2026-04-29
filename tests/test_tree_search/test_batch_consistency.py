@@ -17,7 +17,6 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
-
 from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
 from areal.utils.data import concat_padded_tensors
 
@@ -402,7 +401,9 @@ class TestGPUBatchConsistency:
             for i in range(bs):
                 mask = traj["attention_mask"][i]
                 seqlen = int(mask.sum().item())
-                assert seqlen > 0, "Each trajectory should have at least some valid tokens"
+                assert seqlen > 0, (
+                    "Each trajectory should have at least some valid tokens"
+                )
                 # All non-padded positions should have attention_mask=1
                 assert mask[:seqlen].all()
                 # All padded positions should have attention_mask=0

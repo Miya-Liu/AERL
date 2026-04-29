@@ -14,7 +14,7 @@ discarded when it only stored assistant marker tokens as prompt_tokens.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -128,9 +128,7 @@ class MCTSTreeStore:
             turn_response_ends=ends,
         )
 
-    def _insert_single(
-        self, query_id: str, record: TrajectoryRecord
-    ) -> int:
+    def _insert_single(self, query_id: str, record: TrajectoryRecord) -> int:
         """Insert a single TrajectoryRecord and assign a seq_id."""
         seq_id = self._next_seq_id
         self._next_seq_id += 1
@@ -225,9 +223,7 @@ class MCTSTreeStore:
             if not self._trained.get(seq_id, False)
         )
 
-    def get_untrained_seq_ids(
-        self, query_id: str, n_samples: int
-    ) -> list[int]:
+    def get_untrained_seq_ids(self, query_id: str, n_samples: int) -> list[int]:
         if query_id not in self._query_seq_ids:
             return []
         result: list[int] = []
@@ -238,9 +234,7 @@ class MCTSTreeStore:
                     break
         return result
 
-    def load_trajectories(
-        self, query_id: str, n_samples: int
-    ) -> list[dict[str, Any]]:
+    def load_trajectories(self, query_id: str, n_samples: int) -> list[dict[str, Any]]:
         """Load untrained trajectories as [1, seq_len] dicts.
 
         Returns stored input_ids/loss_mask directly — no reconstruction.
@@ -268,9 +262,9 @@ class MCTSTreeStore:
                     "versions": torch.tensor(
                         record.versions, dtype=torch.int32
                     ).unsqueeze(0),
-                    "attention_mask": torch.ones(
-                        seq_len, dtype=torch.bool
-                    ).unsqueeze(0),
+                    "attention_mask": torch.ones(seq_len, dtype=torch.bool).unsqueeze(
+                        0
+                    ),
                     "rewards": torch.tensor(
                         [record.reward], dtype=torch.float32
                     ).unsqueeze(0),

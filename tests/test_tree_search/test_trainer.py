@@ -1,8 +1,10 @@
 # tests/test_tree_search/test_trainer.py
-from unittest.mock import MagicMock
 
-from customized_areal.tree_search.config import AdvantageMode, TreeBackupConfig, TreeBackupMode
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+from customized_areal.tree_search.config import (
+    AdvantageMode,
+    TreeBackupConfig,
+    TreeBackupMode,
+)
 from customized_areal.tree_search.trainer import (
     patch_ppo_actor_for_tree_backup,
     unpatch_ppo_actor,

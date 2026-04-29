@@ -1,30 +1,37 @@
 # Clip-Cov PPO Loss Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement covariance-aware PPO clipping loss (`clip_cov`) as a standalone monkey-patch module in `customized_areal/clip_cov/`.
+**Goal:** Implement covariance-aware PPO clipping loss (`clip_cov`) as a standalone
+monkey-patch module in `customized_areal/clip_cov/`.
 
-**Architecture:** A new `customized_areal/clip_cov/` module containing a config dataclass, the core loss function adapted from the PRIME-RL reference, a grpo-compatible wrapper, and a patch function that replaces `PPOActor._ppo_update`. No changes to `areal/`.
+**Architecture:** A new `customized_areal/clip_cov/` module containing a config
+dataclass, the core loss function adapted from the PRIME-RL reference, a grpo-compatible
+wrapper, and a patch function that replaces `PPOActor._ppo_update`. No changes to
+`areal/`.
 
 **Tech Stack:** Python 3.12+ | PyTorch | AReaL (monkey-patching `PPOActor`)
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|---------------|
+| File                                    | Responsibility                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------- |
 | `customized_areal/clip_cov/__init__.py` | Public API: exports `ClipCovConfig`, `patch_ppo_actor_to_use_clip_cov_loss` |
-| `customized_areal/clip_cov/config.py` | `ClipCovConfig` dataclass with clip_cov hyperparameters |
-| `customized_areal/clip_cov/loss.py` | `clip_cov_ppo_actor_loss_fn` (core) + `clip_cov_grpo_loss_fn` (wrapper) |
-| `customized_areal/clip_cov/patch.py` | `patch_ppo_actor_to_use_clip_cov_loss()` — class-level monkey-patch |
-| `tests/test_clip_cov.py` | Unit tests for loss function and patch |
+| `customized_areal/clip_cov/config.py`   | `ClipCovConfig` dataclass with clip_cov hyperparameters                     |
+| `customized_areal/clip_cov/loss.py`     | `clip_cov_ppo_actor_loss_fn` (core) + `clip_cov_grpo_loss_fn` (wrapper)     |
+| `customized_areal/clip_cov/patch.py`    | `patch_ppo_actor_to_use_clip_cov_loss()` — class-level monkey-patch         |
+| `tests/test_clip_cov.py`                | Unit tests for loss function and patch                                      |
 
----
+______________________________________________________________________
 
 ### Task 1: Create ClipCovConfig
 
 **Files:**
+
 - Create: `customized_areal/clip_cov/config.py`
 
 - [ ] **Step 1: Write config.py**
@@ -57,11 +64,12 @@ git add customized_areal/clip_cov/config.py
 git commit -m "feat(clip-cov): add ClipCovConfig dataclass"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Write failing tests for clip_cov_ppo_actor_loss_fn
 
 **Files:**
+
 - Create: `tests/test_clip_cov.py`
 
 - [ ] **Step 1: Write test file with core loss function tests**
@@ -301,7 +309,8 @@ class TestClipCovPatch:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v --tb=short 2>&1 | head -30`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v --tb=short 2>&1 | head -30`
 Expected: FAIL — `ModuleNotFoundError: No module named 'customized_areal.clip_cov'`
 
 - [ ] **Step 3: Commit**
@@ -311,11 +320,12 @@ git add tests/test_clip_cov.py
 git commit -m "test(clip-cov): add failing tests for clip_cov loss"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Implement clip_cov_ppo_actor_loss_fn
 
 **Files:**
+
 - Create: `customized_areal/clip_cov/loss.py`
 
 - [ ] **Step 1: Write the core loss function**
@@ -507,12 +517,14 @@ def clip_cov_grpo_loss_fn(
 
 - [ ] **Step 2: Run core loss tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovPpoActorLossFn -v --tb=short 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovPpoActorLossFn -v --tb=short 2>&1 | tail -20`
 Expected: All `TestClipCovPpoActorLossFn` tests PASS
 
 - [ ] **Step 3: Run wrapper tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovGrpoLossFn -v --tb=short 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovGrpoLossFn -v --tb=short 2>&1 | tail -20`
 Expected: All `TestClipCovGrpoLossFn` tests PASS
 
 - [ ] **Step 4: Commit**
@@ -522,12 +534,14 @@ git add customized_areal/clip_cov/loss.py
 git commit -m "feat(clip-cov): implement clip_cov_ppo_actor_loss_fn and wrapper"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Create patch module and __init__.py
 
 **Files:**
+
 - Create: `customized_areal/clip_cov/patch.py`
+
 - Create: `customized_areal/clip_cov/__init__.py`
 
 - [ ] **Step 1: Write patch.py**
@@ -702,12 +716,14 @@ __all__ = ["ClipCovConfig", "patch_ppo_actor_to_use_clip_cov_loss"]
 
 - [ ] **Step 3: Run patch tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovPatch -v --tb=short 2>&1 | tail -10`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py::TestClipCovPatch -v --tb=short 2>&1 | tail -10`
 Expected: PASS
 
 - [ ] **Step 4: Run all clip_cov tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v --tb=short 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v --tb=short 2>&1 | tail -20`
 Expected: All tests PASS
 
 - [ ] **Step 5: Commit**
@@ -717,17 +733,20 @@ git add customized_areal/clip_cov/patch.py customized_areal/clip_cov/__init__.py
 git commit -m "feat(clip-cov): add PPOActor patch and module init"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Run pre-commit and final verification
 
 **Files:**
+
 - All files in `customized_areal/clip_cov/`
+
 - `tests/test_clip_cov.py`
 
 - [ ] **Step 1: Run pre-commit on all new files**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pre-commit run --files customized_areal/clip_cov/config.py customized_areal/clip_cov/loss.py customized_areal/clip_cov/patch.py customized_areal/clip_cov/__init__.py tests/test_clip_cov.py 2>&1`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pre-commit run --files customized_areal/clip_cov/config.py customized_areal/clip_cov/loss.py customized_areal/clip_cov/patch.py customized_areal/clip_cov/__init__.py tests/test_clip_cov.py 2>&1`
 Expected: All checks PASS (or auto-fix applied)
 
 - [ ] **Step 2: If pre-commit made changes, re-commit the fixes**
@@ -739,10 +758,12 @@ git commit -m "style(clip-cov): pre-commit formatting fixes"
 
 - [ ] **Step 3: Run full test suite one more time**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v 2>&1 | tail -20`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_clip_cov.py -v 2>&1 | tail -20`
 Expected: All tests PASS
 
 - [ ] **Step 4: Verify import works**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.clip_cov import ClipCovConfig, patch_ppo_actor_to_use_clip_cov_loss; print('OK')" 2>&1`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.clip_cov import ClipCovConfig, patch_ppo_actor_to_use_clip_cov_loss; print('OK')" 2>&1`
 Expected: `OK`

@@ -1,29 +1,36 @@
 # Trainer Readability & Logging Improvements Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove replay mode, improve readability, and add tiered logging to `CacheAwarePPOTrainer`.
+**Goal:** Remove replay mode, improve readability, and add tiered logging to
+`CacheAwarePPOTrainer`.
 
-**Architecture:** Clean up `trainer.py` by removing dead replay code, decomposing `__init__` into `_init_tree_components` / `_init_patches`, removing the duplicate `_mark_trajectories_trained` method, and adding INFO/DEBUG logging throughout. Config, tests, and README are updated in sync.
+**Architecture:** Clean up `trainer.py` by removing dead replay code, decomposing
+`__init__` into `_init_tree_components` / `_init_patches`, removing the duplicate
+`_mark_trajectories_trained` method, and adding INFO/DEBUG logging throughout. Config,
+tests, and README are updated in sync.
 
 **Tech Stack:** Python 3.12+, pytest
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Action | Responsibility |
-|---|---|---|
-| `customized_areal/tree_search/config.py` | Modify | Remove `replay` field |
-| `customized_areal/tree_search/trainer.py` | Modify | All changes: replay removal, decomposition, naming, comments, docstrings, logging |
-| `tests/test_tree_search/test_cache_trainer.py` | Modify | Remove replay test classes |
-| `customized_areal/tree_search/README.md` | Modify | Remove replay sections, update component table |
+| File                                           | Action | Responsibility                                                                    |
+| ---------------------------------------------- | ------ | --------------------------------------------------------------------------------- |
+| `customized_areal/tree_search/config.py`       | Modify | Remove `replay` field                                                             |
+| `customized_areal/tree_search/trainer.py`      | Modify | All changes: replay removal, decomposition, naming, comments, docstrings, logging |
+| `tests/test_tree_search/test_cache_trainer.py` | Modify | Remove replay test classes                                                        |
+| `customized_areal/tree_search/README.md`       | Modify | Remove replay sections, update component table                                    |
 
----
+______________________________________________________________________
 
 ### Task 1: Remove `replay` field from `RolloutCacheConfig`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/config.py:25-29`
 
 - [ ] **Step 1: Remove the `replay` field**
@@ -49,12 +56,14 @@ class RolloutCacheConfig:
 
 - [ ] **Step 2: Verify no other code references `cache_config.replay`**
 
-Run: `grep -r "replay" customized_areal/tree_search/ --include="*.py"`
-Expected: Only references in README (handled in Task 5) and possibly the trainer `_replay_mode` guard (handled in Task 2). No `cache_config.replay` references should remain.
+Run: `grep -r "replay" customized_areal/tree_search/ --include="*.py"` Expected: Only
+references in README (handled in Task 5) and possibly the trainer `_replay_mode` guard
+(handled in Task 2). No `cache_config.replay` references should remain.
 
 - [ ] **Step 3: Run existing tests to verify no breakage**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder -v`
 Expected: PASS
 
 - [ ] **Step 4: Commit**
@@ -64,16 +73,18 @@ git add customized_areal/tree_search/config.py
 git commit -m "refactor(tree-search): remove replay field from RolloutCacheConfig"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Remove replay remnants from `trainer.py`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py:146-147,354-375,457`
 
 - [ ] **Step 1: Remove the `_replay_mode` guard in `patch_ppo_actor_for_tree_backup`**
 
-In `trainer.py` line 146-149, remove the replay guard so `record_training_step` always runs:
+In `trainer.py` line 146-149, remove the replay guard so `record_training_step` always
+runs:
 
 ```python
 # BEFORE (lines 146-149):
@@ -90,7 +101,8 @@ In `trainer.py` line 146-149, remove the replay guard so `record_training_step` 
 
 - [ ] **Step 2: Remove the `_mark_trajectories_trained` method (lines 354-375)**
 
-This instance method duplicates the free function `_mark_batch_trained` (lines 42-56). It has no external callers. Delete the entire method:
+This instance method duplicates the free function `_mark_batch_trained` (lines 42-56).
+It has no external callers. Delete the entire method:
 
 ```python
 # DELETE lines 354-375 entirely:
@@ -117,7 +129,8 @@ In `trainer.py` line 457, fix the comment:
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder tests/test_tree_search/test_cache_trainer.py::TestSplitGroupedTrajectories -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder tests/test_tree_search/test_cache_trainer.py::TestSplitGroupedTrajectories -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -127,16 +140,19 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "refactor(tree-search): remove replay remnants and duplicate mark-trained method"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Decompose `__init__` and improve docstrings
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py:267-339`
 
 - [ ] **Step 1: Rewrite `CacheAwarePPOTrainer.__init__` with decomposed helpers**
 
-Replace lines 267-339 of `trainer.py` with the following. This extracts `_init_tree_components` and `_init_patches`, and improves the class docstring and `train()` docstring:
+Replace lines 267-339 of `trainer.py` with the following. This extracts
+`_init_tree_components` and `_init_patches`, and improves the class docstring and
+`train()` docstring:
 
 ```python
 class CacheAwarePPOTrainer(PPOTrainer):
@@ -259,7 +275,8 @@ Replace the docstring (lines 386-390) with:
 
 - [ ] **Step 4: Run tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder tests/test_tree_search/test_cache_trainer.py::TestSplitGroupedTrajectories -v`
+Run:
+`uv run pytest tests/test_tree_search/test_cache_trainer.py::TestCacheAwareBatchBuilder tests/test_tree_search/test_cache_trainer.py::TestSplitGroupedTrajectories -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -269,11 +286,12 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "refactor(tree-search): decompose __init__ into _init_tree_components/_init_patches, improve docstrings"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Add tiered logging and inline comments
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 
 - [ ] **Step 1: Add logging to `_tree_backup_compute_advantages` closure**
@@ -457,9 +475,11 @@ In the `finally` block of `train()`, add a log line after restoring `prepare_bat
                 del self._cache_dataloader_iter
 ```
 
-- [ ] **Step 6: Add inline comment to `patch_ppo_actor_for_tree_backup` about class-level patching**
+- [ ] **Step 6: Add inline comment to `patch_ppo_actor_for_tree_backup` about
+  class-level patching**
 
-Add a comment at the top of `patch_ppo_actor_for_tree_backup` explaining the design choice:
+Add a comment at the top of `patch_ppo_actor_for_tree_backup` explaining the design
+choice:
 
 ```python
 def patch_ppo_actor_for_tree_backup(
@@ -493,8 +513,8 @@ def patch_ppo_actor_for_tree_backup(
 
 - [ ] **Step 7: Run tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: PASS (only TestCacheAwareBatchBuilder and TestSplitGroupedTrajectories remain)
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: PASS
+(only TestCacheAwareBatchBuilder and TestSplitGroupedTrajectories remain)
 
 - [ ] **Step 8: Commit**
 
@@ -503,16 +523,18 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "feat(tree-search): add tiered logging and inline comments to trainer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Remove replay test classes
 
 **Files:**
+
 - Modify: `tests/test_tree_search/test_cache_trainer.py`
 
 - [ ] **Step 1: Delete replay-related test classes**
 
 Remove the following test classes entirely from `test_cache_trainer.py`:
+
 - `TestLoadUntrainedFromTreeStore` (lines 145-244)
 - `TestGenerateFromDataloader` (lines 247-394)
 - `TestReplayPrepareBatchFallback` (lines 397-541)
@@ -520,15 +542,22 @@ Remove the following test classes entirely from `test_cache_trainer.py`:
 - `TestReplayTrainCleanup` (lines 653-663)
 
 Keep:
+
 - `TestCacheAwareBatchBuilder` (lines 22-90)
 - `TestSplitGroupedTrajectories` (lines 92-143)
 
-Also remove the `from customized_areal.tree_search.config import RolloutCacheConfig` import if it was only used by the deleted test classes — but since `TestCacheAwareBatchBuilder` doesn't use it and `TestSplitGroupedTrajectories` doesn't use it, check if `RolloutCacheConfig` is imported and remove it if unused. Actually, looking at the file, `RolloutCacheConfig` is only imported inside individual test methods (e.g., `from customized_areal.tree_search.config import RolloutCacheConfig`), not at the top level. So no top-level import changes needed.
+Also remove the `from customized_areal.tree_search.config import RolloutCacheConfig`
+import if it was only used by the deleted test classes — but since
+`TestCacheAwareBatchBuilder` doesn't use it and `TestSplitGroupedTrajectories` doesn't
+use it, check if `RolloutCacheConfig` is imported and remove it if unused. Actually,
+looking at the file, `RolloutCacheConfig` is only imported inside individual test
+methods (e.g., `from customized_areal.tree_search.config import RolloutCacheConfig`),
+not at the top level. So no top-level import changes needed.
 
 - [ ] **Step 2: Run remaining tests**
 
-Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v`
-Expected: PASS (2 test classes, ~8 test methods)
+Run: `uv run pytest tests/test_tree_search/test_cache_trainer.py -v` Expected: PASS (2
+test classes, ~8 test methods)
 
 - [ ] **Step 3: Commit**
 
@@ -537,11 +566,12 @@ git add tests/test_tree_search/test_cache_trainer.py
 git commit -m "refactor(tree-search): remove replay mode test classes"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Update README to remove replay sections
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/README.md`
 
 - [ ] **Step 1: Remove `replay` row from the config table**
@@ -576,7 +606,8 @@ Around line 189, remove the line:
 
 - [ ] **Step 4: Remove the entire "Training flow — replay mode" section**
 
-Remove from the heading `**Training flow — replay mode**` (around line 204) through the end of the 3-level fallback table (around line 214), including the text:
+Remove from the heading `**Training flow — replay mode**` (around line 204) through the
+end of the 3-level fallback table (around line 214), including the text:
 
 ```
 **Training flow — replay mode** (`RolloutCacheConfig.replay=True`):
@@ -614,7 +645,8 @@ to:
 
 - [ ] **Step 6: Update patching mechanism section**
 
-Around line 239, remove the line about recording training step being skipped during replay:
+Around line 239, remove the line about recording training step being skipped during
+replay:
 
 ```
 1. Records training step order (skipped during replay)
@@ -626,7 +658,8 @@ Change to:
 5. Records training step order
 ```
 
-Also update the surrounding numbered list to renumber properly (currently 1-5, make sure they're sequential).
+Also update the surrounding numbered list to renumber properly (currently 1-5, make sure
+they're sequential).
 
 - [ ] **Step 7: Remove the "Mode 1:" / "Mode 2:" labels**
 
@@ -650,11 +683,13 @@ Around line 384, remove the line:
 │  │  Skipped if tree_store._replay_mode      │                              │
 ```
 
-And change the surrounding Step E box to remove the replay reference. The Step E box should just say "Record training step" without the "Skipped if replay_mode" note.
+And change the surrounding Step E box to remove the replay reference. The Step E box
+should just say "Record training step" without the "Skipped if replay_mode" note.
 
 - [ ] **Step 9: Remove the entire "Mode 2: Replay Training" section**
 
-Remove everything from `### Mode 2: Replay Training (\`replay=True\`)` (around line 409) through the end of that section's ASCII diagram (around line 463).
+Remove everything from `### Mode 2: Replay Training (\`replay=True\`)\` (around line
+409\) through the end of that section's ASCII diagram (around line 463).
 
 - [ ] **Step 10: Commit**
 
@@ -663,24 +698,24 @@ git add customized_areal/tree_search/README.md
 git commit -m "docs(tree-search): remove replay mode from README"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Run full test suite and pre-commit
 
 **Files:**
+
 - All modified files
 
 - [ ] **Step 1: Run pre-commit on all changed files**
 
-Run: `pre-commit run --files customized_areal/tree_search/config.py customized_areal/tree_search/trainer.py tests/test_tree_search/test_cache_trainer.py customized_areal/tree_search/README.md`
+Run:
+`pre-commit run --files customized_areal/tree_search/config.py customized_areal/tree_search/trainer.py tests/test_tree_search/test_cache_trainer.py customized_areal/tree_search/README.md`
 Expected: PASS (formatting/linting)
 
 - [ ] **Step 2: Run the full tree_search test suite**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: PASS
 
 - [ ] **Step 3: Run the batch consistency test suite**
 
-Run: `uv run pytest tests/test_tree_search/test_batch_consistency.py -v`
-Expected: PASS
+Run: `uv run pytest tests/test_tree_search/test_batch_consistency.py -v` Expected: PASS

@@ -45,7 +45,7 @@ except ImportError:
     logger = logging.getLogger("BackendRun")
 
 DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
-DEFAULT_AGENT_ID = "2b211050-6993-4f4c-87f3-2c23b46a96b6"
+DEFAULT_AGENT_ID = "ef383a00-7c6b-4117-a2af-6d3ab9dbb8bb"
 # DEFAULT_AGENT_ID = None
 
 DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
@@ -276,6 +276,7 @@ def _prepare_form_data(
         "prompt": task_description,
         "agent_id": agent_id,
         "skip_check_pending": True,
+        "clean_filename": True,
     }
     if model_name is not None:
         form_data["model_name"] = model_name
@@ -569,9 +570,9 @@ def _extract_final_answer(messages: list[dict]) -> str | None:
             )
 
         if isinstance(content, str):
-            match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
-            if match:
-                return match.group(1).strip()
+            matches = re.findall(r"<answer>(.*?)</answer>", content, re.DOTALL)
+            if matches:
+                return matches[-1].strip()
 
     return None
 
@@ -672,12 +673,15 @@ if __name__ == "__main__":
             gt=gt,
             tags=["debug", "0421"],
             user_id=DEFAULT_USER_ID,
-            model_name="openrouter/qwen/qwen3-235b-a22b",
-            api_key="",
-            base_url="",
+            model_name="openrouter/qwen/qwen3-vl-8b-thinking",
+            api_key=os.environ.get("OPENROUTER_API_KEY"),
+            base_url=os.environ.get(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ),
             refresh_token=DEFAULT_REFRESH_TOKEN,
         )
     )
+
     print("Messages:", messages)
     print("Final boxed answer:", final_answer)
     print("Log path:", log_path)

@@ -4,7 +4,11 @@ from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
 
 
 def _make_traj_for_store(
-    input_ids: list[int], loss_mask: list[int], *, reward: float = 1.0, query_id: str = "q1"
+    input_ids: list[int],
+    loss_mask: list[int],
+    *,
+    reward: float = 1.0,
+    query_id: str = "q1",
 ) -> dict:
     seq_len = len(input_ids)
     return {
@@ -23,7 +27,10 @@ class TestCacheAwareBatchBuilder:
         store = MCTSTreeStore()
         for i in range(4):
             traj = _make_traj_for_store(
-                [1, 2, 3, 4, 5 + i], [0, 0, 1, 1, 1], reward=1.0 / (i + 1), query_id="q1"
+                [1, 2, 3, 4, 5 + i],
+                [0, 0, 1, 1, 1],
+                reward=1.0 / (i + 1),
+                query_id="q1",
             )
             store.insert_batch([traj])
 
@@ -41,7 +48,10 @@ class TestCacheAwareBatchBuilder:
         store = MCTSTreeStore()
         for i in range(2):
             traj = _make_traj_for_store(
-                [1, 2, 3, 4, 5 + i], [0, 0, 1, 1, 1], reward=1.0 / (i + 1), query_id="q1"
+                [1, 2, 3, 4, 5 + i],
+                [0, 0, 1, 1, 1],
+                reward=1.0 / (i + 1),
+                query_id="q1",
             )
             store.insert_batch([traj])
 

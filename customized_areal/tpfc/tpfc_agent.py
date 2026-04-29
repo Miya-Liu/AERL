@@ -5,6 +5,7 @@ This module provides a class-based agent interface consistent with AReaL's
 agentic RL training pattern, wrapping the existing run_backend functionality.
 """
 
+import os
 from typing import Any
 
 from customized_areal.tpfc.backend_run import run_backend
@@ -65,10 +66,8 @@ def tpfc_reward_fn(
 
     # Use default judge model if not specified
     model_name = "z-ai/glm-5.1"
-    base_url = "https://openrouter.ai/api/v1"
-    api_key = (
-        "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"
-    )
+    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
 
     try:
         result = compute_reward(
@@ -207,7 +206,7 @@ class TPFCAgent:
                 gt=gt,
                 tags=tags,
                 user_id=self.user_id,
-                model_name=self.model_name,
+                model_name="openrouter/qwen/qwen3-vl-8b-thinking",
                 base_url=base_url,
                 api_key=api_key,
             )

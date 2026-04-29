@@ -36,16 +36,11 @@ class TreeCheckpointManager:
         metadata = {
             "next_seq_id": tree_store._next_seq_id,
             "seq_id_to_key": {
-                str(k): [v[0], v[1]]
-                for k, v in tree_store._seq_id_to_key.items()
+                str(k): [v[0], v[1]] for k, v in tree_store._seq_id_to_key.items()
             },
-            "query_seq_ids": {
-                k: v for k, v in tree_store._query_seq_ids.items()
-            },
+            "query_seq_ids": {k: v for k, v in tree_store._query_seq_ids.items()},
             "visit_counts": {str(k): v for k, v in tree_store._visit_counts.items()},
-            "total_values": {
-                str(k): v for k, v in tree_store._total_values.items()
-            },
+            "total_values": {str(k): v for k, v in tree_store._total_values.items()},
             "q_values": {str(k): v for k, v in tree_store._q_values.items()},
             "trained": {str(k): v for k, v in tree_store._trained.items()},
             "rewards": {str(k): v for k, v in tree_store._rewards.items()},
@@ -64,12 +59,8 @@ class TreeCheckpointManager:
             int(k): (v[0], v[1]) for k, v in metadata["seq_id_to_key"].items()
         }
         store._query_seq_ids = metadata["query_seq_ids"]
-        store._visit_counts = {
-            int(k): v for k, v in metadata["visit_counts"].items()
-        }
-        store._total_values = {
-            int(k): v for k, v in metadata["total_values"].items()
-        }
+        store._visit_counts = {int(k): v for k, v in metadata["visit_counts"].items()}
+        store._total_values = {int(k): v for k, v in metadata["total_values"].items()}
         store._q_values = {int(k): v for k, v in metadata["q_values"].items()}
         store._trained = {int(k): v for k, v in metadata["trained"].items()}
         store._rewards = {int(k): v for k, v in metadata["rewards"].items()}

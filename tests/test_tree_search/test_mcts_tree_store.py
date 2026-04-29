@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-import torch
 from typing import Any
+
+import torch
 
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,

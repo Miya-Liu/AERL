@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import torch
-
 from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
@@ -160,8 +158,7 @@ def patch_ppo_actor_for_tree_backup(
                     restored += 1
             if restored:
                 logger.debug(
-                    f"Restored tree advantages for {restored} trajectories "
-                    f"(mode=TREE)"
+                    f"Restored tree advantages for {restored} trajectories (mode=TREE)"
                 )
 
         return result
@@ -428,8 +425,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                     traj["_tree_advantages"] = traj["advantages"].clone()
                     traj["_tree_returns"] = traj["returns"].clone()
             logger.debug(
-                f"Computed tree advantages for {len(trajs)} trajectories "
-                f"(mode=TREE)"
+                f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
             )
 
         # Mark trajectories as trained so they won't be loaded from cache again

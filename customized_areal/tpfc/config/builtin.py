@@ -17,14 +17,13 @@ TPFC_CONFIG = {
             "builtin": [
                 {"type": "tool", "name": t, "enabled": True}
                 for t in [
-                    "sb_vision_tool",
                     "sb_shell_tool",
-                    "sb_upload_file_tool",
                     "searching_tool",
                     "document_reading_tool",
                     "sb_files_tool",
                     "audio_analysis_tool",
                     "video_analysis_tool",
+                    "image_analysis_tool",
                 ]
             ],
             "mcp": [],
