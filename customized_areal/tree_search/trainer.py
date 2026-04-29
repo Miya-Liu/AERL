@@ -526,9 +526,13 @@ class CacheAwarePPOTrainer(PPOTrainer):
             for traj in trajs:
                 if "advantages" in traj:
                     adv = traj["advantages"]
-                    traj["_tree_advantages"] = adv.clone() if hasattr(adv, "clone") else adv
+                    traj["_tree_advantages"] = (
+                        adv.clone() if hasattr(adv, "clone") else adv
+                    )
                     ret = traj["returns"]
-                    traj["_tree_returns"] = ret.clone() if hasattr(ret, "clone") else ret
+                    traj["_tree_returns"] = (
+                        ret.clone() if hasattr(ret, "clone") else ret
+                    )
             logger.debug(
                 f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
             )
