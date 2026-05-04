@@ -13,7 +13,7 @@ import pathlib
 import sys
 
 # Add project root to path so we can import areal
-project_root = pathlib.Path(__file__).parent.parent.parent.absolute()
+project_root = pathlib.Path(__file__).parent.parent.parent.parent.absolute()
 sys.path.insert(0, str(project_root))
 
 from customized_areal.tpfc.tpfc_config import TPFCConfig

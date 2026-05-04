@@ -38,10 +38,8 @@ def main():
             "user_id": "62ec5137-d121-4c8c-b175-ee165bdf38e4",
             "agent_id": os.environ.get("main_agent_id", ""),
             "backend_mode": True,
-            "base_url": "http://10.254.245.58:8443/service-large-544-1763113682810/llm/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "xp77r4bxFv81bPcrA7kK6j77HtDrmFcl7Knm7M68FPrkzFWnzAclZ2jqR2kThPaarChv786dkpTS7Za0XpXw7wL7bDl77181LQrw7g5j7kC8MxkZ6RGnkwG728TS778V",  # Set your API key here or via CLI
-            # "base_url": "http://10.254.245.58:8443/service-large-544-1763113682810/llm/v1",  # Set your proxy base URL here or via CLI
-            # "api_key": "xp77r4bxFv81bPcrA7kK6j77HtDrmFcl7Knm7M68FPrkzFWnzAclZ2jqR2kThPaarChv786dkpTS7Za0XpXw7wL7bDl77181LQrw7g5j7kC8MxkZ6RGnkwG728TS778V",   # Set your API key here or via CLI
+            "base_url": os.getenv("PROXY_BASE_URL", ""),
+            "api_key": os.getenv("PROXY_API_KEY", ""),
         }
     )
 

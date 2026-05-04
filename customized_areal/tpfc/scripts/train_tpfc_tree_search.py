@@ -26,24 +26,9 @@ from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 
 from areal.api.cli_args import load_expr_config
 from areal.utils import logging
-from areal.utils.dynamic_import import import_from_string
 from areal.utils.hf_utils import load_hf_tokenizer
 
 logger = logging.getLogger("TrainTPFCTreeSearch")
-
-
-def _resolve_agent(workflow_path: str):
-    """Resolve workflow config to an agent instance for OpenAIProxyWorkflow."""
-    try:
-        cls = import_from_string(workflow_path)
-    except (ImportError, AttributeError):
-        logger.warning("Could not import workflow=%s", workflow_path)
-        return None
-
-    if isinstance(cls, type) and hasattr(cls, "run"):
-        logger.info("Resolved workflow=%s as agent class, instantiating", workflow_path)
-        return cls()
-    return None
 
 
 def main(args: list[str] | None = None) -> None:
@@ -52,7 +37,7 @@ def main(args: list[str] | None = None) -> None:
 
     logger.info("Starting TPFC tree search training")
 
-    config, overrides = load_expr_config(args, TPFCConfig)
+    config, _ = load_expr_config(args, TPFCConfig)
     tokenizer = load_hf_tokenizer(config.tokenizer_path)
 
     # Load TPFC dataset
@@ -73,13 +58,25 @@ def main(args: list[str] | None = None) -> None:
     logger.info("Loaded %d training samples", len(train_dataset))
     logger.info("Loaded %d validation samples", len(valid_dataset))
 
-    # Resolve agent from workflow config
-    agent = _resolve_agent(config.workflow)
-
     # Build cache / tree backup configs from overrides
     cache_dir = getattr(config, "cache_dir", "")
+    if not cache_dir:
+        raise ValueError(
+            "cache_dir must be set when using tree search training. "
+            "Pass it as a CLI override, e.g. +cache_dir=/path/to/cache"
+        )
+
     n_samples = config.gconfig.n_samples
-    assistant_marker = getattr(config, "assistant_marker", "")
+
+    # Allow tree backup mode to be overridden via config; default to CROSS_TRAINING
+    tree_mode_str = getattr(config, "tree_backup_mode", "cross_training")
+    try:
+        tree_mode = TreeBackupMode(tree_mode_str)
+    except ValueError:
+        raise ValueError(
+            f"Invalid tree_backup_mode={tree_mode_str}. "
+            f"Must be one of: {[m.value for m in TreeBackupMode]}"
+        ) from None
 
     cache_config = RolloutCacheConfig(
         cache_dir=cache_dir,
@@ -88,17 +85,15 @@ def main(args: list[str] | None = None) -> None:
     )
 
     tree_backup_config = TreeBackupConfig(
-        mode=TreeBackupMode.CROSS_TRAINING,
-        assistant_marker=assistant_marker,
+        mode=tree_mode,
         checkpoint_dir=cache_dir,
     )
 
     logger.info(
-        "Cache config: dir=%s, n_samples=%d, tree_mode=%s, agent=%s",
+        "Cache config: dir=%s, n_samples=%d, tree_mode=%s",
         cache_dir,
         n_samples,
         tree_backup_config.mode.value,
-        type(agent).__name__ if agent else "(none)",
     )
 
     # Build workflow kwargs

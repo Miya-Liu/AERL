@@ -3,6 +3,10 @@ trial_name: trial0
 
 seed: 1
 enable_offload: true
+
+# Tree search / cache configuration
+cache_dir: customized_areal/tpfc/data/tree_cache
+tree_backup_mode: cross_training
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
@@ -58,7 +62,7 @@ rollout:
     engine_max_tokens: 20000
 
 gconfig:
-  n_samples: 8
+  n_samples: 2
   min_new_tokens: 0
   max_new_tokens: 1024
   max_tokens: 20000

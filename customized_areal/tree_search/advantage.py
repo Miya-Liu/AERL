@@ -48,39 +48,58 @@ class TreeAdvantageComputer:
         advantages = mask.float() * normalized_q
         return advantages
 
+    @staticmethod
+    def _get_seq_len(input_ids) -> int:
+        """Get sequence length from tensor [..., seq_len] or list."""
+        if isinstance(input_ids, list):
+            return len(input_ids)
+        return input_ids.shape[-1]
+
+    @staticmethod
+    def _get_batch_dim(input_ids) -> int:
+        """Get batch dimension: shape[0] for tensor, 1 for list."""
+        if isinstance(input_ids, list):
+            return 1
+        if input_ids.dim() > 1:
+            return input_ids.shape[0]
+        return 1
+
     def compute(self, trajectories: list[dict[str, Any]]) -> None:
         """Replace GAE advantages with tree Q-values. Mutates trajectories in-place.
 
-        Handles both individual trajectory dicts (shape [1, seq_len]) and
-        grouped trajectory dicts (shape [group_size, seq_len]). For grouped
-        dicts, ``_mcts_seq_ids`` (list of seq_ids) is used to look up
-        Q-values per sample.
+        Handles list-based trajectory dicts (from new rollouts), tensor
+        trajectory dicts with shape [1, seq_len], and grouped tensor dicts
+        with shape [group_size, seq_len]. For grouped dicts,
+        ``_mcts_seq_ids`` (list of seq_ids) is used to look up Q-values per
+        sample.
 
         After inserting all trajectories, performs per-query GRPO normalization
         of Q-values so that episodes within the same query group have
         zero-mean unit-variance advantages.
         """
-        # Collect all (query_id, seq_id) pairs for GRPO normalization
-        query_groups: dict[str, list[int]] = {}
+        # Collect unique (query_id, seq_id) pairs for GRPO normalization.
+        # Use dict to deduplicate: per-turn cached trajectories may share
+        # the same seq_id across turns of the same episode.
+        query_seq_sets: dict[str, dict[int, None]] = {}
 
         for traj in trajectories:
             query_id = traj.get("_mcts_query_id")
             if query_id is None:
                 continue
+            qset = query_seq_sets.setdefault(query_id, {})
             if "_mcts_seq_ids" in traj:
                 for seq_id in traj["_mcts_seq_ids"]:
-                    query_groups.setdefault(query_id, []).append(seq_id)
+                    qset[seq_id] = None
             elif "_mcts_seq_id" in traj:
-                query_groups.setdefault(query_id, []).append(traj["_mcts_seq_id"])
+                qset[traj["_mcts_seq_id"]] = None
 
-        # Per-query GRPO normalization
-        for query_id, seq_ids in query_groups.items():
+        # Per-query GRPO normalization (deduplicated seq_ids)
+        for query_id, seq_id_set in query_seq_sets.items():
+            seq_ids = list(seq_id_set)
             q_values = [self.tree_store._rewards.get(sid, 0.0) for sid in seq_ids]
             if len(q_values) < 2:
-                # Single episode: no normalization needed
-                self.tree_store._normalized_advantages[seq_ids[0]] = (
-                    q_values[0] if q_values else 0.0
-                )
+                if seq_ids:
+                    self.tree_store._normalized_advantages[seq_ids[0]] = q_values[0]
                 continue
             mean_q = sum(q_values) / len(q_values)
             var_q = sum((q - mean_q) ** 2 for q in q_values) / len(q_values)
@@ -96,25 +115,21 @@ class TreeAdvantageComputer:
             if query_id is None:
                 continue
             input_ids = traj["input_ids"]
+            seq_len = self._get_seq_len(input_ids)
 
             if "_mcts_seq_ids" in traj:
-                # Grouped trajectory — compute per-sample advantages
                 seq_ids = traj["_mcts_seq_ids"]
                 all_advantages = []
                 for seq_id in seq_ids:
-                    seq_len = input_ids.shape[1]
                     adv = self._compute_single(traj, query_id, seq_id, seq_len)
                     all_advantages.append(adv)
                 advantages = torch.stack(all_advantages, dim=0)
             elif "_mcts_seq_id" in traj:
-                # Single trajectory
                 seq_id = traj["_mcts_seq_id"]
-                seq_len = input_ids.shape[-1]
                 advantages = self._compute_single(traj, query_id, seq_id, seq_len)
-                if input_ids.dim() > 1:
+                if self._get_batch_dim(input_ids) > 1:
                     advantages = advantages.unsqueeze(0)
             else:
-                # No tree metadata — skip (shouldn't happen if insert_batch ran)
                 continue
 
             traj["advantages"] = advantages

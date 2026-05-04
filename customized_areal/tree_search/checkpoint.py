@@ -44,6 +44,10 @@ class TreeCheckpointManager:
             "q_values": {str(k): v for k, v in tree_store._q_values.items()},
             "trained": {str(k): v for k, v in tree_store._trained.items()},
             "rewards": {str(k): v for k, v in tree_store._rewards.items()},
+            "normalized_advantages": {
+                str(k): v for k, v in tree_store._normalized_advantages.items()
+            },
+            "turn_nodes": tree_store._turn_nodes,
         }
         with open(os.path.join(self.save_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f)
@@ -54,16 +58,24 @@ class TreeCheckpointManager:
         with open(os.path.join(self.save_dir, "metadata.json")) as f:
             metadata = json.load(f)
 
-        store._next_seq_id = metadata["next_seq_id"]
+        store._next_seq_id = metadata.get("next_seq_id", 0)
         store._seq_id_to_key = {
-            int(k): (v[0], v[1]) for k, v in metadata["seq_id_to_key"].items()
+            int(k): (v[0], v[1]) for k, v in metadata.get("seq_id_to_key", {}).items()
         }
-        store._query_seq_ids = metadata["query_seq_ids"]
-        store._visit_counts = {int(k): v for k, v in metadata["visit_counts"].items()}
-        store._total_values = {int(k): v for k, v in metadata["total_values"].items()}
-        store._q_values = {int(k): v for k, v in metadata["q_values"].items()}
-        store._trained = {int(k): v for k, v in metadata["trained"].items()}
-        store._rewards = {int(k): v for k, v in metadata["rewards"].items()}
+        store._query_seq_ids = metadata.get("query_seq_ids", {})
+        store._visit_counts = {
+            int(k): v for k, v in metadata.get("visit_counts", {}).items()
+        }
+        store._total_values = {
+            int(k): v for k, v in metadata.get("total_values", {}).items()
+        }
+        store._q_values = {int(k): v for k, v in metadata.get("q_values", {}).items()}
+        store._trained = {int(k): v for k, v in metadata.get("trained", {}).items()}
+        store._rewards = {int(k): v for k, v in metadata.get("rewards", {}).items()}
+        store._normalized_advantages = {
+            int(k): v for k, v in metadata.get("normalized_advantages", {}).items()
+        }
+        store._turn_nodes = metadata.get("turn_nodes", {})
 
         # Load per-query trajectory records
         for filename in os.listdir(self.save_dir):

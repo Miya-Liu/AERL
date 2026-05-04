@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
@@ -40,6 +42,43 @@ from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
 
 logger = logging.getLogger("TreeBackupPPOTrainer")
+
+
+def _is_list_traj(traj: dict[str, Any]) -> bool:
+    """Check if a trajectory dict uses Python lists instead of tensors."""
+    return isinstance(traj.get("input_ids"), list)
+
+
+def _list_dict_to_tensor(traj: dict[str, Any]) -> dict[str, Any]:
+    """Convert a list-based trajectory dict to tensor format [1, seq_len].
+
+    The downstream PPO pipeline (concat_batch → _compute_advantages →
+    compute_logp, etc.) expects tensor dicts. List-based dicts from new
+    rollouts must be converted before returning from prepare_batch.
+    """
+    seq_len = len(traj["input_ids"])
+
+    result: dict[str, Any] = {
+        "input_ids": torch.tensor(traj["input_ids"], dtype=torch.int32).unsqueeze(0),
+        "loss_mask": torch.tensor(traj["loss_mask"], dtype=torch.int32).unsqueeze(0),
+        "logprobs": torch.tensor(traj["logprobs"], dtype=torch.float32).unsqueeze(0),
+        "versions": torch.tensor(traj["versions"], dtype=torch.int32).unsqueeze(0),
+        "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
+        "rewards": torch.tensor([traj.get("reward", 0.0)], dtype=torch.float32),
+    }
+
+    # Carry over metadata keys
+    for key in (
+        "_mcts_query_id",
+        "_mcts_seq_id",
+        "_mcts_seq_ids",
+        "_tree_advantages",
+        "_tree_returns",
+    ):
+        if key in traj:
+            result[key] = traj[key]
+
+    return result
 
 
 def _mark_batch_trained(
@@ -511,8 +550,13 @@ class CacheAwarePPOTrainer(PPOTrainer):
             # TreeSearchWorkflowExecutor already returns flat list of per-episode dicts
             trajs = new_trajs if new_trajs else []
 
-            n_new = sum(len(t["input_ids"]) for t in trajs) if trajs else 0
-            logger.info(f"Cache-aware rollout: 0 cached, {n_new} newly generated")
+            logger.info(f"Cache-aware rollout: 0 cached, {len(trajs)} newly generated")
+
+        if not trajs:
+            logger.warning(
+                "No trajectories available for this step; returning empty batch"
+            )
+            return []
 
         # --- Tree operations (while _mcts_query_id / _mcts_seq_id are available) ---
 
@@ -547,6 +591,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
             logger.debug("Saved MCTS tree checkpoint after tree operations")
 
         # --- End tree operations ---
+
+        # Convert list-based dicts to tensor dicts for the downstream PPO pipeline.
+        # New rollouts produce list-based per-episode dicts; cached trajectories
+        # are already tensor-based per-turn dicts.
+        trajs = [_list_dict_to_tensor(t) if _is_list_traj(t) else t for t in trajs]
 
         return trajs
 

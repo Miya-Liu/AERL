@@ -19,6 +19,16 @@ from typing import Any
 
 import torch
 
+from areal.infra.rpc.rtensor import RTensor
+
+
+def _materialize_rtensors(traj: dict[str, Any]) -> dict[str, Any]:
+    """Convert any RTensor values in a trajectory dict to local torch.Tensors."""
+    for key, val in traj.items():
+        if isinstance(val, RTensor):
+            traj[key] = val.to_local()
+    return traj
+
 
 @dataclass
 class TrajectoryRecord:
@@ -254,6 +264,9 @@ class MCTSTreeStore:
         Trajectories that already carry _mcts_seq_id or _mcts_seq_ids
         are skipped (loaded from cache).
         """
+        # Materialize any RTensor values to local tensors (from RPC transfer)
+        trajectories = [_materialize_rtensors(t) for t in trajectories]
+
         # Separate per-turn dicts, list dicts, and legacy-style dicts
         per_turn_dicts: list[dict[str, Any]] = []
         list_dicts: list[dict[str, Any]] = []
@@ -324,9 +337,11 @@ class MCTSTreeStore:
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
         ):
             if not query_id:
-                query_id = _get_query_id(next(group_iter))
-
-            turns = list(group_iter)
+                turns = list(group_iter)
+                if turns:
+                    query_id = _get_query_id(turns[0])
+            else:
+                turns = list(group_iter)
             # Sort turns within the episode by turn_idx_in_episode
             turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
 

@@ -38,8 +38,10 @@ def main():
             "user_id": "62ec5137-d121-4c8c-b175-ee165bdf38e4",
             "agent_id": os.environ.get("main_agent_id", ""),
             "backend_mode": True,
-            "base_url": "https://openrouter.ai/api/v1",  # Set your proxy base URL here or via CLI
-            "api_key": "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",  # Set your API key here or via CLI
+            "base_url": os.getenv(
+                "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+            ),
+            "api_key": os.getenv("OPENROUTER_API_KEY", ""),
         }
     )
 

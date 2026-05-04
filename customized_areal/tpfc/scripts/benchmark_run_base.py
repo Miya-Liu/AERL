@@ -12,8 +12,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import aiofiles
 import dotenv
-from typing_extensions import TypedDict
 
 dotenv.load_dotenv()
 import openai
@@ -496,8 +496,9 @@ class BenchmarkEvaluator(ABC):
         try:
             log_file = Path(log_file_path)
             # Read existing data
-            with open(log_file, encoding="utf-8") as f:
-                log_data = json.load(f)
+            async with aiofiles.open(log_file, encoding="utf-8") as f:
+                content = await f.read()
+                log_data = json.loads(content)
 
             # Update with evaluation result
             log_data["llm_as_judge_result"] = evaluation_result
@@ -505,8 +506,8 @@ class BenchmarkEvaluator(ABC):
             log_data["ground_truth"] = ground_truth
             # Write to a temporary file and then atomically replace
             temp_log_file = log_file.with_suffix(f"{log_file.suffix}.tmp")
-            with open(temp_log_file, "w", encoding="utf-8") as f:
-                json.dump(log_data, f, indent=2)
+            async with aiofiles.open(temp_log_file, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(log_data, indent=2))
 
             os.replace(temp_log_file, log_file)
             print(f"    Updated log file {log_file.name} with evaluation result.")
