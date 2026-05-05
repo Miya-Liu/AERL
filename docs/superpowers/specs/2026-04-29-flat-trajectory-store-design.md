@@ -1,29 +1,27 @@
 # Flat Trajectory Store Design
 
-Replace the `TrieNode`-based MCTS tree with a flat `TrajectoryRecord` store.
-The trie structure cannot correctly reconstruct multi-turn trajectories with
-variable prefixes. The flat store keeps the complete `input_ids` and
-`loss_mask` from the rollout, eliminating reconstruction bugs.
+Replace the `TrieNode`-based MCTS tree with a flat `TrajectoryRecord` store. The trie
+structure cannot correctly reconstruct multi-turn trajectories with variable prefixes.
+The flat store keeps the complete `input_ids` and `loss_mask` from the rollout,
+eliminating reconstruction bugs.
 
 ## Motivation
 
 The current `TrieNode` trie has two fatal problems for multi-turn, variable-prefix
 trajectories:
 
-1. **Lost prompt context**: `turn_splitter` stores only the assistant marker tokens
-   as `prompt_tokens` (e.g., `<|im_start|>assistant` = 3 tokens). The full
-   conversation prefix before each marker is discarded. Path reconstruction
-   produces `[marker][resp1][marker][resp2]` — missing system prompts and user
-   questions.
+1. **Lost prompt context**: `turn_splitter` stores only the assistant marker tokens as
+   `prompt_tokens` (e.g., `<|im_start|>assistant` = 3 tokens). The full conversation
+   prefix before each marker is discarded. Path reconstruction produces
+   `[marker][resp1][marker][resp2]` — missing system prompts and user questions.
 
-2. **Broken `loss_mask`**: `load_trajectories` computes `loss_mask` from
-   `prompt_len_total` (sum of marker lengths). For a 3-turn trajectory with
-   3-token markers, `loss_mask=1` starts at position 9, but actual response
-   tokens start much earlier. Most response tokens are incorrectly masked as
-   prompt.
+1. **Broken `loss_mask`**: `load_trajectories` computes `loss_mask` from
+   `prompt_len_total` (sum of marker lengths). For a 3-turn trajectory with 3-token
+   markers, `loss_mask=1` starts at position 9, but actual response tokens start much
+   earlier. Most response tokens are incorrectly masked as prompt.
 
-Since trie deduplication is not required (user confirmed flat storage is
-acceptable), the trie adds complexity without benefit.
+Since trie deduplication is not required (user confirmed flat storage is acceptable),
+the trie adds complexity without benefit.
 
 ## Design
 
@@ -41,9 +39,9 @@ class TrajectoryRecord:
     turn_response_ends: list[int]    # from loss_mask 1→0 transitions
 ```
 
-Each record stores the **complete, unpadded** sequence as produced by the rollout.
-Turn boundaries are derived from `loss_mask` transitions at insert time — no
-`turn_splitter` or assistant marker detection needed.
+Each record stores the **complete, unpadded** sequence as produced by the rollout. Turn
+boundaries are derived from `loss_mask` transitions at insert time — no `turn_splitter`
+or assistant marker detection needed.
 
 This works for both AReaL export styles:
 
@@ -65,11 +63,11 @@ class MCTSTreeStore:
     _rewards: dict[int, float]       # seq_id → reward
 ```
 
-MCTS stats are keyed by `seq_id` (int) instead of `(query_id, id(node))`. This
-survives serialization directly — no `rebuild_mcts_stats` needed.
+MCTS stats are keyed by `seq_id` (int) instead of `(query_id, id(node))`. This survives
+serialization directly — no `rebuild_mcts_stats` needed.
 
-**Removed APIs**: `start_sequence`, `add_turn`, `finish_sequence` (cursor-based
-trie building), `insert_trajectory` (single-trajectory convenience),
+**Removed APIs**: `start_sequence`, `add_turn`, `finish_sequence` (cursor-based trie
+building), `insert_trajectory` (single-trajectory convenience),
 `_split_metadata_to_turns`, `build_training_history`, `load_trajectory_by_seq_id`.
 
 **Retained helper methods** (used by `_CacheAwareBatchBuilder`):
@@ -92,8 +90,8 @@ def get_untrained_seq_ids(self, query_id: str, n_samples: int) -> list[int]:
     return result
 ```
 
-**Simplified `_backup`**: No node walk. Just increment visit count and update
-Q-value for the seq_id.
+**Simplified `_backup`**: No node walk. Just increment visit count and update Q-value
+for the seq_id.
 
 ```python
 def _backup(self, seq_id: int, reward: float) -> None:
@@ -134,8 +132,8 @@ def _find_turn_boundaries(loss_mask: list[int]) -> tuple[list[int], list[int]]:
     return starts, ends
 ```
 
-No assistant marker detection. Works purely from the `loss_mask` that AReaL's
-rollout pipeline already computes correctly for both export styles.
+No assistant marker detection. Works purely from the `loss_mask` that AReaL's rollout
+pipeline already computes correctly for both export styles.
 
 ### Advantage Computation
 
@@ -158,8 +156,8 @@ def get_prompt_mask(self, query_id: str, seq_id: int) -> torch.Tensor:
     return torch.tensor(record.loss_mask, dtype=torch.bool)
 ```
 
-Same Q-value for all turns within a trajectory. Per-turn differentiation
-requires trie sharing, which we've removed.
+Same Q-value for all turns within a trajectory. Per-turn differentiation requires trie
+sharing, which we've removed.
 
 ### load_trajectories
 
@@ -219,30 +217,30 @@ No padding in stored data (stripped at insert), so `attention_mask` is all ones.
 }
 ```
 
-No `rebuild_mcts_stats` — stats keyed by `seq_id` serialize directly.
-Old `TrieNode`-based checkpoints are incompatible; they are discarded.
+No `rebuild_mcts_stats` — stats keyed by `seq_id` serialize directly. Old
+`TrieNode`-based checkpoints are incompatible; they are discarded.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `mcts_tree_store.py` | Rewrite: flat `TrajectoryRecord` store |
-| `trie_node.py` | Delete entirely |
-| `turn_splitter.py` | Delete entirely |
-| `advantage.py` | Minor: adapt to new store internals |
-| `checkpoint.py` | Rewrite: new serialization format |
-| `config.py` | Remove `assistant_marker` from `TreeBackupConfig` |
-| `trainer.py` | Remove `make_turn_splitter` call, `assistant_marker` usage |
+| File                 | Change                                                     |
+| -------------------- | ---------------------------------------------------------- |
+| `mcts_tree_store.py` | Rewrite: flat `TrajectoryRecord` store                     |
+| `trie_node.py`       | Delete entirely                                            |
+| `turn_splitter.py`   | Delete entirely                                            |
+| `advantage.py`       | Minor: adapt to new store internals                        |
+| `checkpoint.py`      | Rewrite: new serialization format                          |
+| `config.py`          | Remove `assistant_marker` from `TreeBackupConfig`          |
+| `trainer.py`         | Remove `make_turn_splitter` call, `assistant_marker` usage |
 
 ## Edge Cases
 
 1. **`loss_mask` all zeros**: `_find_turn_boundaries` returns empty lists.
    `get_advantages` returns all-zeros. Log a warning.
-2. **`loss_mask` all ones**: Single turn, no prompt. `starts=[0]`, `ends=[seq_len]`.
+1. **`loss_mask` all ones**: Single turn, no prompt. `starts=[0]`, `ends=[seq_len]`.
    Valid.
-3. **`concat` mode, strict prefix broken**: AReaL masks out parent turns
-   (`loss_mask=0`). Only last turn's response has `loss_mask=1`. One turn
-   boundary found. Correct.
-4. **Padding**: Stripped at insert via `attention_mask.sum()`. No padding in
-   stored records.
-5. **Checkpoint migration**: Old checkpoints discarded. Cache is regeneratable.
+1. **`concat` mode, strict prefix broken**: AReaL masks out parent turns
+   (`loss_mask=0`). Only last turn's response has `loss_mask=1`. One turn boundary
+   found. Correct.
+1. **Padding**: Stripped at insert via `attention_mask.sum()`. No padding in stored
+   records.
+1. **Checkpoint migration**: Old checkpoints discarded. Cache is regeneratable.

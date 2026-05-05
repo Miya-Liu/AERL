@@ -38,6 +38,7 @@ from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
 from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor
 
 from areal import PPOTrainer
+from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
 from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
 
@@ -67,15 +68,10 @@ def _list_dict_to_tensor(traj: dict[str, Any]) -> dict[str, Any]:
         "rewards": torch.tensor([traj.get("reward", 0.0)], dtype=torch.float32),
     }
 
-    # Carry over metadata keys
-    for key in (
-        "_mcts_query_id",
-        "_mcts_seq_id",
-        "_mcts_seq_ids",
-        "_tree_advantages",
-        "_tree_returns",
-    ):
-        if key in traj:
+    # Carry over all remaining keys unchanged (metadata, tree search fields,
+    # response-only fields like topk_ids, logp, teacher_logp, etc.)
+    for key in traj:
+        if key not in result:
             result[key] = traj[key]
 
     return result
@@ -103,47 +99,18 @@ def _mark_batch_trained(
         logger.debug(f"Marked {count} trajectories as trained")
 
 
-def _patch_wrap_openai_agent_for_query_id(rollout_engine: Any) -> None:
-    """Patch the engine's _wrap_openai_agent to return QueryIDProxyWorkflow.
+def _get_underlying_engine(rollout_engine: Any) -> Any:
+    """Unwrap engine decorators (e.g. RemoteSGLangEngine) to reach RemoteInfEngine.
 
-    QueryIDProxyWorkflow subclasses OpenAIProxyWorkflow and overrides
-    arun_episode to inject data["query_id"] into the trajectory dict as
-    ``_mcts_query_id``. This is needed because the async rollout pipeline
-    shuffles results, so we cannot match queries to trajectories by position,
-    and concat_padded_tensors drops non-tensor keys.
-
-    Args:
-        rollout_engine: The rollout inference engine (e.g. RemoteInfEngine)
-            that has the ``_wrap_openai_agent`` method.
+    Some engine classes like RemoteSGLangEngine are thin wrappers that delegate
+    to an internal ``_engine`` (RemoteInfEngine).  Patches must target the
+    underlying engine so that ``_wrap_openai_agent`` and ``workflow_executor``
+    are patched at the right level.
     """
     engine = rollout_engine
-    if not hasattr(engine, "_wrap_openai_agent"):
-        logger.warning(
-            "Engine has no _wrap_openai_agent method; "
-            "query_id injection will not be available"
-        )
-        return
-
-    original_wrap = engine._wrap_openai_agent
-
-    def _query_id_wrap(agent: Any, proxy_addr: str):
-        from areal.api.cli_args import OpenAIProxyConfig
-
-        openai_cfg = engine.config.openai or OpenAIProxyConfig()
-        return QueryIDProxyWorkflow(
-            mode=openai_cfg.mode,
-            agent=agent,
-            proxy_addr=proxy_addr,
-            admin_api_key=openai_cfg.admin_api_key,
-            discount=openai_cfg.turn_discount,
-            export_style=openai_cfg.export_style,
-            subproc_max_workers=openai_cfg.subproc_max_workers,
-            proxy_gateway_addr=getattr(engine, "_proxy_gateway_addr", None),
-        )
-
-    engine._wrap_openai_agent = _query_id_wrap
-    engine._original_wrap_openai_agent = original_wrap
-    logger.info("Patched _wrap_openai_agent to use QueryIDProxyWorkflow")
+    if not hasattr(engine, "_wrap_openai_agent") and hasattr(engine, "_engine"):
+        engine = engine._engine
+    return engine
 
 
 def _patch_wrap_openai_agent_for_tree_search(
@@ -160,7 +127,7 @@ def _patch_wrap_openai_agent_for_tree_search(
         rollout_engine: The rollout inference engine (e.g. RemoteInfEngine).
         group_size: Number of episodes to run per query.
     """
-    engine = rollout_engine
+    engine = _get_underlying_engine(rollout_engine)
     if not hasattr(engine, "_wrap_openai_agent"):
         logger.warning(
             "Engine has no _wrap_openai_agent method; "
@@ -171,7 +138,19 @@ def _patch_wrap_openai_agent_for_tree_search(
     original_wrap = engine._wrap_openai_agent
 
     def _tree_search_wrap(agent: Any, proxy_addr: str):
-        inner = original_wrap(agent, proxy_addr)
+        from areal.api.cli_args import OpenAIProxyConfig
+
+        openai_cfg = engine.config.openai or OpenAIProxyConfig()
+        inner = QueryIDProxyWorkflow(
+            mode=openai_cfg.mode,
+            agent=agent,
+            proxy_addr=proxy_addr,
+            admin_api_key=openai_cfg.admin_api_key,
+            discount=openai_cfg.turn_discount,
+            export_style=openai_cfg.export_style,
+            subproc_max_workers=openai_cfg.subproc_max_workers,
+            proxy_gateway_addr=getattr(engine, "_proxy_gateway_addr", None),
+        )
         return TreeSearchGroupedRolloutWorkflow(
             workflow=inner,
             group_size=group_size,
@@ -185,14 +164,41 @@ def _patch_wrap_openai_agent_for_tree_search(
         f"(group_size={group_size})"
     )
 
+    # Prevent double-wrapping: _resolve_workflow adds GroupedRolloutWorkflow
+    # around the resolved workflow when group_size > 1, but
+    # TreeSearchGroupedRolloutWorkflow already handles grouping internally.
+    # We patch _resolve_workflow to strip the extra GroupedRolloutWorkflow
+    # wrapper when the inner workflow is TreeSearchGroupedRolloutWorkflow.
+    if hasattr(engine, "_resolve_workflow"):
+        original_resolve = engine._resolve_workflow
+
+        def _patched_resolve(self_engine, wf, wf_kwargs=None, gs=1):
+            resolved = original_resolve(wf, wf_kwargs, gs)
+            if isinstance(resolved, GroupedRolloutWorkflow) and isinstance(
+                resolved.workflow, TreeSearchGroupedRolloutWorkflow
+            ):
+                logger.debug(
+                    "Skipping outer GroupedRolloutWorkflow wrapper "
+                    "(TreeSearchGroupedRolloutWorkflow already handles grouping)"
+                )
+                return resolved.workflow
+            return resolved
+
+        engine._resolve_workflow = _patched_resolve.__get__(engine, type(engine))
+        engine._original_resolve_workflow = original_resolve
+
 
 def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
     """Restore the original _wrap_openai_agent method."""
-    engine = rollout_engine
+    engine = _get_underlying_engine(rollout_engine)
     if hasattr(engine, "_original_wrap_openai_agent"):
         engine._wrap_openai_agent = engine._original_wrap_openai_agent
         del engine._original_wrap_openai_agent
         logger.info("Restored original _wrap_openai_agent")
+    if hasattr(engine, "_original_resolve_workflow"):
+        engine._resolve_workflow = engine._original_resolve_workflow
+        del engine._original_resolve_workflow
+        logger.info("Restored original _resolve_workflow")
 
 
 def _patch_workflow_executor(rollout_engine: Any) -> None:
@@ -204,7 +210,7 @@ def _patch_workflow_executor(rollout_engine: Any) -> None:
     Args:
         rollout_engine: The rollout inference engine (e.g. RemoteInfEngine).
     """
-    engine = rollout_engine
+    engine = _get_underlying_engine(rollout_engine)
     if not hasattr(engine, "workflow_executor"):
         logger.warning(
             "Engine has no workflow_executor attribute; "
@@ -240,7 +246,7 @@ def _patch_workflow_executor(rollout_engine: Any) -> None:
 
 def _unpatch_workflow_executor(rollout_engine: Any) -> None:
     """Restore the original workflow_executor."""
-    engine = rollout_engine
+    engine = _get_underlying_engine(rollout_engine)
     if hasattr(engine, "_original_workflow_executor"):
         engine.workflow_executor = engine._original_workflow_executor
         del engine._original_workflow_executor
@@ -544,7 +550,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 all_prompts,
                 workflow=workflow,
                 workflow_kwargs=workflow_kwargs,
-                group_size=n_samples,
+                group_size=group_size,
             )
 
             # TreeSearchWorkflowExecutor already returns flat list of per-episode dicts
@@ -570,10 +576,10 @@ class CacheAwarePPOTrainer(PPOTrainer):
             for traj in trajs:
                 if "advantages" in traj:
                     adv = traj["advantages"]
+                    ret = traj["returns"]
                     traj["_tree_advantages"] = (
                         adv.clone() if hasattr(adv, "clone") else adv
                     )
-                    ret = traj["returns"]
                     traj["_tree_returns"] = (
                         ret.clone() if hasattr(ret, "clone") else ret
                     )

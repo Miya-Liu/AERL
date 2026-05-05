@@ -1,32 +1,41 @@
 # Muon Optimizer Integration Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Integrate MuonWithAuxAdam optimizer into AReaL's FSDP Engine via monkey-patching, with all code in `customized_areal/optimizers/`.
+**Goal:** Integrate MuonWithAuxAdam optimizer into AReaL's FSDP Engine via
+monkey-patching, with all code in `customized_areal/optimizers/`.
 
-**Architecture:** A standalone `MuonWithAuxAdam` optimizer class (adapted from the original SingleDeviceMuonWithAuxAdam, with FSDP-compatible changes) plus a monkey-patch module that replaces `FSDPEngine._create_optimizer` to recognize `optimizer_type="muon"`. Muon-specific hyperparameters are passed via `patch_fsdp_engine_for_muon()` kwargs rather than modifying `OptimizerConfig`.
+**Architecture:** A standalone `MuonWithAuxAdam` optimizer class (adapted from the
+original SingleDeviceMuonWithAuxAdam, with FSDP-compatible changes) plus a monkey-patch
+module that replaces `FSDPEngine._create_optimizer` to recognize
+`optimizer_type="muon"`. Muon-specific hyperparameters are passed via
+`patch_fsdp_engine_for_muon()` kwargs rather than modifying `OptimizerConfig`.
 
 **Tech Stack:** Python 3.12+, PyTorch, AReaL FSDPEngine
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|---------------|
-| `customized_areal/optimizers/__init__.py` | Public API: exports `patch_fsdp_engine_for_muon`, `unpatch_fsdp_engine_for_muon`, `MuonWithAuxAdam` |
-| `customized_areal/optimizers/muon.py` | Core optimizer: `zeropower_via_newtonschulz5`, `muon_update`, `MuonWithAuxAdam` |
-| `customized_areal/optimizers/patch.py` | Monkey-patch: `patch_fsdp_engine_for_muon`, `unpatch_fsdp_engine_for_muon`, `_patched_create_optimizer` |
-| `customized_areal/optimizers/tests/test_muon.py` | Unit tests for Newton-Schulz, MuonWithAuxAdam, and patch |
+| File                                             | Responsibility                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `customized_areal/optimizers/__init__.py`        | Public API: exports `patch_fsdp_engine_for_muon`, `unpatch_fsdp_engine_for_muon`, `MuonWithAuxAdam`     |
+| `customized_areal/optimizers/muon.py`            | Core optimizer: `zeropower_via_newtonschulz5`, `muon_update`, `MuonWithAuxAdam`                         |
+| `customized_areal/optimizers/patch.py`           | Monkey-patch: `patch_fsdp_engine_for_muon`, `unpatch_fsdp_engine_for_muon`, `_patched_create_optimizer` |
+| `customized_areal/optimizers/tests/test_muon.py` | Unit tests for Newton-Schulz, MuonWithAuxAdam, and patch                                                |
 
----
+______________________________________________________________________
 
 ### Task 1: Create `customized_areal/optimizers/muon.py` — Core functions
 
 **Files:**
+
 - Create: `customized_areal/optimizers/muon.py`
 
-- [ ] **Step 1: Create the directory and file with `zeropower_via_newtonschulz5` and `muon_update`**
+- [ ] **Step 1: Create the directory and file with `zeropower_via_newtonschulz5` and
+  `muon_update`**
 
 ```python
 from __future__ import annotations
@@ -99,11 +108,12 @@ git add customized_areal/optimizers/muon.py
 git commit -m "feat(optimizers): add Newton-Schulz orthogonalization and muon_update"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Add `MuonWithAuxAdam` optimizer class to `muon.py`
 
 **Files:**
+
 - Modify: `customized_areal/optimizers/muon.py`
 
 - [ ] **Step 1: Add the `MuonWithAuxAdam` class**
@@ -213,14 +223,17 @@ git add customized_areal/optimizers/muon.py
 git commit -m "feat(optimizers): add MuonWithAuxAdam optimizer class"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Create `customized_areal/optimizers/patch.py` — Monkey-patch module
 
 **Files:**
+
 - Create: `customized_areal/optimizers/patch.py`
 
-This is the most critical file. It must faithfully replicate the lr scheduler creation logic from `areal/engine/fsdp_engine.py:948-1021` for the `"muon"` case, and delegate to the original method for all other optimizer types.
+This is the most critical file. It must faithfully replicate the lr scheduler creation
+logic from `areal/engine/fsdp_engine.py:948-1021` for the `"muon"` case, and delegate to
+the original method for all other optimizer types.
 
 - [ ] **Step 1: Create the patch module**
 
@@ -362,11 +375,12 @@ git add customized_areal/optimizers/patch.py
 git commit -m "feat(optimizers): add FSDPEngine monkey-patch for Muon optimizer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Create `customized_areal/optimizers/__init__.py` — Public API
 
 **Files:**
+
 - Create: `customized_areal/optimizers/__init__.py`
 
 - [ ] **Step 1: Create the `__init__.py`**
@@ -386,11 +400,12 @@ git add customized_areal/optimizers/__init__.py
 git commit -m "feat(optimizers): add public API for Muon optimizer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Write unit tests for `zeropower_via_newtonschulz5` and `muon_update`
 
 **Files:**
+
 - Create: `customized_areal/optimizers/tests/test_muon.py`
 
 - [ ] **Step 1: Create the test directory and test file with Newton-Schulz tests**
@@ -481,7 +496,8 @@ class TestMuonUpdate:
 
 - [ ] **Step 2: Run the tests to verify they pass**
 
-Run: `python -m pytest customized_areal/optimizers/tests/test_muon.py::TestZeropowerViaNewtonSchulz5 -v && python -m pytest customized_areal/optimizers/tests/test_muon.py::TestMuonUpdate -v`
+Run:
+`python -m pytest customized_areal/optimizers/tests/test_muon.py::TestZeropowerViaNewtonSchulz5 -v && python -m pytest customized_areal/optimizers/tests/test_muon.py::TestMuonUpdate -v`
 Expected: All PASS
 
 - [ ] **Step 3: Commit**
@@ -491,11 +507,12 @@ git add customized_areal/optimizers/tests/test_muon.py
 git commit -m "test(optimizers): add tests for Newton-Schulz and muon_update"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Write unit tests for `MuonWithAuxAdam`
 
 **Files:**
+
 - Modify: `customized_areal/optimizers/tests/test_muon.py`
 
 - [ ] **Step 1: Add `TestMuonWithAuxAdam` class to the test file**
@@ -640,7 +657,8 @@ class TestMuonWithAuxAdam:
 
 - [ ] **Step 2: Run the tests**
 
-Run: `python -m pytest customized_areal/optimizers/tests/test_muon.py::TestMuonWithAuxAdam -v`
+Run:
+`python -m pytest customized_areal/optimizers/tests/test_muon.py::TestMuonWithAuxAdam -v`
 Expected: All PASS
 
 - [ ] **Step 3: Commit**
@@ -650,11 +668,12 @@ git add customized_areal/optimizers/tests/test_muon.py
 git commit -m "test(optimizers): add tests for MuonWithAuxAdam optimizer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Write tests for the monkey-patch module
 
 **Files:**
+
 - Modify: `customized_areal/optimizers/tests/test_muon.py`
 
 These tests verify the patch/unpatch lifecycle and the parameter group splitting logic.
@@ -750,7 +769,8 @@ class TestPatchFsdpEngineForMuon:
 
 - [ ] **Step 2: Run the tests**
 
-Run: `python -m pytest customized_areal/optimizers/tests/test_muon.py::TestPatchFsdpEngineForMuon -v`
+Run:
+`python -m pytest customized_areal/optimizers/tests/test_muon.py::TestPatchFsdpEngineForMuon -v`
 Expected: All PASS
 
 - [ ] **Step 3: Commit**
@@ -760,23 +780,24 @@ git add customized_areal/optimizers/tests/test_muon.py
 git commit -m "test(optimizers): add tests for FSDPEngine monkey-patch"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Run full test suite and verify
 
 - [ ] **Step 1: Run all Muon tests together**
 
-Run: `python -m pytest customized_areal/optimizers/tests/test_muon.py -v`
-Expected: All PASS
+Run: `python -m pytest customized_areal/optimizers/tests/test_muon.py -v` Expected: All
+PASS
 
 - [ ] **Step 2: Run pre-commit**
 
-Run: `pre-commit run --files customized_areal/optimizers/`
-Expected: All checks pass (formatting, linting)
+Run: `pre-commit run --files customized_areal/optimizers/` Expected: All checks pass
+(formatting, linting)
 
 - [ ] **Step 3: Verify import works from top-level package**
 
-Run: `python -c "from customized_areal.optimizers import patch_fsdp_engine_for_muon, MuonWithAuxAdam; print('OK')"`
+Run:
+`python -c "from customized_areal.optimizers import patch_fsdp_engine_for_muon, MuonWithAuxAdam; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 4: Final commit if any formatting fixes needed**

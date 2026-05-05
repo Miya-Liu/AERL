@@ -1,38 +1,51 @@
-# Tree Search List[Dict] Workflow Implementation Plan
+# Tree Search List\[Dict\] Workflow Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace stacked tensor dicts with per-episode TrajectoryRecord-like dicts (Python lists) in the tree search pipeline, and add a custom `TreeSearchWorkflowExecutor` that handles `list[dict]` returns from `arun_episode`.
+**Goal:** Replace stacked tensor dicts with per-episode TrajectoryRecord-like dicts
+(Python lists) in the tree search pipeline, and add a custom
+`TreeSearchWorkflowExecutor` that handles `list[dict]` returns from `arun_episode`.
 
-**Architecture:** `proxy_workflow.arun_episode` returns `list[dict]` (per-turn), `grouped_workflow.arun_episode` merges turns into per-episode dicts and returns `list[dict]`, `TreeSearchWorkflowExecutor` flattens results from `rollout_batch`, and `MCTSTreeStore.insert_batch` accepts per-episode dicts with Python lists directly. New fields (`logp`, `topk_ids`, `topk_logp`, `distill_reward`, `teacher_logp`) are added to `TrajectoryRecord` and persisted through the tree store.
+**Architecture:** `proxy_workflow.arun_episode` returns `list[dict]` (per-turn),
+`grouped_workflow.arun_episode` merges turns into per-episode dicts and returns
+`list[dict]`, `TreeSearchWorkflowExecutor` flattens results from `rollout_batch`, and
+`MCTSTreeStore.insert_batch` accepts per-episode dicts with Python lists directly. New
+fields (`logp`, `topk_ids`, `topk_logp`, `distill_reward`, `teacher_logp`) are added to
+`TrajectoryRecord` and persisted through the tree store.
 
 **Tech Stack:** Python 3.12+, PyTorch, asyncio
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| Action | File | Responsibility |
-|--------|------|----------------|
-| Modify | `customized_areal/tree_search/mcts_tree_store.py` | TrajectoryRecord new fields, insert_batch accepts list-of-list dicts, load_trajectories returns new fields, checkpoint compat |
-| Modify | `customized_areal/tree_search/checkpoint.py` | Serialize/deserialize new TrajectoryRecord fields |
-| Create | `customized_areal/tree_search/workflow_executor.py` | TreeSearchWorkflowExecutor: handles list[dict] from arun_episode, flattens rollout_batch results |
-| Modify | `customized_areal/tree_search/proxy_workflow.py` | arun_episode returns list[dict] with Python lists, extracts new fields from InteractionWithTokenLogpReward |
-| Modify | `customized_areal/tree_search/grouped_workflow.py` | arun_episode merges per-turn dicts into per-episode dicts, returns list[dict] |
-| Modify | `customized_areal/tree_search/trainer.py` | Patch workflow_executor, remove _split_to_turn_dicts, update advantage computation for list-based dicts |
-| Modify | `customized_areal/tree_search/advantage.py` | Handle list-based input_ids (list[int] instead of tensor) for advantage computation |
-| Modify | `tests/test_tree_search/test_mcts_tree_store.py` | Tests for new TrajectoryRecord fields, insert/load with list-of-list dicts |
+| Action | File                                                | Responsibility                                                                                                                |
+| ------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Modify | `customized_areal/tree_search/mcts_tree_store.py`   | TrajectoryRecord new fields, insert_batch accepts list-of-list dicts, load_trajectories returns new fields, checkpoint compat |
+| Modify | `customized_areal/tree_search/checkpoint.py`        | Serialize/deserialize new TrajectoryRecord fields                                                                             |
+| Create | `customized_areal/tree_search/workflow_executor.py` | TreeSearchWorkflowExecutor: handles list\[dict\] from arun_episode, flattens rollout_batch results                            |
+| Modify | `customized_areal/tree_search/proxy_workflow.py`    | arun_episode returns list\[dict\] with Python lists, extracts new fields from InteractionWithTokenLogpReward                  |
+| Modify | `customized_areal/tree_search/grouped_workflow.py`  | arun_episode merges per-turn dicts into per-episode dicts, returns list\[dict\]                                               |
+| Modify | `customized_areal/tree_search/trainer.py`           | Patch workflow_executor, remove \_split_to_turn_dicts, update advantage computation for list-based dicts                      |
+| Modify | `customized_areal/tree_search/advantage.py`         | Handle list-based input_ids (list\[int\] instead of tensor) for advantage computation                                         |
+| Modify | `tests/test_tree_search/test_mcts_tree_store.py`    | Tests for new TrajectoryRecord fields, insert/load with list-of-list dicts                                                    |
 
----
+______________________________________________________________________
 
 ### Task 1: Add new fields to TrajectoryRecord and update insert_batch for list-based dicts
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:24-38` (TrajectoryRecord)
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:162-229` (insert_batch)
+
 - Modify: `tests/test_tree_search/test_mcts_tree_store.py`
 
-- [ ] **Step 1: Write failing tests for TrajectoryRecord new fields and list-based insert_batch**
+- [ ] **Step 1: Write failing tests for TrajectoryRecord new fields and list-based
+  insert_batch**
 
 Add to `tests/test_tree_search/test_mcts_tree_store.py`:
 
@@ -172,12 +185,15 @@ class TestMCTSTreeStoreInsertListDict:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecordNewFields tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertListDict -v`
-Expected: FAIL — `TrajectoryRecord` doesn't have the new fields yet, and `insert_batch` doesn't handle list-based dicts.
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecordNewFields tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertListDict -v`
+Expected: FAIL — `TrajectoryRecord` doesn't have the new fields yet, and `insert_batch`
+doesn't handle list-based dicts.
 
 - [ ] **Step 3: Add new fields to TrajectoryRecord**
 
-In `customized_areal/tree_search/mcts_tree_store.py`, update the `TrajectoryRecord` dataclass:
+In `customized_areal/tree_search/mcts_tree_store.py`, update the `TrajectoryRecord`
+dataclass:
 
 ```python
 @dataclass
@@ -204,7 +220,8 @@ class TrajectoryRecord:
     teacher_logp: list[list[float]] | None = None
 ```
 
-- [ ] **Step 4: Add `_is_list_dict` helper and `_insert_list_dict` method to MCTSTreeStore**
+- [ ] **Step 4: Add `_is_list_dict` helper and `_insert_list_dict` method to
+  MCTSTreeStore**
 
 Add a helper to detect list-based dicts (input_ids is `list`, not `torch.Tensor`):
 
@@ -294,16 +311,19 @@ def insert_batch(self, trajectories: list[dict[str, Any]]) -> None:
     # ... rest unchanged
 ```
 
-Note: The full method body needs restructuring to handle the early-return for list dicts. Move the per_turn_dicts/legacy_dicts accumulation into the same loop.
+Note: The full method body needs restructuring to handle the early-return for list
+dicts. Move the per_turn_dicts/legacy_dicts accumulation into the same loop.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecordNewFields tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertListDict -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecordNewFields tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreInsertListDict -v`
 Expected: PASS
 
 - [ ] **Step 7: Run existing tests to verify no regressions**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
 Expected: All existing tests still pass.
 
 - [ ] **Step 8: Commit**
@@ -313,12 +333,14 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): add new fields to TrajectoryRecord and insert_batch support for list-based dicts"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Update checkpoint serialization for new TrajectoryRecord fields
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py:83-104`
+
 - Modify: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write failing test for checkpoint round-trip with new fields**
@@ -356,7 +378,8 @@ class TestMCTSTreeStoreCheckpointNewFields:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreCheckpointNewFields -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreCheckpointNewFields -v`
 Expected: FAIL — checkpoint doesn't serialize/deserialize new fields.
 
 - [ ] **Step 3: Update `_serialize_record` and `_deserialize_record`**
@@ -410,7 +433,8 @@ def _deserialize_record(data: dict) -> TrajectoryRecord:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreCheckpointNewFields -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreCheckpointNewFields -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -420,12 +444,14 @@ git add customized_areal/tree_search/checkpoint.py tests/test_tree_search/test_m
 git commit -m "feat(tree-search): checkpoint serialization for new TrajectoryRecord fields"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Update load_trajectories to return new fields and support list-based output
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:354-446` (load_trajectories)
+
 - Modify: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write failing test for load_trajectories with new fields**
@@ -462,12 +488,16 @@ class TestMCTSTreeStoreLoadListDict:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadListDict -v`
-Expected: FAIL — `load_trajectories` currently returns tensor-based dicts, not list-based dicts with new fields.
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestMCTSTreeStoreLoadListDict -v`
+Expected: FAIL — `load_trajectories` currently returns tensor-based dicts, not
+list-based dicts with new fields.
 
 - [ ] **Step 3: Update `load_trajectories` to return list-based dicts with new fields**
 
-When the record has `turn_ids` (i.e., it was inserted as a list-based dict), return list-based dicts instead of tensor dicts. When the record has no `turn_ids` (legacy), keep returning tensor dicts for backward compatibility.
+When the record has `turn_ids` (i.e., it was inserted as a list-based dict), return
+list-based dicts instead of tensor dicts. When the record has no `turn_ids` (legacy),
+keep returning tensor dicts for backward compatibility.
 
 Replace `load_trajectories` in `mcts_tree_store.py`:
 
@@ -571,7 +601,8 @@ def load_trajectories(self, query_id: str, n_samples: int) -> list[dict[str, Any
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
 Expected: All tests pass, including new and existing ones.
 
 - [ ] **Step 5: Commit**
@@ -581,11 +612,12 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "feat(tree-search): load_trajectories returns list-based dicts with new fields"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Create TreeSearchWorkflowExecutor
 
 **Files:**
+
 - Create: `customized_areal/tree_search/workflow_executor.py`
 
 - [ ] **Step 1: Write the TreeSearchWorkflowExecutor**
@@ -771,7 +803,8 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
 
 - [ ] **Step 2: Verify the file parses correctly**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor; print('OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
@@ -781,14 +814,15 @@ git add customized_areal/tree_search/workflow_executor.py
 git commit -m "feat(tree-search): add TreeSearchWorkflowExecutor for list[dict] returns"
 ```
 
----
+______________________________________________________________________
 
-### Task 5: Update proxy_workflow.py to return list[dict]
+### Task 5: Update proxy_workflow.py to return list\[dict\]
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/proxy_workflow.py`
 
-- [ ] **Step 1: Rewrite `arun_episode` to return list[dict]**
+- [ ] **Step 1: Rewrite `arun_episode` to return list\[dict\]**
 
 Replace the `arun_episode` method in `QueryIDProxyWorkflow`:
 
@@ -930,7 +964,8 @@ def _interactions_to_turn_dicts(
 
 - [ ] **Step 3: Verify the file parses correctly**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow; print('OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 4: Commit**
@@ -940,17 +975,18 @@ git add customized_areal/tree_search/proxy_workflow.py
 git commit -m "feat(tree-search): proxy_workflow returns list[dict] with TrajectoryRecord-like format"
 ```
 
----
+______________________________________________________________________
 
-### Task 6: Update grouped_workflow.py to return list[dict] of per-episode dicts
+### Task 6: Update grouped_workflow.py to return list\[dict\] of per-episode dicts
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/grouped_workflow.py`
 
 - [ ] **Step 1: Rewrite `arun_episode` to merge per-turn dicts into per-episode dicts**
 
-The key change: instead of calling `concat_padded_tensors` to stack tensors,
-merge per-turn list-based dicts into per-episode list-based dicts.
+The key change: instead of calling `concat_padded_tensors` to stack tensors, merge
+per-turn list-based dicts into per-episode list-based dicts.
 
 Replace the `arun_episode` method in `TreeSearchGroupedRolloutWorkflow`:
 
@@ -1087,13 +1123,16 @@ Add the import at the top of `grouped_workflow.py`:
 from customized_areal.tree_search.mcts_tree_store import _find_turn_boundaries
 ```
 
-- [ ] **Step 3: Remove `_split_to_turn_dicts` function and `_sort_interactions_by_creation`, `_collect_episode_metadata`, `EPISODE_LEVEL_METADATA_KEYS`**
+- [ ] **Step 3: Remove `_split_to_turn_dicts` function and
+  `_sort_interactions_by_creation`, `_collect_episode_metadata`,
+  `EPISODE_LEVEL_METADATA_KEYS`**
 
 These are no longer needed since the new pipeline doesn't use stacked tensor dicts.
 
 - [ ] **Step 4: Verify the file parses correctly**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.grouped_workflow import TreeSearchGroupedRolloutWorkflow; print('OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.grouped_workflow import TreeSearchGroupedRolloutWorkflow; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 5: Commit**
@@ -1103,18 +1142,19 @@ git add customized_areal/tree_search/grouped_workflow.py
 git commit -m "feat(tree-search): grouped_workflow returns list[dict] of per-episode dicts"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Update advantage.py to handle list-based dicts
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/advantage.py`
 
 - [ ] **Step 1: Update `compute` to handle `list[int]` input_ids**
 
 The `compute` method currently accesses `traj["input_ids"]` as a tensor
-(`input_ids.shape[-1]`, `input_ids.shape[1]`). For list-based dicts,
-`input_ids` is `list[int]` and `len()` is used instead.
+(`input_ids.shape[-1]`, `input_ids.shape[1]`). For list-based dicts, `input_ids` is
+`list[int]` and `len()` is used instead.
 
 Replace the `compute` method:
 
@@ -1188,7 +1228,8 @@ def compute(self, trajectories: list[dict[str, Any]]) -> None:
 
 - [ ] **Step 2: Verify the file parses correctly**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.advantage import TreeAdvantageComputer; print('OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.advantage import TreeAdvantageComputer; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
@@ -1198,14 +1239,15 @@ git add customized_areal/tree_search/advantage.py
 git commit -m "feat(tree-search): advantage.py handles list-based input_ids"
 ```
 
----
+______________________________________________________________________
 
-### Task 8: Update trainer.py — patch workflow executor, remove _split_to_turn_dicts
+### Task 8: Update trainer.py — patch workflow executor, remove \_split_to_turn_dicts
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 
-- [ ] **Step 1: Update imports and remove _split_to_turn_dicts import**
+- [ ] **Step 1: Update imports and remove \_split_to_turn_dicts import**
 
 In `customized_areal/tree_search/trainer.py`, change:
 
@@ -1225,9 +1267,12 @@ from customized_areal.tree_search.grouped_workflow import (
 from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor
 ```
 
-- [ ] **Step 2: Update `_patch_wrap_openai_agent_for_tree_search` to also patch the workflow executor**
+- [ ] **Step 2: Update `_patch_wrap_openai_agent_for_tree_search` to also patch the
+  workflow executor**
 
-Add workflow executor patching after the existing patch. In the `_tree_search_wrap` inner function, after creating the `TreeSearchGroupedRolloutWorkflow`, also swap the engine's `workflow_executor`:
+Add workflow executor patching after the existing patch. In the `_tree_search_wrap`
+inner function, after creating the `TreeSearchGroupedRolloutWorkflow`, also swap the
+engine's `workflow_executor`:
 
 ```python
 def _tree_search_wrap(agent: Any, proxy_addr: str):
@@ -1260,7 +1305,8 @@ def _tree_search_wrap(agent: Any, proxy_addr: str):
     return workflow
 ```
 
-- [ ] **Step 3: Update `_unpatch_wrap_openai_agent` to restore the original workflow executor**
+- [ ] **Step 3: Update `_unpatch_wrap_openai_agent` to restore the original workflow
+  executor**
 
 ```python
 def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
@@ -1277,11 +1323,13 @@ def _unpatch_wrap_openai_agent(rollout_engine: Any) -> None:
 ```
 
 Also store the original executor in the patch function (add before replacing):
+
 ```python
 engine._original_workflow_executor = old_executor
 ```
 
-- [ ] **Step 4: Update `_cache_aware_prepare_batch` to remove `_split_to_turn_dicts` call**
+- [ ] **Step 4: Update `_cache_aware_prepare_batch` to remove `_split_to_turn_dicts`
+  call**
 
 Replace:
 
@@ -1295,7 +1343,8 @@ with:
 trajs = new_trajs if new_trajs else []
 ```
 
-(The `new_trajs` from `rollout_batch` via `TreeSearchWorkflowExecutor` is already a flat `list[dict]` of per-episode dicts.)
+(The `new_trajs` from `rollout_batch` via `TreeSearchWorkflowExecutor` is already a flat
+`list[dict]` of per-episode dicts.)
 
 - [ ] **Step 5: Update the n_new count calculation for list-based dicts**
 
@@ -1313,12 +1362,14 @@ n_new = sum(len(t["input_ids"]) for t in trajs) if trajs else 0
 
 - [ ] **Step 6: Verify the file parses correctly**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.trainer import CacheAwarePPOTrainer; print('OK')"`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run python -c "from customized_areal.tree_search.trainer import CacheAwarePPOTrainer; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 7: Run all tree search tests**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/ -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/ -v`
 Expected: All tests pass.
 
 - [ ] **Step 8: Commit**
@@ -1328,11 +1379,12 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "feat(tree-search): patch workflow_executor, remove _split_to_turn_dicts from trainer"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Run pre-commit and full test suite
 
 **Files:**
+
 - All modified files
 
 - [ ] **Step 1: Run pre-commit on all changed files**
@@ -1342,7 +1394,8 @@ Expected: All checks pass. Fix any formatting/linting issues.
 
 - [ ] **Step 2: Run the full tree search test suite**
 
-Run: `cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/ -v`
+Run:
+`cd /dfs/share-groups/letrain/zhoujie/AReaL-main && uv run pytest tests/test_tree_search/ -v`
 Expected: All tests pass.
 
 - [ ] **Step 3: Final commit if any formatting fixes**
@@ -1352,16 +1405,18 @@ git add -A
 git commit -m "style: pre-commit fixes for tree search list-dict pipeline"
 ```
 
----
+______________________________________________________________________
 
 ## Self-Review
 
 **1. Spec coverage:**
-- Per-dict structure with all fields → Task 1 (TrajectoryRecord), Task 5 (proxy_workflow extraction), Task 6 (grouped_workflow merge)
+
+- Per-dict structure with all fields → Task 1 (TrajectoryRecord), Task 5 (proxy_workflow
+  extraction), Task 6 (grouped_workflow merge)
 - Data flow (per-turn → per-episode → per-query) → Tasks 5, 6, 8
 - TreeSearchWorkflowExecutor → Task 4
-- proxy_workflow returns list[dict] → Task 5
-- grouped_workflow returns list[dict] → Task 6
+- proxy_workflow returns list\[dict\] → Task 5
+- grouped_workflow returns list\[dict\] → Task 6
 - trainer.py patches → Task 8
 - mcts_tree_store insert/load with new fields → Tasks 1, 2, 3
 - advantage.py list-based support → Task 7
@@ -1370,7 +1425,10 @@ git commit -m "style: pre-commit fixes for tree search list-dict pipeline"
 **2. Placeholder scan:** No TBDs, TODOs, or "implement later" patterns.
 
 **3. Type consistency:**
-- `TrajectoryRecord.logp` is `list[float] | None` — consistent in insert (Task 1), load (Task 3), proxy extraction (Task 5), merge (Task 6)
+
+- `TrajectoryRecord.logp` is `list[float] | None` — consistent in insert (Task 1), load
+  (Task 3), proxy extraction (Task 5), merge (Task 6)
 - `topk_ids` is `list[list[int]] | None` — consistent throughout
 - `response_ids` is `list[int]` — consistent in proxy (Task 5) and merge (Task 6)
-- `input_ids` in list dicts is `list[int]` — handled in advantage.py (Task 7) and trainer.py (Task 8)
+- `input_ids` in list dicts is `list[int]` — handled in advantage.py (Task 7) and
+  trainer.py (Task 8)

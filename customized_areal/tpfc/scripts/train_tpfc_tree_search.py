@@ -6,7 +6,7 @@ trajectories are reused across training steps; only missing rollouts are
 newly generated.
 
 Usage:
-    uv run customized_areal/tpfc/scripts/train_tpfc_tree_search.py --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct_tree_search.yaml +cache_dir=/dfs/share-groups/letrain/zhoujie/AReaL-main/customized_areal/tpfc/data/tree_cache
+    uv run customized_areal/tpfc/scripts/train_tpfc_tree_search.py --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct_tree_search.yaml  2>&1 | tee training.log
 """
 
 import pathlib

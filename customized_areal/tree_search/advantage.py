@@ -55,15 +55,6 @@ class TreeAdvantageComputer:
             return len(input_ids)
         return input_ids.shape[-1]
 
-    @staticmethod
-    def _get_batch_dim(input_ids) -> int:
-        """Get batch dimension: shape[0] for tensor, 1 for list."""
-        if isinstance(input_ids, list):
-            return 1
-        if input_ids.dim() > 1:
-            return input_ids.shape[0]
-        return 1
-
     def compute(self, trajectories: list[dict[str, Any]]) -> None:
         """Replace GAE advantages with tree Q-values. Mutates trajectories in-place.
 
@@ -127,8 +118,7 @@ class TreeAdvantageComputer:
             elif "_mcts_seq_id" in traj:
                 seq_id = traj["_mcts_seq_id"]
                 advantages = self._compute_single(traj, query_id, seq_id, seq_len)
-                if self._get_batch_dim(input_ids) > 1:
-                    advantages = advantages.unsqueeze(0)
+                advantages = advantages.unsqueeze(0)  # [1, seq_len]
             else:
                 continue
 

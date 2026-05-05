@@ -149,7 +149,7 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
         if isinstance(first, list) and len(first) > 0 and isinstance(first[0], dict):
             # Merge turn dicts per episode into a single per-episode dict
             episode_trajs: list[dict[str, Any]] = []
-            query_id = data.get("query_id", "")
+            query_id = data.get("query_id") or ""
 
             for result in valid_results:
                 merged = _merge_turn_dicts_to_episode(result)

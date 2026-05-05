@@ -194,7 +194,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
         self, engine, data: dict[str, Any]
     ) -> list[dict[str, Any]] | None:
         # Extract query_id from the input data before it gets lost
-        query_id = data.get("query_id", "")
+        query_id = data.get("query_id") or ""
 
         # Run the base episode logic
         result = await super().arun_episode(engine, data)

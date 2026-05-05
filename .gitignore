@@ -206,3 +206,4 @@ sympy/
 *.whl
 tmp/*
 
+customized_areal/tpfc/data/tree_cache/mcts_trees/*

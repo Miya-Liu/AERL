@@ -13,7 +13,6 @@ discarded when it only stored assistant marker tokens as prompt_tokens.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -77,34 +76,10 @@ def _find_turn_boundaries(
     return starts, ends
 
 
-def _get_query_id(traj: dict[str, Any]) -> str:
-    """Derive a query ID from the prompt tokens in a trajectory."""
-    loss_mask = traj["loss_mask"]
-    input_ids = traj["input_ids"]
-    if input_ids.dim() == 2:
-        lm = loss_mask[0]
-        ids = input_ids[0]
-    else:
-        lm = loss_mask
-        ids = input_ids
-    prompt_tokens = ids[lm == 0].tolist()
-    prompt_str = ",".join(str(t) for t in prompt_tokens)
-    return hashlib.md5(prompt_str.encode()).hexdigest()
-
-
 def _is_list_dict(traj: dict[str, Any]) -> bool:
     """Check if a trajectory dict uses Python lists instead of tensors."""
     input_ids = traj.get("input_ids")
     return isinstance(input_ids, list)
-
-
-def _get_query_id_list(traj: dict[str, Any]) -> str:
-    """Derive a query ID from the prompt tokens in a list-based trajectory."""
-    loss_mask = traj["loss_mask"]
-    input_ids = traj["input_ids"]
-    prompt_tokens = [ids for ids, lm in zip(input_ids, loss_mask) if lm == 0]
-    prompt_str = ",".join(str(t) for t in prompt_tokens)
-    return hashlib.md5(prompt_str.encode()).hexdigest()
 
 
 class MCTSTreeStore:
@@ -185,7 +160,7 @@ class MCTSTreeStore:
         teacher_logp = traj.get("teacher_logp")
 
         # Get query ID
-        query_id = traj.get("_mcts_query_id") or _get_query_id_list(traj)
+        query_id = traj.get("_mcts_query_id", "")
 
         # Get turn boundaries
         if "turn_response_starts" in traj and "turn_response_ends" in traj:
@@ -296,7 +271,7 @@ class MCTSTreeStore:
             batch_size = input_ids.shape[0]
 
             if batch_size == 1:
-                query_id = traj.get("_mcts_query_id") or _get_query_id(traj)
+                query_id = traj.get("_mcts_query_id", "")
                 seq_len = int(traj["attention_mask"].sum())
                 record = self._make_record(traj, 0, seq_len)
                 seq_id = self._insert_single(query_id, record)
@@ -304,19 +279,11 @@ class MCTSTreeStore:
                 traj["_mcts_query_id"] = query_id
             else:
                 seq_ids: list[int] = []
-                query_id = traj.get("_mcts_query_id")
+                query_id = traj.get("_mcts_query_id", "")
                 for i in range(batch_size):
-                    single = {
-                        "input_ids": input_ids[i : i + 1],
-                        "loss_mask": traj["loss_mask"][i : i + 1],
-                        "rewards": traj["rewards"][i : i + 1],
-                    }
-                    qid = query_id or _get_query_id(single)
-                    if query_id is None:
-                        query_id = qid
                     seq_len = int(traj["attention_mask"][i].sum())
                     record = self._make_record(traj, i, seq_len)
-                    seq_id = self._insert_single(qid, record)
+                    seq_id = self._insert_single(query_id, record)
                     seq_ids.append(seq_id)
 
                 traj["_mcts_seq_ids"] = seq_ids
@@ -336,12 +303,7 @@ class MCTSTreeStore:
             sorted_turns,
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
         ):
-            if not query_id:
-                turns = list(group_iter)
-                if turns:
-                    query_id = _get_query_id(turns[0])
-            else:
-                turns = list(group_iter)
+            turns = list(group_iter)
             # Sort turns within the episode by turn_idx_in_episode
             turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
 
@@ -574,8 +536,20 @@ class MCTSTreeStore:
 
             # Split episode into per-turn dicts
             n_turns = len(record.turn_response_starts)
+
+            # Precompute per-turn response lengths for correct slicing of
+            # response-only fields (logp, topk_ids, teacher_logp, etc.).
+            # These fields are concatenated across turns and have length
+            # total_response_len, not full_seq_len.
+            turn_resp_lens = [
+                record.turn_response_ends[t] - record.turn_response_starts[t]
+                for t in range(n_turns)
+            ]
+            resp_offset = 0  # running offset into response-only tensors
+
             for t in range(n_turns):
                 end = record.turn_response_ends[t]
+                resp_len = turn_resp_lens[t]
 
                 # For individual-style, each turn needs its own prompt context.
                 # Include all tokens from beginning to end of this turn's response.
@@ -615,20 +589,31 @@ class MCTSTreeStore:
                     "_outcome_reward": record.outcome_reward,
                     "_num_turns_in_episode": n_turns,
                 }
-                # Add new fields if present
+                # Add new fields if present — slice by response offset, not
+                # full-sequence position, since these are response-only.
                 if full_logp is not None:
-                    traj["logp"] = full_logp[:turn_seq_len].unsqueeze(0)
+                    traj["logp"] = full_logp[
+                        resp_offset : resp_offset + resp_len
+                    ].unsqueeze(0)
                 if full_topk_ids is not None:
-                    traj["topk_ids"] = full_topk_ids[:turn_seq_len].unsqueeze(0)
+                    traj["topk_ids"] = full_topk_ids[
+                        resp_offset : resp_offset + resp_len
+                    ].unsqueeze(0)
                 if full_topk_logp is not None:
-                    traj["topk_logp"] = full_topk_logp[:turn_seq_len].unsqueeze(0)
+                    traj["topk_logp"] = full_topk_logp[
+                        resp_offset : resp_offset + resp_len
+                    ].unsqueeze(0)
                 if full_distill_reward is not None:
                     traj["distill_reward"] = full_distill_reward[
-                        :turn_seq_len
+                        resp_offset : resp_offset + resp_len
                     ].unsqueeze(0)
                 if full_teacher_logp is not None:
-                    traj["teacher_logp"] = full_teacher_logp[:turn_seq_len].unsqueeze(0)
+                    traj["teacher_logp"] = full_teacher_logp[
+                        resp_offset : resp_offset + resp_len
+                    ].unsqueeze(0)
                 result.append(traj)
+
+                resp_offset += resp_len
 
         return result
 

@@ -1,42 +1,50 @@
 # Flat Trajectory Store Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the `TrieNode`-based MCTS tree with a flat `TrajectoryRecord` store that correctly preserves full multi-turn context.
+**Goal:** Replace the `TrieNode`-based MCTS tree with a flat `TrajectoryRecord` store
+that correctly preserves full multi-turn context.
 
-**Architecture:** `TrajectoryRecord` dataclass stores complete, unpadded trajectories with turn boundaries derived from `loss_mask`. `MCTSTreeStore` manages records keyed by `query_id` with `seq_id`-based MCTS stats (no per-node stats). No trie deduplication — each trajectory is stored independently.
+**Architecture:** `TrajectoryRecord` dataclass stores complete, unpadded trajectories
+with turn boundaries derived from `loss_mask`. `MCTSTreeStore` manages records keyed by
+`query_id` with `seq_id`-based MCTS stats (no per-node stats). No trie deduplication —
+each trajectory is stored independently.
 
 **Tech Stack:** Python 3.12+, PyTorch, JSON checkpoints
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Responsibility |
-|------|---------------|
-| `customized_areal/tree_search/mcts_tree_store.py` | `TrajectoryRecord` dataclass + flat `MCTSTreeStore` |
-| `customized_areal/tree_search/checkpoint.py` | JSON checkpoint save/load for new format |
-| `customized_areal/tree_search/advantage.py` | Tree advantage computation (minor update) |
-| `customized_areal/tree_search/config.py` | Remove `assistant_marker` field |
-| `customized_areal/tree_search/trainer.py` | Remove `make_turn_splitter` usage |
-| `customized_areal/tree_search/__init__.py` | Remove deleted exports |
-| `customized_areal/tree_search/trie_node.py` | **DELETE** |
-| `customized_areal/tree_search/turn_splitter.py` | **DELETE** |
-| `tests/test_tree_search/test_mcts_tree_store.py` | Rewrite for new API |
-| `tests/test_tree_search/test_checkpoint.py` | Rewrite for new format |
-| `tests/test_tree_search/test_trie_node.py` | **DELETE** |
-| `tests/test_tree_search/test_turn_splitter.py` | **DELETE** |
-| `tests/test_tree_search/test_advantage.py` | Update to new store API |
-| `tests/test_tree_search/test_trainer.py` | Update to new patch signature |
-| `tests/test_tree_search/test_cache_trainer.py` | Update to new store API |
-| `tests/test_tree_search/test_batch_consistency.py` | Remove `_split_grouped_trajectories` references |
+| File                                               | Responsibility                                      |
+| -------------------------------------------------- | --------------------------------------------------- |
+| `customized_areal/tree_search/mcts_tree_store.py`  | `TrajectoryRecord` dataclass + flat `MCTSTreeStore` |
+| `customized_areal/tree_search/checkpoint.py`       | JSON checkpoint save/load for new format            |
+| `customized_areal/tree_search/advantage.py`        | Tree advantage computation (minor update)           |
+| `customized_areal/tree_search/config.py`           | Remove `assistant_marker` field                     |
+| `customized_areal/tree_search/trainer.py`          | Remove `make_turn_splitter` usage                   |
+| `customized_areal/tree_search/__init__.py`         | Remove deleted exports                              |
+| `customized_areal/tree_search/trie_node.py`        | **DELETE**                                          |
+| `customized_areal/tree_search/turn_splitter.py`    | **DELETE**                                          |
+| `tests/test_tree_search/test_mcts_tree_store.py`   | Rewrite for new API                                 |
+| `tests/test_tree_search/test_checkpoint.py`        | Rewrite for new format                              |
+| `tests/test_tree_search/test_trie_node.py`         | **DELETE**                                          |
+| `tests/test_tree_search/test_turn_splitter.py`     | **DELETE**                                          |
+| `tests/test_tree_search/test_advantage.py`         | Update to new store API                             |
+| `tests/test_tree_search/test_trainer.py`           | Update to new patch signature                       |
+| `tests/test_tree_search/test_cache_trainer.py`     | Update to new store API                             |
+| `tests/test_tree_search/test_batch_consistency.py` | Remove `_split_grouped_trajectories` references     |
 
----
+______________________________________________________________________
 
 ### Task 1: Write `TrajectoryRecord` + `_find_turn_boundaries` + tests
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py`
+
 - Test: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Write the failing test for `_find_turn_boundaries`**
@@ -115,7 +123,8 @@ class TestTrajectoryRecord:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestFindTurnBoundaries -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestFindTurnBoundaries -v`
 Expected: FAIL with `ImportError: cannot import name '_find_turn_boundaries'`
 
 - [ ] **Step 3: Implement `TrajectoryRecord` and `_find_turn_boundaries`**
@@ -424,7 +433,8 @@ class MCTSTreeStore:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestFindTurnBoundaries tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecord -v`
+Run:
+`uv run pytest tests/test_tree_search/test_mcts_tree_store.py::TestFindTurnBoundaries tests/test_tree_search/test_mcts_tree_store.py::TestTrajectoryRecord -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -434,16 +444,18 @@ git add customized_areal/tree_search/mcts_tree_store.py tests/test_tree_search/t
 git commit -m "refactor(tree-search): add TrajectoryRecord and _find_turn_boundaries"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Write tests for the new `MCTSTreeStore` API
 
 **Files:**
+
 - Modify: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Add store tests to the test file**
 
-Append the following test classes to `tests/test_tree_search/test_mcts_tree_store.py` (after `TestTrajectoryRecord`):
+Append the following test classes to `tests/test_tree_search/test_mcts_tree_store.py`
+(after `TestTrajectoryRecord`):
 
 ```python
 def _make_traj(
@@ -699,8 +711,9 @@ class TestMCTSTreeStoreMCTSStats:
 
 - [ ] **Step 2: Run store tests**
 
-Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v`
-Expected: All new tests PASS. (Old test classes from the previous version will FAIL because they reference the old API — that's expected, we're replacing them.)
+Run: `uv run pytest tests/test_tree_search/test_mcts_tree_store.py -v` Expected: All new
+tests PASS. (Old test classes from the previous version will FAIL because they reference
+the old API — that's expected, we're replacing them.)
 
 - [ ] **Step 3: Commit**
 
@@ -709,12 +722,14 @@ git add tests/test_tree_search/test_mcts_tree_store.py
 git commit -m "test(tree-search): add new MCTSTreeStore tests for flat store"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Rewrite `checkpoint.py` for the new format + tests
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py`
+
 - Modify: `tests/test_tree_search/test_checkpoint.py`
 
 - [ ] **Step 1: Write failing checkpoint tests**
@@ -854,8 +869,8 @@ class TestTreeCheckpointManager:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest tests/test_tree_search/test_checkpoint.py -v`
-Expected: FAIL (old checkpoint.py still uses TrieNode)
+Run: `uv run pytest tests/test_tree_search/test_checkpoint.py -v` Expected: FAIL (old
+checkpoint.py still uses TrieNode)
 
 - [ ] **Step 3: Rewrite checkpoint.py**
 
@@ -980,8 +995,7 @@ class TreeCheckpointManager:
 
 - [ ] **Step 4: Run checkpoint tests**
 
-Run: `uv run pytest tests/test_tree_search/test_checkpoint.py -v`
-Expected: PASS
+Run: `uv run pytest tests/test_tree_search/test_checkpoint.py -v` Expected: PASS
 
 - [ ] **Step 5: Commit**
 
@@ -990,21 +1004,27 @@ git add customized_areal/tree_search/checkpoint.py tests/test_tree_search/test_c
 git commit -m "refactor(tree-search): rewrite checkpoint for flat TrajectoryRecord store"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Update `config.py`, `advantage.py`, `trainer.py`, `__init__.py`
 
-This is an atomic change — all these files import each other and must be updated together.
+This is an atomic change — all these files import each other and must be updated
+together.
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/config.py`
+
 - Modify: `customized_areal/tree_search/advantage.py`
+
 - Modify: `customized_areal/tree_search/trainer.py`
+
 - Modify: `customized_areal/tree_search/__init__.py`
 
 - [ ] **Step 1: Update `config.py` — remove `assistant_marker`**
 
-In `customized_areal/tree_search/config.py`, remove `assistant_marker` from `TreeBackupConfig`:
+In `customized_areal/tree_search/config.py`, remove `assistant_marker` from
+`TreeBackupConfig`:
 
 ```python
 from dataclasses import dataclass
@@ -1038,15 +1058,23 @@ class RolloutCacheConfig:
 
 - [ ] **Step 2: Update `advantage.py` — remove `Turn` import, use new store API**
 
-The `TreeAdvantageComputer` doesn't need changes since `get_advantages` and `get_prompt_mask` signatures are unchanged. Just remove the `Turn` import and verify the code works with the new store.
+The `TreeAdvantageComputer` doesn't need changes since `get_advantages` and
+`get_prompt_mask` signatures are unchanged. Just remove the `Turn` import and verify the
+code works with the new store.
 
-In `customized_areal/tree_search/advantage.py`, the file is already clean — no `Turn` or `TrieNode` imports. Verify it only imports from `mcts_tree_store`. No changes needed if it already uses `self.tree_store.get_advantages` and `self.tree_store.get_prompt_mask`.
+In `customized_areal/tree_search/advantage.py`, the file is already clean — no `Turn` or
+`TrieNode` imports. Verify it only imports from `mcts_tree_store`. No changes needed if
+it already uses `self.tree_store.get_advantages` and `self.tree_store.get_prompt_mask`.
 
 - [ ] **Step 3: Update `trainer.py` — remove `make_turn_splitter` usage**
 
 In `customized_areal/tree_search/trainer.py`:
-- Remove `from customized_areal.tree_search.turn_splitter import make_turn_splitter` (line 35)
-- In `_init_tree_components` (line 299-321): remove `turn_splitter = make_turn_splitter(...)` and pass nothing to `MCTSTreeStore()` and `TreeCheckpointManager.load()`
+
+- Remove `from customized_areal.tree_search.turn_splitter import make_turn_splitter`
+  (line 35)
+- In `_init_tree_components` (line 299-321): remove
+  `turn_splitter = make_turn_splitter(...)` and pass nothing to `MCTSTreeStore()` and
+  `TreeCheckpointManager.load()`
 - The `MCTSTreeStore()` constructor now takes no arguments
 
 Replace `_init_tree_components` with:
@@ -1107,7 +1135,8 @@ __all__ = [
 
 - [ ] **Step 5: Run tests to verify nothing is broken at import level**
 
-Run: `uv run python -c "from customized_areal.tree_search import MCTSTreeStore, TrajectoryRecord, TreeCheckpointManager, CacheAwarePPOTrainer; print('imports OK')"`
+Run:
+`uv run python -c "from customized_areal.tree_search import MCTSTreeStore, TrajectoryRecord, TreeCheckpointManager, CacheAwarePPOTrainer; print('imports OK')"`
 Expected: `imports OK`
 
 - [ ] **Step 6: Commit**
@@ -1117,14 +1146,18 @@ git add customized_areal/tree_search/config.py customized_areal/tree_search/adva
 git commit -m "refactor(tree-search): update consumers for flat TrajectoryRecord store"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Delete old files and their tests
 
 **Files:**
+
 - Delete: `customized_areal/tree_search/trie_node.py`
+
 - Delete: `customized_areal/tree_search/turn_splitter.py`
+
 - Delete: `tests/test_tree_search/test_trie_node.py`
+
 - Delete: `tests/test_tree_search/test_turn_splitter.py`
 
 - [ ] **Step 1: Delete the files**
@@ -1138,7 +1171,8 @@ rm tests/test_tree_search/test_turn_splitter.py
 
 - [ ] **Step 2: Verify no remaining imports reference deleted files**
 
-Run: `grep -r "from customized_areal.tree_search.trie_node\|from customized_areal.tree_search.turn_splitter" customized_areal/ tests/ --include="*.py"`
+Run:
+`grep -r "from customized_areal.tree_search.trie_node\|from customized_areal.tree_search.turn_splitter" customized_areal/ tests/ --include="*.py"`
 Expected: No matches (all references were updated in Task 4)
 
 - [ ] **Step 3: Commit**
@@ -1148,14 +1182,18 @@ git add -u customized_areal/tree_search/trie_node.py customized_areal/tree_searc
 git commit -m "refactor(tree-search): delete TrieNode and turn_splitter (replaced by flat store)"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Update remaining test files
 
 **Files:**
+
 - Modify: `tests/test_tree_search/test_advantage.py`
+
 - Modify: `tests/test_tree_search/test_trainer.py`
+
 - Modify: `tests/test_tree_search/test_cache_trainer.py`
+
 - Modify: `tests/test_tree_search/test_batch_consistency.py`
 
 - [ ] **Step 1: Rewrite `test_advantage.py`**
@@ -1393,22 +1431,30 @@ class TestCacheAwareBatchBuilder:
         assert len(loaded) == 2
 ```
 
-- [ ] **Step 4: Update `test_batch_consistency.py` — remove `_split_grouped_trajectories`**
+- [ ] **Step 4: Update `test_batch_consistency.py` — remove
+  `_split_grouped_trajectories`**
 
 In `tests/test_tree_search/test_batch_consistency.py`:
-- Remove `from customized_areal.tree_search.trainer import _split_grouped_trajectories` (line 21)
-- Remove or comment out `TestSplitGroupedTrajectories` class and `TestEndToEndRoundtrip` class (they test the deleted function)
-- Keep `TestConcatPaddedTensorsPreservesValues` and `TestGroupedRolloutWorkflow` and `TestGPUBatchConsistency`
+
+- Remove `from customized_areal.tree_search.trainer import _split_grouped_trajectories`
+  (line 21)
+- Remove or comment out `TestSplitGroupedTrajectories` class and `TestEndToEndRoundtrip`
+  class (they test the deleted function)
+- Keep `TestConcatPaddedTensorsPreservesValues` and `TestGroupedRolloutWorkflow` and
+  `TestGPUBatchConsistency`
 
 Remove these classes:
+
 - `TestSplitGroupedTrajectories` (lines 148-228)
 - `TestEndToEndRoundtrip` (lines 310-376)
 
-And update the docstring at the top to remove references to `_split_grouped_trajectories`.
+And update the docstring at the top to remove references to
+`_split_grouped_trajectories`.
 
 - [ ] **Step 5: Run all tree_search tests**
 
-Run: `uv run pytest tests/test_tree_search/ -v --ignore=tests/test_tree_search/test_batch_consistency.py`
+Run:
+`uv run pytest tests/test_tree_search/ -v --ignore=tests/test_tree_search/test_batch_consistency.py`
 Expected: All tests PASS
 
 - [ ] **Step 6: Commit**
@@ -1418,22 +1464,23 @@ git add tests/test_tree_search/test_advantage.py tests/test_tree_search/test_tra
 git commit -m "test(tree-search): update tests for flat TrajectoryRecord store"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Run full test suite and fix any remaining issues
 
 **Files:**
+
 - Potentially any file with remaining references
 
 - [ ] **Step 1: Check for any remaining references to deleted modules**
 
-Run: `grep -r "trie_node\|turn_splitter\|Turn\|TrieNode\|make_turn_splitter\|_split_grouped_trajectories" customized_areal/ tests/ --include="*.py" | grep -v __pycache__ | grep -v "\.pyc" | grep -v "docs/superpowers" | grep -v "TRAINING_PIPELINE"`
+Run:
+`grep -r "trie_node\|turn_splitter\|Turn\|TrieNode\|make_turn_splitter\|_split_grouped_trajectories" customized_areal/ tests/ --include="*.py" | grep -v __pycache__ | grep -v "\.pyc" | grep -v "docs/superpowers" | grep -v "TRAINING_PIPELINE"`
 Expected: No matches in source/test code (docs and pipeline docs are OK)
 
 - [ ] **Step 2: Run full tree_search test suite**
 
-Run: `uv run pytest tests/test_tree_search/ -v`
-Expected: All PASS
+Run: `uv run pytest tests/test_tree_search/ -v` Expected: All PASS
 
 - [ ] **Step 3: Run pre-commit**
 

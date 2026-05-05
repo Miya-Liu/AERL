@@ -6,11 +6,11 @@ BACKEND_DIR="/dfs/share-groups/letrain/zhoujie/le-agent-dev/backend"
 
 echo "Starting jobs in background..."
 
-# 1. Training job
+# 1. Tree search training job
 cd "$AREAL_DIR"
-nohup bash -c 'uv run customized_areal/tpfc/scripts/train_tpfc.py --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct.yaml workflow=customized_areal.tpfc.tpfc_agent.TPFCAgent 2>&1 | tee train.log' > /dev/null 2>&1 &
+nohup bash -c 'uv run customized_areal/tpfc/scripts/train_tpfc_tree_search.py --config customized_areal/tpfc/configs/config_tpfc_Qwen3-VL-8B-Instruct_tree_search.yaml 2>&1 | tee training.log' > /dev/null 2>&1 &
 TRAIN_PID=$!
-echo "train_tpfc   started (PID: $TRAIN_PID), log: $AREAL_DIR/train.log"
+echo "tree_search  started (PID: $TRAIN_PID), log: $AREAL_DIR/training.log"
 
 # 2. API server
 cd "$BACKEND_DIR"
@@ -26,7 +26,7 @@ echo "worker_backend started (PID: $WORKER_PID), log: $BACKEND_DIR/worker.log"
 
 echo ""
 echo "Monitor live logs with:"
-echo "  tail -f $AREAL_DIR/train.log"
+echo "  tail -f $AREAL_DIR/training.log"
 echo "  tail -f $BACKEND_DIR/api.log"
 echo "  tail -f $BACKEND_DIR/worker.log"
 echo ""

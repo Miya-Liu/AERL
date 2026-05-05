@@ -333,12 +333,32 @@ class TestMCTSTreeStoreLoadTrajectories:
             "attention_mask": [1, 1, 1, 1, 1],
             "logp": [-0.1, -0.2, -0.3, -0.4, -0.5],
             "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
-            "topk_logp": [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]],
-            "distill_reward": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]],
-            "teacher_logp": [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]],
+            "topk_logp": [
+                [-0.1, -0.2],
+                [-0.3, -0.4],
+                [-0.5, -0.6],
+                [-0.7, -0.8],
+                [-0.9, -1.0],
+            ],
+            "distill_reward": [
+                [0.1, 0.2],
+                [0.3, 0.4],
+                [0.5, 0.6],
+                [0.7, 0.8],
+                [0.9, 1.0],
+            ],
+            "teacher_logp": [
+                [-1.1, -1.2],
+                [-1.3, -1.4],
+                [-1.5, -1.6],
+                [-1.7, -1.8],
+                [-1.9, -2.0],
+            ],
         }
         store.insert_batch([traj])
-        loaded = store.load_trajectories(traj["_mcts_query_id"], n_samples=1, as_list=True)
+        loaded = store.load_trajectories(
+            traj["_mcts_query_id"], n_samples=1, as_list=True
+        )
         assert len(loaded) == 1
         loaded_traj = loaded[0]
         assert isinstance(loaded_traj["input_ids"], list)
@@ -349,10 +369,34 @@ class TestMCTSTreeStoreLoadTrajectories:
         assert isinstance(loaded_traj["teacher_logp"], list)
         assert loaded_traj["input_ids"] == [1, 2, 3, 4, 5]
         assert loaded_traj["logp"] == [-0.1, -0.2, -0.3, -0.4, -0.5]
-        assert loaded_traj["topk_ids"] == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
-        assert loaded_traj["topk_logp"] == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]]
-        assert loaded_traj["distill_reward"] == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]]
-        assert loaded_traj["teacher_logp"] == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]]
+        assert loaded_traj["topk_ids"] == [
+            [10, 20],
+            [30, 40],
+            [50, 60],
+            [70, 80],
+            [90, 100],
+        ]
+        assert loaded_traj["topk_logp"] == [
+            [-0.1, -0.2],
+            [-0.3, -0.4],
+            [-0.5, -0.6],
+            [-0.7, -0.8],
+            [-0.9, -1.0],
+        ]
+        assert loaded_traj["distill_reward"] == [
+            [0.1, 0.2],
+            [0.3, 0.4],
+            [0.5, 0.6],
+            [0.7, 0.8],
+            [0.9, 1.0],
+        ]
+        assert loaded_traj["teacher_logp"] == [
+            [-1.1, -1.2],
+            [-1.3, -1.4],
+            [-1.5, -1.6],
+            [-1.7, -1.8],
+            [-1.9, -2.0],
+        ]
 
     def test_load_trajectories_basic(self):
         store = MCTSTreeStore()

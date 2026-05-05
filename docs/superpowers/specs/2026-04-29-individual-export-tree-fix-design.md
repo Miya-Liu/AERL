@@ -1,22 +1,21 @@
 # Fix Individual Export for Tree Search: Episode Reconstruction and GRPO Normalization
 
-**Date:** 2026-04-29
-**Status:** Draft
+**Date:** 2026-04-29 **Status:** Draft
 
 ## Problem
 
 When using `export_interactions(style="individual")` with `CacheAwarePPOTrainer`,
-multi-turn episodes are flattened into independent batch rows. Each turn becomes
-a separate row with `loss_mask = [0...0, 1...1]` and its own reward. This breaks:
+multi-turn episodes are flattened into independent batch rows. Each turn becomes a
+separate row with `loss_mask = [0...0, 1...1]` and its own reward. This breaks:
 
-1. **Tree insertion**: `insert_batch` assigns one `seq_id` per turn, not per
-   episode. An episode with 3 turns gets 3 unrelated records.
-2. **Advantage computation**: No episode-level Q-value. Per-turn Q-values are
-   just per-turn rewards with no GRPO normalization.
-3. **GRPO normalization**: `Normalization(mean_level="group")` slices
-   consecutive rows, mixing turns from different episodes/queries.
-4. **Variable turn counts**: Episodes with different turn counts break
-   fixed-size group slicing.
+1. **Tree insertion**: `insert_batch` assigns one `seq_id` per turn, not per episode. An
+   episode with 3 turns gets 3 unrelated records.
+1. **Advantage computation**: No episode-level Q-value. Per-turn Q-values are just
+   per-turn rewards with no GRPO normalization.
+1. **GRPO normalization**: `Normalization(mean_level="group")` slices consecutive rows,
+   mixing turns from different episodes/queries.
+1. **Variable turn counts**: Episodes with different turn counts break fixed-size group
+   slicing.
 
 ## Design
 
@@ -28,60 +27,59 @@ Replaces both `QueryIDProxyWorkflow` and `GroupedRolloutWorkflow`. Subclasses
 `GroupedRolloutWorkflow` and overrides `arun_episode`.
 
 **Responsibilities:**
-- Reconstruct episode metadata from `InteractionWithTokenLogpReward` parent
-  chains
+
+- Reconstruct episode metadata from `InteractionWithTokenLogpReward` parent chains
 - Convert each turn to an individual-style tensor dict `[1, seq_len]`
 - Stack all turns from all `group_size` episodes into `[total_turns, max_seq_len]`
-- Preserve per-episode metadata (turn IDs, parent IDs, rewards) as list-valued
-  keys
+- Preserve per-episode metadata (turn IDs, parent IDs, rewards) as list-valued keys
 
 **`arun_episode` logic:**
 
 1. Run inner workflow `group_size` times via `asyncio.gather` (same as base)
-2. For each result (a `dict[InteractionWithTokenLogpReward]`):
-   a. Sort interactions by creation order (cache insertion order)
-   b. Call `to_tensor_dict()` on each → individual-style `[1, seq_len]` per turn
-   c. Collect turn metadata: `interaction_id`, `parent.interaction_id`, `reward`
-   d. Determine outcome reward: last turn's reward (or sum, configurable)
-3. `concat_padded_tensors` to stack all turns into `[total_turns, max_seq_len]`
-4. Add episode-level metadata as list-valued keys
+1. For each result (a `dict[InteractionWithTokenLogpReward]`): a. Sort interactions by
+   creation order (cache insertion order) b. Call `to_tensor_dict()` on each →
+   individual-style `[1, seq_len]` per turn c. Collect turn metadata: `interaction_id`,
+   `parent.interaction_id`, `reward` d. Determine outcome reward: last turn's reward (or
+   sum, configurable)
+1. `concat_padded_tensors` to stack all turns into `[total_turns, max_seq_len]`
+1. Add episode-level metadata as list-valued keys
 
 **Output tensor shape:** `[group_size * max_turns_per_episode, max_seq_len]`
 
 **Metadata keys (non-tensor, survive concat_padded_tensors as `values[0]`):**
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `_mcts_query_id` | `str` | Query identifier |
-| `_episode_num_turns` | `list[int]` | Turn count per episode, length = group_size |
-| `_episode_turn_offsets` | `list[int]` | Cumulative turn offsets: `[0, n0, n0+n1, ...]` |
-| `_episode_turn_ids` | `list[list[str]]` | Interaction IDs per episode |
-| `_episode_parent_turn_ids` | `list[list[str\|None]]` | Parent interaction IDs per episode |
-| `_episode_turn_rewards` | `list[list[float]]` | Per-turn rewards per episode |
-| `_episode_outcome_reward` | `list[float]` | Outcome reward per episode |
+| Key                        | Type                    | Description                                    |
+| -------------------------- | ----------------------- | ---------------------------------------------- |
+| `_mcts_query_id`           | `str`                   | Query identifier                               |
+| `_episode_num_turns`       | `list[int]`             | Turn count per episode, length = group_size    |
+| `_episode_turn_offsets`    | `list[int]`             | Cumulative turn offsets: `[0, n0, n0+n1, ...]` |
+| `_episode_turn_ids`        | `list[list[str]]`       | Interaction IDs per episode                    |
+| `_episode_parent_turn_ids` | `list[list[str\|None]]` | Parent interaction IDs per episode             |
+| `_episode_turn_rewards`    | `list[list[float]]`     | Per-turn rewards per episode                   |
+| `_episode_outcome_reward`  | `list[float]`           | Outcome reward per episode                     |
 
 **Note on `concat_padded_tensors` behavior:** Non-tensor list values are
 flat-concatenated by `concat_padded_tensors`. To preserve the nested structure,
-episode-level metadata must NOT be stored as list keys in the per-episode dicts
-before concat. Instead, `TreeSearchGroupedRolloutWorkflow` builds metadata
-*after* stacking by iterating over the valid_results list and collecting
-per-episode metadata into the final dict as a post-processing step (not relying
-on `concat_padded_tensors` to pass them through).
+episode-level metadata must NOT be stored as list keys in the per-episode dicts before
+concat. Instead, `TreeSearchGroupedRolloutWorkflow` builds metadata *after* stacking by
+iterating over the valid_results list and collecting per-episode metadata into the final
+dict as a post-processing step (not relying on `concat_padded_tensors` to pass them
+through).
 
 **Variable turn counts:** Episodes with fewer turns are padded with zero rows.
-`_episode_num_turns` and `_episode_turn_offsets` allow slicing back into
-per-episode turn groups.
+`_episode_num_turns` and `_episode_turn_offsets` allow slicing back into per-episode
+turn groups.
 
 **Fallback for non-strict-prefix:** If a child turn's `input_len <= parent_len`,
-`to_tensor_dict()` already handles this by masking out the parent turn and
-logging a warning. The episode still has all turns, but the non-prefix turn
-gets `loss_mask = [0...0, 1...1]` with no parent contribution. This is the
-existing behavior and is acceptable.
+`to_tensor_dict()` already handles this by masking out the parent turn and logging a
+warning. The episode still has all turns, but the non-prefix turn gets
+`loss_mask = [0...0, 1...1]` with no parent contribution. This is the existing behavior
+and is acceptable.
 
 ### Component 2: `_cache_aware_prepare_batch` — Split into per-turn dicts
 
-After `rollout_batch` returns a list of stacked dicts (one per query), split
-each into a flat list of per-turn dicts before passing to `insert_batch`.
+After `rollout_batch` returns a list of stacked dicts (one per query), split each into a
+flat list of per-turn dicts before passing to `insert_batch`.
 
 **Splitting logic:**
 
@@ -139,15 +137,15 @@ class TrajectoryRecord:
 
 **`insert_batch` changes:**
 
-Group consecutive turn dicts with the same `_mcts_query_id` and `_episode_idx`
-into a single episode record. For each episode:
+Group consecutive turn dicts with the same `_mcts_query_id` and `_episode_idx` into a
+single episode record. For each episode:
 
-1. Concatenate turn `input_ids`, `loss_mask`, `logprobs`, `versions` into a
-   single sequence (concat-style within the episode)
-2. Build `turn_response_starts`/`turn_response_ends` from `loss_mask` transitions
-3. Set `reward = outcome_reward`, `outcome_reward = _outcome_reward`
-4. Store `turn_ids`, `parent_turn_ids`, `turn_rewards` from metadata
-5. Register `turn_id → seq_id` mappings in `_turn_nodes` for shared-node MCTS
+1. Concatenate turn `input_ids`, `loss_mask`, `logprobs`, `versions` into a single
+   sequence (concat-style within the episode)
+1. Build `turn_response_starts`/`turn_response_ends` from `loss_mask` transitions
+1. Set `reward = outcome_reward`, `outcome_reward = _outcome_reward`
+1. Store `turn_ids`, `parent_turn_ids`, `turn_rewards` from metadata
+1. Register `turn_id → seq_id` mappings in `_turn_nodes` for shared-node MCTS
 
 **Shared-node MCTS support:**
 
@@ -167,24 +165,24 @@ continuations), the tree can trace shared ancestry through `_turn_nodes`.
 
 **`get_advantages` changes:**
 
-No change to signature. Returns per-token advantages: normalized Q-value on
-response tokens, 0 on prompt tokens. The Q-value now comes from episode-level
-computation (see Component 4).
+No change to signature. Returns per-token advantages: normalized Q-value on response
+tokens, 0 on prompt tokens. The Q-value now comes from episode-level computation (see
+Component 4).
 
 **`load_trajectories` changes:**
 
-Must reconstruct per-turn dicts from stored episode records. Each episode is
-split back into per-turn dicts using `turn_response_starts`/`turn_response_ends`
-to slice the stored sequence. Metadata keys (`_turn_id`, `_parent_turn_id`,
-`_turn_reward`, `_outcome_reward`, etc.) are populated from `TrajectoryRecord`.
+Must reconstruct per-turn dicts from stored episode records. Each episode is split back
+into per-turn dicts using `turn_response_starts`/`turn_response_ends` to slice the
+stored sequence. Metadata keys (`_turn_id`, `_parent_turn_id`, `_turn_reward`,
+`_outcome_reward`, etc.) are populated from `TrajectoryRecord`.
 
 ### Component 4: `TreeAdvantageComputer` with GRPO normalization
 
 **`compute` changes:**
 
 1. **Group episodes by `query_id`**: Collect all `seq_ids` for each query
-2. **Compute episode Q-value**: `Q = outcome_reward` (from `_rewards[seq_id]`)
-3. **Per-query GRPO normalization:**
+1. **Compute episode Q-value**: `Q = outcome_reward` (from `_rewards[seq_id]`)
+1. **Per-query GRPO normalization:**
 
 ```python
 for query_id, seq_ids in query_groups.items():
@@ -196,8 +194,8 @@ for query_id, seq_ids in query_groups.items():
         self.tree_store._normalized_advantages[sid] = normalized_q
 ```
 
-4. **Assign per-token advantages:** `normalized_q` on response tokens, 0 on
-   prompt tokens (same structure as current `get_advantages`)
+4. **Assign per-token advantages:** `normalized_q` on response tokens, 0 on prompt
+   tokens (same structure as current `get_advantages`)
 
 **`_compute_single` changes:**
 
@@ -216,15 +214,15 @@ def _compute_single(self, traj, query_id, seq_id, seq_len):
 ```
 
 **`advantage_mode=GAE` passthrough:** When `advantage_mode=GAE`, the
-`TreeAdvantageComputer.compute` is skipped entirely (existing behavior). GAE
-advantages are used as-is. No normalization is applied by the tree component.
+`TreeAdvantageComputer.compute` is skipped entirely (existing behavior). GAE advantages
+are used as-is. No normalization is applied by the tree component.
 
 ### Component 5: Trainer integration
 
 **`CacheAwarePPOTrainer._init_patches` changes:**
 
-Replace `_patch_wrap_openai_agent_for_query_id` with
-`TreeSearchGroupedRolloutWorkflow` wrapping:
+Replace `_patch_wrap_openai_agent_for_query_id` with `TreeSearchGroupedRolloutWorkflow`
+wrapping:
 
 ```python
 def _init_patches(self):
@@ -259,8 +257,8 @@ def _patch_wrap_openai_agent_for_tree_search(rollout_engine, group_size):
 
 **`_cache_aware_prepare_batch` changes:**
 
-After `rollout_batch`, split stacked dicts into flat per-turn dicts before
-tree operations:
+After `rollout_batch`, split stacked dicts into flat per-turn dicts before tree
+operations:
 
 ```python
 new_trajs = self.actor.rollout_batch(...)
@@ -306,25 +304,25 @@ compute_advantages (patched)
 
 The design handles variable turn counts naturally:
 
-- `TreeSearchGroupedRolloutWorkflow` pads shorter episodes with zero rows and
-  tracks per-episode turn counts in `_episode_num_turns`
+- `TreeSearchGroupedRolloutWorkflow` pads shorter episodes with zero rows and tracks
+  per-episode turn counts in `_episode_num_turns`
 - `_split_to_turn_dicts` uses offsets to skip padding rows
 - `insert_batch` groups by episode, concatenating only real turns
-- Advantage computation operates on episodes, not turns, so variable counts
-  don't affect normalization
+- Advantage computation operates on episodes, not turns, so variable counts don't affect
+  normalization
 
 ## Testing Plan
 
 1. **Unit test: `TreeSearchGroupedRolloutWorkflow`** — mock
-   `InteractionWithTokenLogpReward` with 2-turn and 3-turn episodes, verify
-   output shape and metadata
-2. **Unit test: `_split_to_turn_dicts`** — verify correct slicing with variable
-   turn counts and padding
-3. **Unit test: `insert_batch` with per-turn dicts** — verify episode grouping,
-   one `seq_id` per episode, turn_id registration
-4. **Unit test: GRPO normalization** — verify Q-values normalized within query
-   groups, not across queries
-5. **Unit test: variable turn counts** — 2 episodes with 2 turns + 1 episode
-   with 3 turns for same query, verify normalization is correct
-6. **Unit test: shared turn_id** — two episodes sharing turn 0 but diverging at
-   turn 1, verify `_turn_nodes` mapping
+   `InteractionWithTokenLogpReward` with 2-turn and 3-turn episodes, verify output shape
+   and metadata
+1. **Unit test: `_split_to_turn_dicts`** — verify correct slicing with variable turn
+   counts and padding
+1. **Unit test: `insert_batch` with per-turn dicts** — verify episode grouping, one
+   `seq_id` per episode, turn_id registration
+1. **Unit test: GRPO normalization** — verify Q-values normalized within query groups,
+   not across queries
+1. **Unit test: variable turn counts** — 2 episodes with 2 turns + 1 episode with 3
+   turns for same query, verify normalization is correct
+1. **Unit test: shared turn_id** — two episodes sharing turn 0 but diverging at turn 1,
+   verify `_turn_nodes` mapping
