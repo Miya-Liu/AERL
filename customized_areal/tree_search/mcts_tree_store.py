@@ -249,15 +249,8 @@ class MCTSTreeStore:
             logprobs=logprobs,
             versions=versions,
             outcome_reward=outcome_reward,
-            node_id=traj.get(
-                "node_id", traj.get("turn_ids", [""])[0] if traj.get("turn_ids") else ""
-            ),
-            parent_node_id=traj.get(
-                "parent_node_id",
-                traj.get("parent_turn_ids", [None])[0]
-                if traj.get("parent_turn_ids")
-                else None,
-            ),
+            node_id=traj.get("node_id", ""),
+            parent_node_id=traj.get("parent_node_id"),
             episode_id=traj.get("episode_id", ""),
             topk_ids=topk_ids,
             topk_logp=topk_logp,
