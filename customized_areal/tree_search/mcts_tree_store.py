@@ -141,17 +141,17 @@ class MCTSTreeStore:
             else [0] * seq_len
         )
         rewards = traj["rewards"]
-        reward = rewards[idx].item() if rewards.dim() >= 1 else rewards.item()
+        outcome_reward = rewards[idx].item() if rewards.dim() >= 1 else rewards.item()
 
-        starts, ends = _find_turn_boundaries(loss_mask)
-        return TrajectoryRecord(
+        return Node(
             input_ids=input_ids,
             loss_mask=loss_mask,
             logprobs=logprobs,
             versions=versions,
-            reward=reward,
-            turn_response_starts=starts,
-            turn_response_ends=ends,
+            outcome_reward=outcome_reward,
+            node_id="",
+            parent_node_id=None,
+            episode_id="",
         )
 
     def _insert_list_dict(self, traj: dict[str, Any]) -> None:
