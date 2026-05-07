@@ -1,5 +1,8 @@
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+from customized_areal.tree_search.mcts_tree_store import (
+    MCTSTreeStore,
+    _find_turn_boundaries,
+)
 
 
 def _make_store_with_data() -> MCTSTreeStore:
@@ -77,10 +80,10 @@ class TestTreeCheckpointManager:
         record_q1 = loaded.trajectories["q1"][0]
         assert record_q1.input_ids == [1, 2, 3, 4, 5]
         assert record_q1.loss_mask == [0, 0, 1, 1, 1]
-        assert record_q1.reward == 2.0
+        assert record_q1.outcome_reward == 2.0
         record_q2 = loaded.trajectories["q2"][0]
         assert record_q2.input_ids == [6, 7, 8]
-        assert record_q2.reward == 0.5
+        assert record_q2.outcome_reward == 0.5
 
     def test_load_preserves_mcts_stats(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
@@ -120,8 +123,9 @@ class TestTreeCheckpointManager:
 
         loaded = manager.load()
         record = loaded.trajectories["q1"][0]
-        assert record.turn_response_starts == [2, 6]
-        assert record.turn_response_ends == [4, 8]
+        starts, ends = _find_turn_boundaries(record.loss_mask)
+        assert starts == [2, 6]
+        assert ends == [4, 8]
 
     def test_save_and_load_new_fields(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
@@ -132,7 +136,7 @@ class TestTreeCheckpointManager:
             "loss_mask": [0, 0, 1, 1, 1],
             "reward": 1.0,
             "attention_mask": [1, 1, 1, 1, 1],
-            "logp": [-0.1, -0.2, -0.3, -0.4, -0.5],
+            "logprobs": [-0.1, -0.2, -0.3, -0.4, -0.5],
             "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
             "topk_logp": [
                 [-0.1, -0.2],
@@ -162,7 +166,7 @@ class TestTreeCheckpointManager:
 
         loaded = manager.load()
         record = loaded.trajectories["q1"][0]
-        assert record.logp == [-0.1, -0.2, -0.3, -0.4, -0.5]
+        assert record.logprobs == [-0.1, -0.2, -0.3, -0.4, -0.5]
         assert record.topk_ids == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
         assert record.topk_logp == [
             [-0.1, -0.2],

@@ -1,13 +1,12 @@
 # Node Dataclass Design
 
-**Date**: 2026-05-07
-**Status**: approved
+**Date**: 2026-05-07 **Status**: approved
 
 ## Summary
 
 Replace the ad-hoc `dict[str, Any]` trajectory representation and `TrajectoryRecord`
-dataclass with a unified `Node` dataclass in `mcts_tree_store.py`. A `Node`
-represents a single turn in a multi-turn conversation tree.
+dataclass with a unified `Node` dataclass in `mcts_tree_store.py`. A `Node` represents a
+single turn in a multi-turn conversation tree.
 
 ## Motivation
 
@@ -53,21 +52,21 @@ class Node:
 
 ### What Was Removed
 
-| Removed field | Reason |
-|---|---|
-| `reward` | Same as `outcome_reward` |
-| `turn_rewards` | Derivative for single-turn node |
-| `response_ids` | Derivable from `input_ids[-response_len:]` |
-| `logp` | Derivable from `logprobs[loss_mask==1]` |
-| `turn_ids` | Renamed to `node_id` |
-| `parent_turn_ids` | Renamed to `parent_node_id` |
-| `attention_mask` | Always `[1]*len`, derived |
+| Removed field     | Reason                                     |
+| ----------------- | ------------------------------------------ |
+| `reward`          | Same as `outcome_reward`                   |
+| `turn_rewards`    | Derivative for single-turn node            |
+| `response_ids`    | Derivable from `input_ids[-response_len:]` |
+| `logp`            | Derivable from `logprobs[loss_mask==1]`    |
+| `turn_ids`        | Renamed to `node_id`                       |
+| `parent_turn_ids` | Renamed to `parent_node_id`                |
+| `attention_mask`  | Always `[1]*len`, derived                  |
 
 ### What Was Renamed
 
-| Old (`TrajectoryRecord`) | New (`Node`) | Why |
-|---|---|---|
-| `turn_ids: list[str]` | `node_id: str` | Single turn, tree terminology |
+| Old (`TrajectoryRecord`)           | New (`Node`)                | Why                           |
+| ---------------------------------- | --------------------------- | ----------------------------- |
+| `turn_ids: list[str]`              | `node_id: str`              | Single turn, tree terminology |
 | `parent_turn_ids: list[str\|None]` | `parent_node_id: str\|None` | Single turn, tree terminology |
 
 ### What Is New
@@ -108,33 +107,39 @@ links within each episode (grouped by `episode_id`).
 ### File Changes
 
 1. **`mcts_tree_store.py`**
+
    - Replace `TrajectoryRecord` dataclass with `Node`
-   - Update `_make_record`, `_insert_list_dict`, `_insert_per_turn_dicts` to build `Node`
+   - Update `_make_record`, `_insert_list_dict`, `_insert_per_turn_dicts` to build
+     `Node`
    - Update `load_trajectories` to return `Node` objects
    - Update `get_advantages`, `get_prompt_mask` to read `Node` attrs
 
-2. **`proxy_workflow.py`**
+1. **`proxy_workflow.py`**
+
    - `_interactions_to_turn_dicts` builds `Node` objects instead of dicts
 
-3. **`grouped_workflow.py`**
+1. **`grouped_workflow.py`**
+
    - `_merge_turn_dicts_to_episode` merges `Node` attributes into episode `Node`
 
-4. **`advantage.py`**
+1. **`advantage.py`**
+
    - Read `Node` attributes instead of dict keys
 
-5. **`trainer.py`**
+1. **`trainer.py`**
+
    - `_list_dict_to_tensor` converts `Node` → tensor dict
    - `_is_list_traj` checks for `Node` type
 
-6. **`checkpoint.py`**
+1. **`checkpoint.py`**
+
    - Serialize/deserialize `Node` fields instead of `TrajectoryRecord`
 
 ### Episode Reconstruction
 
-Store individual per-turn `Node`s in the tree store. Reconstruct episodes by
-traversing `node_id`/`parent_node_id` links grouped by `episode_id`. When loading
-trajectories for training, concatenate linked `Node` sequences to produce the
-full episode tensor dict.
+Store individual per-turn `Node`s in the tree store. Reconstruct episodes by traversing
+`node_id`/`parent_node_id` links grouped by `episode_id`. When loading trajectories for
+training, concatenate linked `Node` sequences to produce the full episode tensor dict.
 
 ### Constraints
 

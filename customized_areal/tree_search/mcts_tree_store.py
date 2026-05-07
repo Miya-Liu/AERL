@@ -2,7 +2,7 @@
 # customized_areal/tree_search/mcts_tree_store.py
 """Flat trajectory store with MCTS statistics.
 
-Replaces the TrieNode-based trie with a per-query list of TrajectoryRecord
+Replaces the TrieNode-based trie with a per-query list of Node
 objects. Each record stores the complete, unpadded sequence from the rollout,
 with turn boundaries derived from loss_mask transitions.
 
@@ -30,23 +30,34 @@ def _materialize_rtensors(traj: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass
-class TrajectoryRecord:
-    """Stores a complete multi-turn trajectory for cache storage."""
+class Node:
+    """A single turn in a multi-turn conversation tree.
 
+    Each Node represents one assistant response turn, including its prompt
+    context (all tokens from the beginning of the conversation up through
+    this turn's response). Nodes are linked via node_id/parent_node_id and
+    grouped into episodes via episode_id.
+
+    Metadata fields (_mcts_query_id, _mcts_seq_id) are set by the tree
+    store after insertion. advantages/returns are set by the advantage
+    computer.
+    """
+
+    # Core sequence (full turn: prompt + response)
     input_ids: list[int]
-    loss_mask: list[int]
-    logprobs: list[float]
-    versions: list[int]
-    reward: float
-    turn_response_starts: list[int]
-    turn_response_ends: list[int]
-    # Episode metadata for tree search:
-    turn_ids: list[str] | None = None
-    parent_turn_ids: list[str | None] | None = None
-    turn_rewards: list[float] | None = None
+    loss_mask: list[int]  # 0=prompt, 1=response
+    logprobs: list[float]  # full sequence (0.0 on prompt positions)
+    versions: list[int]  # policy version (-1 on prompt)
+
+    # Tree structure
+    node_id: str  # interaction ID for this turn
+    parent_node_id: str | None  # parent interaction ID (None for root)
+    episode_id: str  # groups turns into a trajectory path
+
+    # Reward
     outcome_reward: float = 0.0
-    # New fields for distillation training:
-    logp: list[float] | None = None
+
+    # Response-only (aligned to loss_mask==1 positions)
     topk_ids: list[list[int]] | None = None
     topk_logp: list[list[float]] | None = None
     distill_reward: list[list[float]] | None = None
@@ -82,6 +93,81 @@ def _is_list_dict(traj: dict[str, Any]) -> bool:
     return isinstance(input_ids, list)
 
 
+def _response_span(loss_mask: list[int]) -> tuple[int, int]:
+    """Return (start, end) of the first response region in loss_mask."""
+    starts, ends = _find_turn_boundaries(loss_mask)
+    if starts:
+        return starts[0], ends[0]
+    return 0, 0
+
+
+def _node_to_tensor_dict(node: Node, query_id: str, seq_id: int) -> dict[str, Any]:
+    """Convert a single Node to a tensor dict with shape [1, seq_len]."""
+    seq_len = len(node.input_ids)
+    traj: dict[str, Any] = {
+        "input_ids": torch.tensor(node.input_ids, dtype=torch.int32).unsqueeze(0),
+        "loss_mask": torch.tensor(node.loss_mask, dtype=torch.int32).unsqueeze(0),
+        "logprobs": torch.tensor(node.logprobs, dtype=torch.float32).unsqueeze(0),
+        "versions": torch.tensor(node.versions, dtype=torch.int32).unsqueeze(0),
+        "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
+        "rewards": torch.tensor([node.outcome_reward], dtype=torch.float32).unsqueeze(
+            0
+        ),
+        "_mcts_query_id": query_id,
+        "_mcts_seq_id": seq_id,
+    }
+    # Response-only fields: extract response portion from full sequence
+    resp_start, resp_end = _response_span(node.loss_mask)
+    if node.topk_ids is not None:
+        traj["topk_ids"] = torch.tensor(node.topk_ids, dtype=torch.int32).unsqueeze(0)
+    if node.topk_logp is not None:
+        traj["topk_logp"] = torch.tensor(node.topk_logp, dtype=torch.float32).unsqueeze(
+            0
+        )
+    if node.distill_reward is not None:
+        traj["distill_reward"] = torch.tensor(
+            node.distill_reward, dtype=torch.float32
+        ).unsqueeze(0)
+    if node.teacher_logp is not None:
+        traj["teacher_logp"] = torch.tensor(
+            node.teacher_logp, dtype=torch.float32
+        ).unsqueeze(0)
+    # Derived from logprobs for response tokens
+    if resp_end > resp_start:
+        traj["logp"] = torch.tensor(
+            node.logprobs[resp_start:resp_end], dtype=torch.float32
+        ).unsqueeze(0)
+    # Carry advantages if set by advantage computer
+    if hasattr(node, "advantages") and node.advantages is not None:
+        traj["advantages"] = (
+            node.advantages.unsqueeze(0)
+            if node.advantages.dim() == 1
+            else node.advantages
+        )
+    if hasattr(node, "returns") and node.returns is not None:
+        traj["returns"] = (
+            node.returns.unsqueeze(0) if node.returns.dim() == 1 else node.returns
+        )
+    # Carry tree advantages/returns for post-GAE restoration
+    if hasattr(node, "_tree_advantages") and node._tree_advantages is not None:
+        adv = node._tree_advantages
+        traj["_tree_advantages"] = adv.unsqueeze(0) if adv.dim() == 1 else adv
+    if hasattr(node, "_tree_returns") and node._tree_returns is not None:
+        ret = node._tree_returns
+        traj["_tree_returns"] = ret.unsqueeze(0) if ret.dim() == 1 else ret
+    # Turn metadata
+    if node.node_id:
+        traj["_turn_id"] = node.node_id
+    if node.parent_node_id is not None:
+        traj["_parent_turn_id"] = node.parent_node_id
+    traj["_turn_reward"] = node.outcome_reward
+    traj["_outcome_reward"] = node.outcome_reward
+    traj["_episode_idx"] = 0
+    traj["_turn_idx_in_episode"] = 0
+    traj["_num_turns_in_episode"] = 1
+    return traj
+
+
 class MCTSTreeStore:
     """Flat trajectory store with MCTS statistics.
 
@@ -91,7 +177,7 @@ class MCTSTreeStore:
     """
 
     def __init__(self) -> None:
-        self.trajectories: dict[str, list[TrajectoryRecord]] = {}
+        self.trajectories: dict[str, list[Node]] = {}
         self._seq_id_to_key: dict[int, tuple[str, int]] = {}
         self._query_seq_ids: dict[str, list[int]] = {}
         self._next_seq_id: int = 0
@@ -113,9 +199,7 @@ class MCTSTreeStore:
         self._total_values[seq_id] = self._total_values.get(seq_id, 0.0) + reward
         self._q_values[seq_id] = self._total_values[seq_id] / self._visit_counts[seq_id]
 
-    def _make_record(
-        self, traj: dict[str, Any], idx: int, seq_len: int
-    ) -> TrajectoryRecord:
+    def _make_record(self, traj: dict[str, Any], idx: int, seq_len: int) -> Node:
         """Extract an unpadded sample from traj[idx] and derive turn boundaries."""
         input_ids = traj["input_ids"][idx, :seq_len].tolist()
         loss_mask = traj["loss_mask"][idx, :seq_len].tolist()
@@ -130,124 +214,138 @@ class MCTSTreeStore:
             else [0] * seq_len
         )
         rewards = traj["rewards"]
-        reward = rewards[idx].item() if rewards.dim() >= 1 else rewards.item()
+        outcome_reward = rewards[idx].item() if rewards.dim() >= 1 else rewards.item()
 
-        starts, ends = _find_turn_boundaries(loss_mask)
-        return TrajectoryRecord(
+        return Node(
             input_ids=input_ids,
             loss_mask=loss_mask,
             logprobs=logprobs,
             versions=versions,
-            reward=reward,
-            turn_response_starts=starts,
-            turn_response_ends=ends,
+            outcome_reward=outcome_reward,
+            node_id="",
+            parent_node_id=None,
+            episode_id="",
         )
 
     def _insert_list_dict(self, traj: dict[str, Any]) -> None:
         """Insert a list-based trajectory dict into the tree store."""
-        # Extract fields from list dict
         input_ids = traj["input_ids"]
         loss_mask = traj["loss_mask"]
-        reward = traj.get("reward", 0.0)
+        outcome_reward = traj.get("outcome_reward", traj.get("reward", 0.0))
         logprobs = traj.get("logprobs", [0.0] * len(input_ids))
         versions = traj.get("versions", [0] * len(input_ids))
 
         # New fields
-        logp = traj.get("logp")
         topk_ids = traj.get("topk_ids")
         topk_logp = traj.get("topk_logp")
         distill_reward = traj.get("distill_reward")
         teacher_logp = traj.get("teacher_logp")
 
-        # Get query ID
         query_id = traj.get("_mcts_query_id", "")
 
-        # Get turn boundaries
-        if "turn_response_starts" in traj and "turn_response_ends" in traj:
-            starts = traj["turn_response_starts"]
-            ends = traj["turn_response_ends"]
-        else:
-            starts, ends = _find_turn_boundaries(loss_mask)
-
-        # Create record
-        record = TrajectoryRecord(
+        node = Node(
             input_ids=input_ids,
             loss_mask=loss_mask,
             logprobs=logprobs,
             versions=versions,
-            reward=reward,
-            turn_response_starts=starts,
-            turn_response_ends=ends,
-            logp=logp,
+            outcome_reward=outcome_reward,
+            node_id=traj.get(
+                "node_id", traj.get("turn_ids", [""])[0] if traj.get("turn_ids") else ""
+            ),
+            parent_node_id=traj.get(
+                "parent_node_id",
+                traj.get("parent_turn_ids", [None])[0]
+                if traj.get("parent_turn_ids")
+                else None,
+            ),
+            episode_id=traj.get("episode_id", ""),
             topk_ids=topk_ids,
             topk_logp=topk_logp,
             distill_reward=distill_reward,
             teacher_logp=teacher_logp,
-            turn_ids=traj.get("turn_ids"),
-            parent_turn_ids=traj.get("parent_turn_ids"),
-            turn_rewards=traj.get("turn_rewards"),
-            outcome_reward=traj.get("outcome_reward", 0.0),
         )
 
-        # Insert into store
-        seq_id = self._insert_single(query_id, record)
+        seq_id = self._insert_single(query_id, node)
         traj["_mcts_seq_id"] = seq_id
         traj["_mcts_query_id"] = query_id
 
-    def _insert_single(self, query_id: str, record: TrajectoryRecord) -> int:
-        """Insert a single TrajectoryRecord and assign a seq_id."""
+    def _insert_single(self, query_id: str, node: Node) -> int:
+        """Insert a single Node and assign a seq_id."""
         seq_id = self._next_seq_id
         self._next_seq_id += 1
 
         idx = len(self.trajectories.setdefault(query_id, []))
-        self.trajectories[query_id].append(record)
+        self.trajectories[query_id].append(node)
         self._seq_id_to_key[seq_id] = (query_id, idx)
         self._query_seq_ids.setdefault(query_id, []).append(seq_id)
 
-        self._backup(seq_id, record.reward)
-        self._trained[seq_id] = False
-        self._rewards[seq_id] = record.reward
+        # Set metadata directly on the Node (dataclass permits non-field attrs when not frozen)
+        object.__setattr__(node, "_mcts_seq_id", seq_id)
+        object.__setattr__(node, "_mcts_query_id", query_id)
 
-        # Register turn_id → seq_id mappings for shared-node MCTS
-        if record.turn_ids:
-            for turn_id in record.turn_ids:
-                if turn_id and turn_id not in self._turn_nodes:
-                    self._turn_nodes[turn_id] = seq_id
+        self._backup(seq_id, node.outcome_reward)
+        self._trained[seq_id] = False
+        self._rewards[seq_id] = node.outcome_reward
+
+        # Register node_id → seq_id mapping for shared-node MCTS
+        if node.node_id and node.node_id not in self._turn_nodes:
+            self._turn_nodes[node.node_id] = seq_id
 
         return seq_id
 
-    def insert_batch(self, trajectories: list[dict[str, Any]]) -> None:
+    def insert_batch(self, trajectories: list[dict[str, Any]] | list[Node]) -> None:
         """Insert trajectories into the store.
 
-        Supports four input formats:
+        Supports five input formats:
 
-        1. **Per-turn dicts** (from _split_to_turn_dicts): each dict has
+        1. **Node objects**: from the new workflow pipeline. Each Node is
+           inserted directly. Nodes with _mcts_seq_id (already from cache)
+           are skipped.
+
+        2. **Per-turn dicts** (from _split_to_turn_dicts): each dict has
            shape [1, seq_len] with _episode_idx, _turn_idx_in_episode,
            _parent_turn_id, _turn_reward, _outcome_reward metadata.
            Turns are grouped by (_mcts_query_id, _episode_idx) into a
-           single episode TrajectoryRecord.
+           single episode Node.
 
-        2. **Individual trajectory dicts** (batch_size=1): single trajectory
+        3. **Individual trajectory dicts** (batch_size=1): single trajectory
            without episode metadata. Same as legacy behavior.
 
-        3. **Grouped trajectory dicts** (batch_size>1): multiple trajectories
+        4. **Grouped trajectory dicts** (batch_size>1): multiple trajectories
            stacked together. Each row gets its own seq_id.
 
-        4. **List-based dicts**: single trajectory with Python lists instead
+        5. **List-based dicts**: single trajectory with Python lists instead
            of tensors for all fields.
 
         Trajectories that already carry _mcts_seq_id or _mcts_seq_ids
         are skipped (loaded from cache).
         """
         # Materialize any RTensor values to local tensors (from RPC transfer)
-        trajectories = [_materialize_rtensors(t) for t in trajectories]
+        trajectories = [
+            _materialize_rtensors(t) if isinstance(t, dict) else t for t in trajectories
+        ]
+
+        # Handle Node objects (new workflow pipeline)
+        nodes: list[Node] = []
+        dict_trajs: list[dict[str, Any]] = []
+        for traj in trajectories:
+            if isinstance(traj, Node):
+                if not hasattr(traj, "_mcts_seq_id"):
+                    nodes.append(traj)
+            else:
+                dict_trajs.append(traj)
+
+        if nodes:
+            for node in nodes:
+                query_id = getattr(node, "_mcts_query_id", None) or ""
+                self._insert_single(query_id, node)
 
         # Separate per-turn dicts, list dicts, and legacy-style dicts
         per_turn_dicts: list[dict[str, Any]] = []
         list_dicts: list[dict[str, Any]] = []
         legacy_dicts: list[dict[str, Any]] = []
 
-        for traj in trajectories:
+        for traj in dict_trajs:
             if "_mcts_seq_id" in traj or "_mcts_seq_ids" in traj:
                 continue
             if _is_list_dict(traj):
@@ -290,10 +388,15 @@ class MCTSTreeStore:
                 traj["_mcts_query_id"] = query_id
 
     def _insert_per_turn_dicts(self, turn_dicts: list[dict[str, Any]]) -> None:
-        """Group per-turn dicts by (query_id, episode_idx) and insert as episode records."""
+        """Insert per-turn dicts as individual Node objects.
+
+        Each turn dict becomes a separate Node in the tree store.
+        Turns from the same episode share the same episode_id (derived
+        from _mcts_query_id + _episode_idx) and are linked via
+        node_id/parent_node_id.
+        """
         from itertools import groupby
 
-        # Sort by (query_id, episode_idx) for stable grouping
         sorted_turns = sorted(
             turn_dicts,
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
@@ -304,18 +407,9 @@ class MCTSTreeStore:
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
         ):
             turns = list(group_iter)
-            # Sort turns within the episode by turn_idx_in_episode
             turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
 
-            # Collect per-turn data for episode reconstruction
-            all_input_ids: list[int] = []
-            all_loss_mask: list[int] = []
-            all_logprobs: list[float] = []
-            all_versions: list[int] = []
-            turn_ids: list[str] = []
-            parent_turn_ids: list[str | None] = []
-            turn_rewards: list[float] = []
-            outcome_reward: float = 0.0
+            episode_id = f"{query_id}_{ep_idx}"
 
             for turn in turns:
                 seq_len = int(turn["attention_mask"].sum())
@@ -332,54 +426,39 @@ class MCTSTreeStore:
                     else [0] * seq_len
                 )
 
-                all_input_ids.extend(input_ids)
-                all_loss_mask.extend(loss_mask)
-                all_logprobs.extend(logprobs)
-                all_versions.extend(versions)
+                node = Node(
+                    input_ids=input_ids,
+                    loss_mask=loss_mask,
+                    logprobs=logprobs,
+                    versions=versions,
+                    outcome_reward=turn.get("_outcome_reward", 0.0),
+                    node_id=turn.get("_turn_id", ""),
+                    parent_node_id=turn.get("_parent_turn_id"),
+                    episode_id=episode_id,
+                )
 
-                turn_ids.append(turn.get("_turn_id", ""))
-                parent_turn_ids.append(turn.get("_parent_turn_id"))
-                turn_rewards.append(turn.get("_turn_reward", 0.0))
-                outcome_reward = turn.get("_outcome_reward", 0.0)
-
-            starts, ends = _find_turn_boundaries(all_loss_mask)
-
-            record = TrajectoryRecord(
-                input_ids=all_input_ids,
-                loss_mask=all_loss_mask,
-                logprobs=all_logprobs,
-                versions=all_versions,
-                reward=outcome_reward,
-                turn_response_starts=starts,
-                turn_response_ends=ends,
-                turn_ids=turn_ids,
-                parent_turn_ids=parent_turn_ids,
-                turn_rewards=turn_rewards,
-                outcome_reward=outcome_reward,
-            )
-            seq_id = self._insert_single(query_id, record)
-
-            # Set _mcts_seq_id on all turn dicts in this group
-            for turn in turns:
+                seq_id = self._insert_single(query_id, node)
+                # Also set metadata on dict for downstream dict-key readers
                 turn["_mcts_seq_id"] = seq_id
                 turn["_mcts_query_id"] = query_id
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
-        """Return per-token advantages: Q-value on response tokens, 0 on prompt tokens."""
+        """Return per-token advantages: Q-value on response tokens, 0 on prompt."""
         qid, idx = self._seq_id_to_key[seq_id]
-        record = self.trajectories[qid][idx]
+        node = self.trajectories[qid][idx]
         q_val = self._q_values.get(seq_id, 0.0)
-        seq_len = len(record.input_ids)
+        seq_len = len(node.input_ids)
         advantages = torch.zeros(seq_len, dtype=torch.float32)
-        for start, end in zip(record.turn_response_starts, record.turn_response_ends):
+        starts, ends = _find_turn_boundaries(node.loss_mask)
+        for start, end in zip(starts, ends):
             advantages[start:end] = q_val
         return advantages
 
     def get_prompt_mask(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Return boolean mask: True for response tokens, False for prompt."""
         qid, idx = self._seq_id_to_key[seq_id]
-        record = self.trajectories[qid][idx]
-        return torch.tensor(record.loss_mask, dtype=torch.bool)
+        node = self.trajectories[qid][idx]
+        return torch.tensor(node.loss_mask, dtype=torch.bool)
 
     def set_trained(self, query_id: str, seq_id: int, trained: bool = True) -> None:
         self._trained[seq_id] = trained
@@ -410,211 +489,25 @@ class MCTSTreeStore:
                     break
         return result
 
-    def load_trajectories(
-        self, query_id: str, n_samples: int, as_list: bool = False
-    ) -> list[dict[str, Any]]:
-        """Load untrained trajectories.
+    def load_trajectories(self, query_id: str, n_samples: int) -> list[Node]:
+        """Load untrained trajectories as Node objects.
 
-        If `as_list=False` (default), returns per-turn dicts with tensors. Each
-        episode record is split back into per-turn dicts using
-        turn_response_starts/turn_response_ends to slice the stored sequence.
-        Metadata keys (_turn_id, _parent_turn_id, _turn_reward, _outcome_reward)
-        are populated from TrajectoryRecord.
+        Returns per-turn Node objects. Callers can:
+        - Read Node attributes directly for advantage computation
+        - Convert to tensor dicts via _node_to_tensor_dict() for training
 
-        If `as_list=True`, returns one dict per episode with Python lists instead
-        of tensors. No per-turn splitting is done.
+        Each Node carries _mcts_query_id and _mcts_seq_id set during
+        insertion (accessible as regular attributes).
         """
         if query_id not in self.trajectories:
             return []
 
         untrained_ids = self.get_untrained_seq_ids(query_id, n_samples)
-        result: list[dict[str, Any]] = []
+        result: list[Node] = []
         for seq_id in untrained_ids:
             qid, idx = self._seq_id_to_key[seq_id]
-            record = self.trajectories[qid][idx]
-            seq_len = len(record.input_ids)
-
-            # List-based output: one dict per episode
-            if as_list:
-                traj = {
-                    "input_ids": record.input_ids.copy(),
-                    "loss_mask": record.loss_mask.copy(),
-                    "logprobs": record.logprobs.copy(),
-                    "versions": record.versions.copy(),
-                    "attention_mask": [1] * seq_len,
-                    "reward": record.reward,
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                }
-                # Add new fields if present
-                if record.logp is not None:
-                    traj["logp"] = record.logp.copy()
-                if record.topk_ids is not None:
-                    traj["topk_ids"] = [row.copy() for row in record.topk_ids]
-                if record.topk_logp is not None:
-                    traj["topk_logp"] = [row.copy() for row in record.topk_logp]
-                if record.distill_reward is not None:
-                    traj["distill_reward"] = [
-                        row.copy() for row in record.distill_reward
-                    ]
-                if record.teacher_logp is not None:
-                    traj["teacher_logp"] = [row.copy() for row in record.teacher_logp]
-                # Add turn metadata if present
-                if record.turn_ids is not None:
-                    traj["turn_ids"] = record.turn_ids.copy()
-                    traj["turn_response_starts"] = record.turn_response_starts.copy()
-                    traj["turn_response_ends"] = record.turn_response_ends.copy()
-                if record.parent_turn_ids is not None:
-                    traj["parent_turn_ids"] = record.parent_turn_ids.copy()
-                if record.turn_rewards is not None:
-                    traj["turn_rewards"] = record.turn_rewards.copy()
-                traj["outcome_reward"] = record.outcome_reward
-                result.append(traj)
-                continue
-
-            # Tensor-based output: per-turn dicts (legacy behavior)
-            full_input_ids = torch.tensor(record.input_ids, dtype=torch.int32)
-            full_loss_mask = torch.tensor(record.loss_mask, dtype=torch.int32)
-            full_logprobs = torch.tensor(record.logprobs, dtype=torch.float32)
-            full_versions = torch.tensor(record.versions, dtype=torch.int32)
-            full_attention = torch.ones(seq_len, dtype=torch.bool)
-
-            # New fields - full tensors
-            full_logp = (
-                torch.tensor(record.logp, dtype=torch.float32)
-                if record.logp is not None
-                else None
-            )
-            full_topk_ids = (
-                torch.tensor(record.topk_ids, dtype=torch.int32)
-                if record.topk_ids is not None
-                else None
-            )
-            full_topk_logp = (
-                torch.tensor(record.topk_logp, dtype=torch.float32)
-                if record.topk_logp is not None
-                else None
-            )
-            full_distill_reward = (
-                torch.tensor(record.distill_reward, dtype=torch.float32)
-                if record.distill_reward is not None
-                else None
-            )
-            full_teacher_logp = (
-                torch.tensor(record.teacher_logp, dtype=torch.float32)
-                if record.teacher_logp is not None
-                else None
-            )
-
-            # If no turn metadata, return as a single dict (legacy behavior)
-            if record.turn_ids is None or not record.turn_response_starts:
-                traj = {
-                    "input_ids": full_input_ids.unsqueeze(0),
-                    "loss_mask": full_loss_mask.unsqueeze(0),
-                    "logprobs": full_logprobs.unsqueeze(0),
-                    "versions": full_versions.unsqueeze(0),
-                    "attention_mask": full_attention.unsqueeze(0),
-                    "rewards": torch.tensor(
-                        [record.reward], dtype=torch.float32
-                    ).unsqueeze(0),
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                }
-                # Add new fields if present
-                if full_logp is not None:
-                    traj["logp"] = full_logp.unsqueeze(0)
-                if full_topk_ids is not None:
-                    traj["topk_ids"] = full_topk_ids.unsqueeze(0)
-                if full_topk_logp is not None:
-                    traj["topk_logp"] = full_topk_logp.unsqueeze(0)
-                if full_distill_reward is not None:
-                    traj["distill_reward"] = full_distill_reward.unsqueeze(0)
-                if full_teacher_logp is not None:
-                    traj["teacher_logp"] = full_teacher_logp.unsqueeze(0)
-                result.append(traj)
-                continue
-
-            # Split episode into per-turn dicts
-            n_turns = len(record.turn_response_starts)
-
-            # Precompute per-turn response lengths for correct slicing of
-            # response-only fields (logp, topk_ids, teacher_logp, etc.).
-            # These fields are concatenated across turns and have length
-            # total_response_len, not full_seq_len.
-            turn_resp_lens = [
-                record.turn_response_ends[t] - record.turn_response_starts[t]
-                for t in range(n_turns)
-            ]
-            resp_offset = 0  # running offset into response-only tensors
-
-            for t in range(n_turns):
-                end = record.turn_response_ends[t]
-                resp_len = turn_resp_lens[t]
-
-                # For individual-style, each turn needs its own prompt context.
-                # Include all tokens from beginning to end of this turn's response.
-                turn_seq_len = end
-                turn_input_ids = full_input_ids[:turn_seq_len]
-                turn_loss_mask = full_loss_mask[:turn_seq_len]
-                turn_logprobs = full_logprobs[:turn_seq_len]
-                turn_versions = full_versions[:turn_seq_len]
-                turn_attention = full_attention[:turn_seq_len]
-
-                turn_reward = (
-                    record.turn_rewards[t]
-                    if record.turn_rewards and t < len(record.turn_rewards)
-                    else 0.0
-                )
-                turn_id = record.turn_ids[t] if t < len(record.turn_ids) else ""
-                parent_turn_id = (
-                    record.parent_turn_ids[t]
-                    if record.parent_turn_ids and t < len(record.parent_turn_ids)
-                    else None
-                )
-
-                traj = {
-                    "input_ids": turn_input_ids.unsqueeze(0),
-                    "loss_mask": turn_loss_mask.unsqueeze(0),
-                    "logprobs": turn_logprobs.unsqueeze(0),
-                    "versions": turn_versions.unsqueeze(0),
-                    "attention_mask": turn_attention.unsqueeze(0),
-                    "rewards": torch.tensor([turn_reward], dtype=torch.float32),
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                    "_episode_idx": idx,
-                    "_turn_idx_in_episode": t,
-                    "_turn_id": turn_id,
-                    "_parent_turn_id": parent_turn_id,
-                    "_turn_reward": turn_reward,
-                    "_outcome_reward": record.outcome_reward,
-                    "_num_turns_in_episode": n_turns,
-                }
-                # Add new fields if present — slice by response offset, not
-                # full-sequence position, since these are response-only.
-                if full_logp is not None:
-                    traj["logp"] = full_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_topk_ids is not None:
-                    traj["topk_ids"] = full_topk_ids[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_topk_logp is not None:
-                    traj["topk_logp"] = full_topk_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_distill_reward is not None:
-                    traj["distill_reward"] = full_distill_reward[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_teacher_logp is not None:
-                    traj["teacher_logp"] = full_teacher_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                result.append(traj)
-
-                resp_offset += resp_len
-
+            node = self.trajectories[qid][idx]
+            result.append(node)
         return result
 
     def reset_trained_flags(self) -> None:

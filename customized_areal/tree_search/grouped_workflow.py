@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from customized_areal.tree_search.mcts_tree_store import _find_turn_boundaries
+from customized_areal.tree_search.mcts_tree_store import Node, _find_turn_boundaries
 
 from areal.api import InferenceEngine
 from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
@@ -22,6 +22,63 @@ from areal.utils import logging
 from areal.utils.data import concat_padded_tensors
 
 logger = logging.getLogger("TreeSearchGroupedWorkflow")
+
+
+def _merge_nodes_to_episode(nodes: list[Node]) -> Node:
+    """Merge per-turn Nodes into a single per-episode Node.
+
+    Concatenates all sequence fields from the nodes in order.
+    The episode_id is taken from the first node. The outcome_reward
+    is taken from the last node.
+    """
+    if not nodes:
+        return Node(
+            input_ids=[],
+            loss_mask=[],
+            logprobs=[],
+            versions=[],
+            node_id="",
+            parent_node_id=None,
+            episode_id="",
+        )
+
+    all_input_ids: list[int] = []
+    all_loss_mask: list[int] = []
+    all_logprobs: list[float] = []
+    all_versions: list[int] = []
+    all_topk_ids: list[list[int]] = []
+    all_topk_logp: list[list[float]] = []
+    all_distill_reward: list[list[float]] = []
+    all_teacher_logp: list[list[float]] = []
+
+    for node in nodes:
+        all_input_ids.extend(node.input_ids)
+        all_loss_mask.extend(node.loss_mask)
+        all_logprobs.extend(node.logprobs)
+        all_versions.extend(node.versions)
+        if node.topk_ids is not None:
+            all_topk_ids.extend(node.topk_ids)
+        if node.topk_logp is not None:
+            all_topk_logp.extend(node.topk_logp)
+        if node.distill_reward is not None:
+            all_distill_reward.extend(node.distill_reward)
+        if node.teacher_logp is not None:
+            all_teacher_logp.extend(node.teacher_logp)
+
+    return Node(
+        input_ids=all_input_ids,
+        loss_mask=all_loss_mask,
+        logprobs=all_logprobs,
+        versions=all_versions,
+        node_id=nodes[-1].node_id,
+        parent_node_id=nodes[-1].parent_node_id,
+        episode_id=nodes[0].episode_id or nodes[0].node_id,
+        outcome_reward=nodes[-1].outcome_reward,
+        topk_ids=all_topk_ids if all_topk_ids else None,
+        topk_logp=all_topk_logp if all_topk_logp else None,
+        distill_reward=all_distill_reward if all_distill_reward else None,
+        teacher_logp=all_teacher_logp if all_teacher_logp else None,
+    )
 
 
 def _merge_turn_dicts_to_episode(turn_dicts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -127,7 +184,7 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
 
     async def arun_episode(
         self, engine: InferenceEngine, data: dict[str, Any]
-    ) -> list[dict[str, Any]] | None:
+    ) -> list | None:
         results = await asyncio.gather(
             *[self.workflow.arun_episode(engine, data) for _ in range(self.group_size)]
         )
@@ -144,24 +201,33 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
                 "trajectories returned None, using remaining results"
             )
 
-        # Check if results are list[dict] (new format)
         first = valid_results[0]
-        if isinstance(first, list) and len(first) > 0 and isinstance(first[0], dict):
-            # Merge turn dicts per episode into a single per-episode dict
-            episode_trajs: list[dict[str, Any]] = []
+        if isinstance(first, list) and len(first) > 0:
             query_id = data.get("query_id") or ""
 
-            for result in valid_results:
-                merged = _merge_turn_dicts_to_episode(result)
-                if merged:
-                    if query_id:
-                        merged["_mcts_query_id"] = query_id
-                    episode_trajs.append(merged)
+            if isinstance(first[0], Node):
+                # New format: list[Node] per result
+                episode_nodes: list[Node] = []
+                for result in valid_results:
+                    merged = _merge_nodes_to_episode(result)
+                    if merged.input_ids:
+                        if query_id:
+                            merged.episode_id = f"{query_id}_{len(episode_nodes)}"
+                            object.__setattr__(merged, "_mcts_query_id", query_id)
+                            object.__setattr__(merged, "_mcts_seq_ids", [])
+                        episode_nodes.append(merged)
+                return episode_nodes if episode_nodes else None
 
-            if not episode_trajs:
-                return None
-
-            return episode_trajs
+            elif isinstance(first[0], dict):
+                # Legacy format: list[dict] per result
+                episode_trajs: list[dict[str, Any]] = []
+                for result in valid_results:
+                    merged = _merge_turn_dicts_to_episode(result)
+                    if merged:
+                        if query_id:
+                            merged["_mcts_query_id"] = query_id
+                        episode_trajs.append(merged)
+                return episode_trajs if episode_trajs else None
 
         # Legacy tensor dicts — fall back to base class behavior
         concatenated = concat_padded_tensors(valid_results)

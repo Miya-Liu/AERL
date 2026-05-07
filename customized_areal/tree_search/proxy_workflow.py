@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from customized_areal.tree_search.mcts_tree_store import _find_turn_boundaries
+from customized_areal.tree_search.mcts_tree_store import Node
 
 from areal.experimental.openai.proxy.workflow import OpenAIProxyWorkflow
 from areal.utils import logging
@@ -61,53 +61,26 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
             kwargs["agent"] = agent_cls()
         super().__init__(**kwargs)
 
-    def _interactions_to_turn_dicts(
-        self, interactions: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        """Convert InteractionWithTokenLogpReward objects to per-turn list-based dicts.
+    def _interactions_to_nodes(self, interactions: dict[str, Any]) -> list[Node]:
+        """Convert InteractionWithTokenLogpReward objects to list[Node].
 
-        Args:
-            interactions: Dict of interaction_id to InteractionWithTokenLogpReward objects
-
-        Returns:
-            List of trajectory dicts with Python list fields following the schema:
-            {
-                "input_ids": list[int],              # unpadded token IDs
-                "loss_mask": list[int],              # 0=prompt, 1=response
-                "logprobs": list[float],             # chosen token log prob per position
-                "versions": list[int],               # policy version per token
-                "reward": float,                     # outcome reward
-                "turn_response_starts": list[int],   # response start indices
-                "turn_response_ends": list[int],     # response end indices
-                "turn_ids": list[str],               # interaction ID per turn
-                "parent_turn_ids": list[str | None], # parent interaction ID per turn
-                "turn_rewards": list[float],         # per-turn reward
-                "outcome_reward": float,             # outcome reward
-                "response_ids": list[int],           # chosen response token IDs (output_tokens)
-                "logp": list[float],                 # chosen token log probs (output_logprobs)
-                "topk_ids": list[list[int]],         # top-k candidate token IDs per response position
-                "topk_logp": list[list[float]],      # top-k candidate log probs per response position
-                "distill_reward": list[list[float]], # per-response-position distillation reward (empty placeholder)
-                "teacher_logp": list[list[float]],   # teacher log probs per response position (empty placeholder)
-            }
+        Each interaction becomes one Node representing a single turn.
         """
         from areal.experimental.openai.types import InteractionWithTokenLogpReward
 
-        traj_dicts: list[dict[str, Any]] = []
+        nodes: list[Node] = []
 
         for interaction_id, interaction in interactions.items():
             assert isinstance(interaction, InteractionWithTokenLogpReward)
             resp = interaction.model_response
             assert resp is not None, "Model response is not set."
 
-            # Build base sequence data
             seq_tokens = resp.input_tokens + resp.output_tokens
 
             if (
                 interaction.chat_template_type == "concat"
                 and interaction.parent is not None
             ):
-                # For concat style with parent, include parent's data
                 parent_res = interaction.parent.to_tensor_dict()
                 parent_logprobs = parent_res["logprobs"].squeeze(0).tolist()
                 parent_loss_mask = parent_res["loss_mask"].squeeze(0).tolist()
@@ -132,90 +105,75 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                         + resp.output_versions
                     )
                 else:
-                    # If child input is shorter than parent, ignore parent (shouldn't happen)
                     logprobs = [0.0] * resp.input_len + resp.output_logprobs
                     loss_mask = [0] * resp.input_len + [1] * resp.output_len
                     versions = [-1] * resp.input_len + resp.output_versions
             else:
-                # Standard case: no parent or not concat style
                 logprobs = [0.0] * resp.input_len + resp.output_logprobs
                 loss_mask = [0] * resp.input_len + [1] * resp.output_len
                 versions = [-1] * resp.input_len + resp.output_versions
 
-            reward = interaction.reward if interaction.reward is not None else 0.0
+            outcome_reward = (
+                interaction.reward if interaction.reward is not None else 0.0
+            )
 
-            # Compute turn boundaries
-            turn_response_starts, turn_response_ends = _find_turn_boundaries(loss_mask)
-
-            # Extract top-k logprobs
             topk_ids: list[list[int]] = []
             topk_logp: list[list[float]] = []
             if resp.output_top_logprobs is not None:
                 for pos_logprobs in resp.output_top_logprobs:
                     ids = []
                     logps = []
-                    for token_id, logp in pos_logprobs:
+                    for token_id, lp in pos_logprobs:
                         ids.append(token_id)
-                        logps.append(logp)
+                        logps.append(lp)
                     topk_ids.append(ids)
                     topk_logp.append(logps)
 
-            # Build trajectory dict
-            traj = {
-                "input_ids": seq_tokens,
-                "loss_mask": loss_mask,
-                "logprobs": logprobs,
-                "versions": versions,
-                "attention_mask": [1] * len(seq_tokens),
-                "reward": reward,
-                "turn_response_starts": turn_response_starts,
-                "turn_response_ends": turn_response_ends,
-                "turn_ids": [interaction_id],
-                "parent_turn_ids": [
-                    interaction.parent.interaction_id
-                    if interaction.parent and interaction.parent._interaction_id
-                    else None
-                ],
-                "turn_rewards": [reward],
-                "outcome_reward": reward,
-                "response_ids": resp.output_tokens,
-                "logp": resp.output_logprobs,
-                "topk_ids": topk_ids,
-                "topk_logp": topk_logp,
-                "distill_reward": [],
-                "teacher_logp": [],
-            }
+            parent_id = (
+                interaction.parent.interaction_id
+                if interaction.parent and interaction.parent._interaction_id
+                else None
+            )
 
-            traj_dicts.append(traj)
+            node = Node(
+                input_ids=seq_tokens,
+                loss_mask=loss_mask,
+                logprobs=logprobs,
+                versions=versions,
+                outcome_reward=outcome_reward,
+                node_id=interaction_id,
+                parent_node_id=parent_id,
+                episode_id="",
+                topk_ids=topk_ids if topk_ids else None,
+                topk_logp=topk_logp if topk_logp else None,
+                distill_reward=None,
+                teacher_logp=None,
+            )
 
-        return traj_dicts
+            nodes.append(node)
 
-    async def arun_episode(
-        self, engine, data: dict[str, Any]
-    ) -> list[dict[str, Any]] | None:
-        # Extract query_id from the input data before it gets lost
+        return nodes
+
+    async def arun_episode(self, engine, data: dict[str, Any]) -> list | None:
         query_id = data.get("query_id") or ""
 
-        # Run the base episode logic
         result = await super().arun_episode(engine, data)
 
         if result is None:
             return None
 
-        # If result is still InteractionWithTokenLogpReward dict, convert now
-        # and inject query_id
         from areal.experimental.openai.types import InteractionWithTokenLogpReward
 
         if isinstance(result, dict) and all(
             isinstance(v, InteractionWithTokenLogpReward) for v in result.values()
         ):
-            traj_dicts = self._interactions_to_turn_dicts(result)
+            nodes = self._interactions_to_nodes(result)
             if query_id:
-                for traj in traj_dicts:
-                    traj["_mcts_query_id"] = query_id
-            return traj_dicts
+                for node in nodes:
+                    node.episode_id = query_id
+            return nodes
 
-        # If result is already a list (from wrapped workflow), inject query_id
+        # Legacy: result is list of dicts — inject query_id
         if isinstance(result, list):
             if query_id:
                 for traj in result:
@@ -223,7 +181,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                         traj["_mcts_query_id"] = query_id
             return result
 
-        # If result is a tensor dict, wrap in list and inject query_id
+        # Legacy: result is tensor dict → wrap in list
         if isinstance(result, dict):
             if query_id:
                 result["_mcts_query_id"] = query_id
