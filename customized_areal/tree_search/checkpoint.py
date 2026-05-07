@@ -1,4 +1,4 @@
-"""Checkpoint save/load for the flat TrajectoryRecord store.
+"""Checkpoint save/load for the flat Node store.
 
 Unlike the old TrieNode-based format, MCTS stats are keyed by seq_id (int)
 and serialize directly — no rebuild_mcts_stats() needed after loading.
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, TrajectoryRecord
+from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
 
 
 class TreeCheckpointManager:
@@ -92,55 +92,40 @@ class TreeCheckpointManager:
         return store
 
     @staticmethod
-    def _serialize_record(record: TrajectoryRecord) -> dict:
+    def _serialize_record(node: Node) -> dict:
         data = {
-            "input_ids": record.input_ids,
-            "loss_mask": record.loss_mask,
-            "logprobs": record.logprobs,
-            "versions": record.versions,
-            "reward": record.reward,
-            "turn_response_starts": record.turn_response_starts,
-            "turn_response_ends": record.turn_response_ends,
+            "input_ids": node.input_ids,
+            "loss_mask": node.loss_mask,
+            "logprobs": node.logprobs,
+            "versions": node.versions,
+            "outcome_reward": node.outcome_reward,
+            "node_id": node.node_id,
+            "parent_node_id": node.parent_node_id,
+            "episode_id": node.episode_id,
         }
-        # New fields
-        if record.logp is not None:
-            data["logp"] = record.logp
-        if record.topk_ids is not None:
-            data["topk_ids"] = record.topk_ids
-        if record.topk_logp is not None:
-            data["topk_logp"] = record.topk_logp
-        if record.distill_reward is not None:
-            data["distill_reward"] = record.distill_reward
-        if record.teacher_logp is not None:
-            data["teacher_logp"] = record.teacher_logp
-        # Episode metadata
-        if record.turn_ids is not None:
-            data["turn_ids"] = record.turn_ids
-        if record.parent_turn_ids is not None:
-            data["parent_turn_ids"] = record.parent_turn_ids
-        if record.turn_rewards is not None:
-            data["turn_rewards"] = record.turn_rewards
-        if record.outcome_reward != 0.0:
-            data["outcome_reward"] = record.outcome_reward
+        if node.topk_ids is not None:
+            data["topk_ids"] = node.topk_ids
+        if node.topk_logp is not None:
+            data["topk_logp"] = node.topk_logp
+        if node.distill_reward is not None:
+            data["distill_reward"] = node.distill_reward
+        if node.teacher_logp is not None:
+            data["teacher_logp"] = node.teacher_logp
         return data
 
     @staticmethod
-    def _deserialize_record(data: dict) -> TrajectoryRecord:
-        return TrajectoryRecord(
+    def _deserialize_record(data: dict) -> Node:
+        return Node(
             input_ids=data["input_ids"],
             loss_mask=data["loss_mask"],
             logprobs=data["logprobs"],
             versions=data["versions"],
-            reward=data["reward"],
-            turn_response_starts=data["turn_response_starts"],
-            turn_response_ends=data["turn_response_ends"],
-            logp=data.get("logp"),
+            outcome_reward=data.get("outcome_reward", data.get("reward", 0.0)),
+            node_id=data.get("node_id", ""),
+            parent_node_id=data.get("parent_node_id"),
+            episode_id=data.get("episode_id", ""),
             topk_ids=data.get("topk_ids"),
             topk_logp=data.get("topk_logp"),
             distill_reward=data.get("distill_reward"),
             teacher_logp=data.get("teacher_logp"),
-            turn_ids=data.get("turn_ids"),
-            parent_turn_ids=data.get("parent_turn_ids"),
-            turn_rewards=data.get("turn_rewards"),
-            outcome_reward=data.get("outcome_reward", 0.0),
         )

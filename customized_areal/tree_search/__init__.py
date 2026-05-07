@@ -6,7 +6,7 @@ from customized_areal.tree_search.config import (
     TreeBackupConfig,
     TreeBackupMode,
 )
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, TrajectoryRecord
+from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
 from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 
@@ -20,5 +20,5 @@ __all__ = [
     "TreeBackupConfig",
     "TreeBackupMode",
     "TreeCheckpointManager",
-    "TrajectoryRecord",
+    "Node",
 ]

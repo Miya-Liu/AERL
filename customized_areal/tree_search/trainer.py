@@ -35,6 +35,7 @@ from customized_areal.tree_search.grouped_workflow import (
 )
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
+    Node,
     _node_to_tensor_dict,
 )
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
@@ -80,20 +81,30 @@ def _list_dict_to_tensor(traj: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _mark_batch_trained(
-    tree_store: MCTSTreeStore, trajectories: list[dict[str, Any]]
-) -> None:
-    """Mark all trajectories in a batch as trained after tree backup."""
+def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Any]) -> None:
+    """Mark all trajectories in a batch as trained after tree backup.
+
+    Handles both Node objects (with _mcts_query_id/_mcts_seq_id attrs)
+    and legacy dicts (with _mcts_query_id/_mcts_seq_id keys).
+    """
     count = 0
     for traj in trajectories:
-        query_id = traj.get("_mcts_query_id")
+        query_id = getattr(traj, "_mcts_query_id", None)
+        if query_id is None and isinstance(traj, dict):
+            query_id = traj.get("_mcts_query_id")
         if query_id is None:
             continue
-        seq_id = traj.get("_mcts_seq_id")
+
+        seq_id = getattr(traj, "_mcts_seq_id", None)
+        if seq_id is None and isinstance(traj, dict):
+            seq_id = traj.get("_mcts_seq_id")
         if seq_id is not None:
             tree_store.set_trained(query_id, seq_id, True)
             count += 1
-        seq_ids = traj.get("_mcts_seq_ids")
+
+        seq_ids = getattr(traj, "_mcts_seq_ids", None)
+        if seq_ids is None and isinstance(traj, dict):
+            seq_ids = traj.get("_mcts_seq_ids")
         if seq_ids is not None:
             for sid in seq_ids:
                 tree_store.set_trained(query_id, sid, True)
@@ -387,7 +398,9 @@ class _CacheAwareBatchBuilder:
                 continue
             nodes = self.tree_store.load_trajectories(query_id, item["cached_count"])
             for node in nodes:
-                traj_dict = _node_to_tensor_dict(node, query_id, getattr(node, '_mcts_seq_id', 0))
+                traj_dict = _node_to_tensor_dict(
+                    node, query_id, getattr(node, "_mcts_seq_id", 0)
+                )
                 all_trajs.append(traj_dict)
         return all_trajs
 
@@ -579,7 +592,21 @@ class CacheAwarePPOTrainer(PPOTrainer):
         if self.tree_backup_config.advantage_mode == AdvantageMode.TREE:
             self.tree_advantage_computer.compute(trajs)
             for traj in trajs:
-                if "advantages" in traj:
+                if isinstance(traj, Node):
+                    if hasattr(traj, "advantages") and traj.advantages is not None:
+                        adv = traj.advantages
+                        ret = traj.returns
+                        object.__setattr__(
+                            traj,
+                            "_tree_advantages",
+                            adv.clone() if hasattr(adv, "clone") else adv,
+                        )
+                        object.__setattr__(
+                            traj,
+                            "_tree_returns",
+                            ret.clone() if hasattr(ret, "clone") else ret,
+                        )
+                elif isinstance(traj, dict) and "advantages" in traj:
                     adv = traj["advantages"]
                     ret = traj["returns"]
                     traj["_tree_advantages"] = (
@@ -603,10 +630,20 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         # --- End tree operations ---
 
-        # Convert list-based dicts to tensor dicts for the downstream PPO pipeline.
-        # New rollouts produce list-based per-episode dicts; cached trajectories
-        # are already tensor-based per-turn dicts.
-        trajs = [_list_dict_to_tensor(t) if _is_list_traj(t) else t for t in trajs]
+        # Convert to tensor dicts for the downstream PPO pipeline.
+        # New rollouts produce Node objects or list-based per-episode dicts;
+        # cached trajectories are already tensor-based per-turn dicts.
+        converted: list[dict[str, Any]] = []
+        for t in trajs:
+            if isinstance(t, Node):
+                query_id = getattr(t, "_mcts_query_id", "")
+                seq_id = getattr(t, "_mcts_seq_id", 0)
+                converted.append(_node_to_tensor_dict(t, query_id, seq_id))
+            elif _is_list_traj(t):
+                converted.append(_list_dict_to_tensor(t))
+            else:
+                converted.append(t)
+        trajs = converted
 
         return trajs
 

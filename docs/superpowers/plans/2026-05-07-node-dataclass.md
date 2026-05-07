@@ -1,23 +1,31 @@
 # Node Dataclass Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace `TrajectoryRecord` and ad-hoc `dict[str, Any]` trajectory representations with a unified `Node` dataclass in `mcts_tree_store.py`.
+**Goal:** Replace `TrajectoryRecord` and ad-hoc `dict[str, Any]` trajectory
+representations with a unified `Node` dataclass in `mcts_tree_store.py`.
 
-**Architecture:** `Node` is a single-turn tree node with 12 fields (8 required, 4 optional). Per-turn Nodes are stored individually in the tree store. Episodes are reconstructed by traversing `node_id`/`parent_node_id` links grouped by `episode_id` when loading for training.
+**Architecture:** `Node` is a single-turn tree node with 12 fields (8 required, 4
+optional). Per-turn Nodes are stored individually in the tree store. Episodes are
+reconstructed by traversing `node_id`/`parent_node_id` links grouped by `episode_id`
+when loading for training.
 
 **Tech Stack:** Python 3.12+, dataclasses, torch
 
----
+______________________________________________________________________
 
 ### Task 1: Define `Node` dataclass and remove `TrajectoryRecord`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:1-53`
 
 - [ ] **Step 1: Replace `TrajectoryRecord` with `Node` dataclass**
 
-In `customized_areal/tree_search/mcts_tree_store.py`, replace the `TrajectoryRecord` dataclass (lines 32-53) with:
+In `customized_areal/tree_search/mcts_tree_store.py`, replace the `TrajectoryRecord`
+dataclass (lines 32-53) with:
 
 ```python
 @dataclass
@@ -62,9 +70,13 @@ Also update the module docstring (line 5): replace "TrajectoryRecord" with "Node
 Replace all `TrajectoryRecord` references with `Node`:
 
 - Line 94: `dict[str, list[TrajectoryRecord]]` → `dict[str, list[Node]]`
+
 - Line 118: `) -> TrajectoryRecord:` → `) -> Node:`
+
 - Line 198: `record: TrajectoryRecord` → `node: Node`
+
 - Line 199: docstring "Insert a single TrajectoryRecord" → "Insert a single Node"
+
 - Lines 228, 422: remaining docstring references to TrajectoryRecord → Node
 
 - [ ] **Step 3: Commit**
@@ -74,11 +86,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor(tree-search): replace TrajectoryRecord with Node dataclass"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Update `_make_record` to build `Node`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:116-144`
 
 - [ ] **Step 1: Rewrite `_make_record` to return `Node`**
@@ -122,11 +135,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor(tree-search): update _make_record to return Node"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Update `_insert_list_dict` to build `Node`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:146-195`
 
 - [ ] **Step 1: Rewrite `_insert_list_dict`**
@@ -176,11 +190,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor(tree-search): update _insert_list_dict to build Node"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Update `_insert_single` and `_insert_per_turn_dicts` for per-turn Nodes
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:197-365`
 
 - [ ] **Step 1: Update `_insert_single` for Node fields**
@@ -277,11 +292,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor(tree-search): store per-turn Nodes in tree store"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Update `get_advantages` and `get_prompt_mask` for Node fields
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:367-412`
 
 - [ ] **Step 1: Update both methods**
@@ -313,11 +329,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor(tree-search): update get_advantages and get_prompt_mask for Node"
 ```
 
----
+______________________________________________________________________
 
 ### Task 6: Update `load_trajectories` to return `list[Node]` + add episode reconstruction
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:413-618`
 
 - [ ] **Step 1: Add `_reconstruct_episode` and `_response_span` helpers**
@@ -415,11 +432,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "feat(tree-search): load_trajectories returns list[Node] with episode reconstruction helpers"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Update `proxy_workflow._interactions_to_turn_dicts` to return `list[Node]`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/proxy_workflow.py:64-191`
 
 - [ ] **Step 1: Rewrite method to return `list[Node]`**
@@ -541,14 +559,16 @@ git add customized_areal/tree_search/proxy_workflow.py
 git commit -m "refactor(tree-search): proxy_workflow returns list[Node]"
 ```
 
----
+______________________________________________________________________
 
 ### Task 8: Update `grouped_workflow.py` for Node merging
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/grouped_workflow.py:27-168`
 
-- [ ] **Step 1: Rename and update `_merge_turn_dicts_to_episode` → `_merge_nodes_to_episode`**
+- [ ] **Step 1: Rename and update `_merge_turn_dicts_to_episode` →
+  `_merge_nodes_to_episode`**
 
 Replace lines 27-117:
 
@@ -658,11 +678,12 @@ git add customized_areal/tree_search/grouped_workflow.py
 git commit -m "refactor(tree-search): grouped_workflow uses Node merging"
 ```
 
----
+______________________________________________________________________
 
 ### Task 9: Update `advantage.py` to work with `Node` objects
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/advantage.py:13-127`
 
 - [ ] **Step 1: Rewrite `compute` and helpers for Node objects**
@@ -739,7 +760,8 @@ class TreeAdvantageComputer:
             object.__setattr__(node, 'returns', advantages.clone())
 ```
 
-Remove the `_get_seq_len` static method with `input_ids` parameter — replaced by the one above.
+Remove the `_get_seq_len` static method with `input_ids` parameter — replaced by the one
+above.
 
 - [ ] **Step 2: Commit**
 
@@ -748,11 +770,12 @@ git add customized_areal/tree_search/advantage.py
 git commit -m "refactor(tree-search): advantage.py works with Node objects"
 ```
 
----
+______________________________________________________________________
 
 ### Task 10: Update `trainer.py` helpers to convert `Node` → tensor dict
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py:48-77, 319-606`
 
 - [ ] **Step 1: Update `_is_list_traj` and `_list_dict_to_tensor`**
@@ -907,11 +930,12 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "refactor(tree-search): trainer.py handles Node objects and converts to tensor dict"
 ```
 
----
+______________________________________________________________________
 
 ### Task 11: Update `checkpoint.py` for `Node` serialization
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py`
 
 - [ ] **Step 1: Update imports and serialize/deserialize**
@@ -978,11 +1002,12 @@ git add customized_areal/tree_search/checkpoint.py
 git commit -m "refactor(tree-search): checkpoint serialization for Node"
 ```
 
----
+______________________________________________________________________
 
 ### Task 12: Update `__init__.py` exports
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/__init__.py`
 
 - [ ] **Step 1: Replace `TrajectoryRecord` with `Node`**
@@ -1011,11 +1036,12 @@ git add customized_areal/tree_search/__init__.py
 git commit -m "refactor(tree-search): export Node instead of TrajectoryRecord"
 ```
 
----
+______________________________________________________________________
 
 ### Task 13: Update tests for `Node` dataclass
 
 **Files:**
+
 - Modify: `tests/test_tree_search/test_mcts_tree_store.py`
 
 - [ ] **Step 1: Update imports**
@@ -1092,6 +1118,7 @@ class TestNode:
 - [ ] **Step 3: Update `TestMCTSTreeStoreInsertBatch` tests**
 
 Update assertions in `test_insert_list_dict_basic`:
+
 ```python
 def test_insert_list_dict_basic(self):
     store = MCTSTreeStore()
@@ -1112,7 +1139,8 @@ def test_insert_list_dict_basic(self):
     assert node.loss_mask == [0, 0, 1, 1, 1]
 ```
 
-Replace `record.reward` → `node.outcome_reward` and `record.logp` → `node.topk_ids` in remaining assertions.
+Replace `record.reward` → `node.outcome_reward` and `record.logp` → `node.topk_ids` in
+remaining assertions.
 
 - [ ] **Step 4: Update `TestMCTSTreeStoreLoadTrajectories` tests**
 
@@ -1187,7 +1215,7 @@ git add tests/test_tree_search/test_mcts_tree_store.py
 git commit -m "test(tree-search): update tests for Node dataclass"
 ```
 
----
+______________________________________________________________________
 
 ### Task 14: Run formatting and linting
 
