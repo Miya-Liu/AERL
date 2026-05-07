@@ -129,17 +129,12 @@ links within each episode (grouped by `episode_id`).
 6. **`checkpoint.py`**
    - Serialize/deserialize `Node` fields instead of `TrajectoryRecord`
 
-### Open Question
+### Episode Reconstruction
 
-`_merge_turn_dicts_to_episode` currently merges per-turn dicts into one per-episode
-dict with list-typed `turn_ids`/`parent_turn_ids`. Since `Node` has singular
-`node_id`/`parent_node_id`, the merged representation needs a decision:
-- Store individual per-turn `Node`s in the tree store, reconstruct episodes by
-  traversing `node_id`/`parent_node_id` links grouped by `episode_id`
-- Or use a separate container (e.g., `list[Node]`) for episode-level data passed
-  to training
-
-Resolve during implementation based on least code churn.
+Store individual per-turn `Node`s in the tree store. Reconstruct episodes by
+traversing `node_id`/`parent_node_id` links grouped by `episode_id`. When loading
+trajectories for training, concatenate linked `Node` sequences to produce the
+full episode tensor dict.
 
 ### Constraints
 
