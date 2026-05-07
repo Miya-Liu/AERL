@@ -99,11 +99,6 @@ def _merge_turn_dicts_to_episode(turn_dicts: list[dict[str, Any]]) -> dict[str, 
     logprobs = []
     versions = []
 
-    # Merge turn-specific fields
-    turn_ids = []
-    parent_turn_ids = []
-    turn_rewards = []
-
     # Merge response-only fields
     response_ids = []
     logp = []
@@ -118,11 +113,6 @@ def _merge_turn_dicts_to_episode(turn_dicts: list[dict[str, Any]]) -> dict[str, 
         loss_mask.extend(turn_dict["loss_mask"])
         logprobs.extend(turn_dict["logprobs"])
         versions.extend(turn_dict["versions"])
-
-        # Turn-specific fields
-        turn_ids.extend(turn_dict["turn_ids"])
-        parent_turn_ids.extend(turn_dict["parent_turn_ids"])
-        turn_rewards.extend(turn_dict["turn_rewards"])
 
         # Response-only fields
         if "response_ids" in turn_dict:
@@ -150,9 +140,6 @@ def _merge_turn_dicts_to_episode(turn_dicts: list[dict[str, Any]]) -> dict[str, 
         "attention_mask": [1] * len(input_ids),
         "turn_response_starts": turn_response_starts,
         "turn_response_ends": turn_response_ends,
-        "turn_ids": turn_ids,
-        "parent_turn_ids": parent_turn_ids,
-        "turn_rewards": turn_rewards,
         "reward": turn_dicts[-1]["reward"],
         "outcome_reward": turn_dicts[-1]["outcome_reward"],
     }
