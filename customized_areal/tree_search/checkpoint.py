@@ -121,7 +121,7 @@ class TreeCheckpointManager:
             logprobs=data["logprobs"],
             versions=data["versions"],
             outcome_reward=data.get("outcome_reward", data.get("reward", 0.0)),
-            node_id=data.get("node_id", ""),
+            node_id=data.get("node_id", 0),
             parent_node_id=data.get("parent_node_id"),
             episode_id=data.get("episode_id", ""),
             topk_ids=data.get("topk_ids"),

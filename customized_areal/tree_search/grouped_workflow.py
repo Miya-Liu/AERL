@@ -37,8 +37,6 @@ def _merge_nodes_to_episode(nodes: list[Node]) -> Node:
             loss_mask=[],
             logprobs=[],
             versions=[],
-            node_id="",
-            parent_node_id=None,
             episode_id="",
         )
 
@@ -70,9 +68,7 @@ def _merge_nodes_to_episode(nodes: list[Node]) -> Node:
         loss_mask=all_loss_mask,
         logprobs=all_logprobs,
         versions=all_versions,
-        node_id=nodes[-1].node_id,
-        parent_node_id=nodes[-1].parent_node_id,
-        episode_id=nodes[0].episode_id or nodes[0].node_id,
+        episode_id=nodes[0].episode_id,
         outcome_reward=nodes[-1].outcome_reward,
         topk_ids=all_topk_ids if all_topk_ids else None,
         topk_logp=all_topk_logp if all_topk_logp else None,
@@ -201,7 +197,6 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
                         if query_id:
                             merged.episode_id = f"{query_id}_{len(episode_nodes)}"
                             object.__setattr__(merged, "query_id", query_id)
-                            object.__setattr__(merged, "_mcts_seq_ids", [])
                         episode_nodes.append(merged)
                 return episode_nodes if episode_nodes else None
 

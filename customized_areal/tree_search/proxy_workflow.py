@@ -129,20 +129,13 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                     topk_ids.append(ids)
                     topk_logp.append(logps)
 
-            parent_id = (
-                interaction.parent.interaction_id
-                if interaction.parent and interaction.parent._interaction_id
-                else None
-            )
-
             node = Node(
                 input_ids=seq_tokens,
                 loss_mask=loss_mask,
                 logprobs=logprobs,
                 versions=versions,
                 outcome_reward=outcome_reward,
-                node_id=interaction_id,
-                parent_node_id=parent_id,
+                node_id=0,
                 episode_id="",
                 topk_ids=topk_ids if topk_ids else None,
                 topk_logp=topk_logp if topk_logp else None,

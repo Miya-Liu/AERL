@@ -69,7 +69,7 @@ class TestTreeCheckpointManager:
             "query_id": "q3",
         }
         loaded.insert_batch([t3])
-        assert t3["_mcts_seq_id"] == 2
+        assert t3["node_id"] == 2
 
     def test_load_preserves_trajectory_data(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
