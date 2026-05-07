@@ -342,21 +342,22 @@ class MCTSTreeStore:
                 turn["_mcts_query_id"] = query_id
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
-        """Return per-token advantages: Q-value on response tokens, 0 on prompt tokens."""
+        """Return per-token advantages: Q-value on response tokens, 0 on prompt."""
         qid, idx = self._seq_id_to_key[seq_id]
-        record = self.trajectories[qid][idx]
+        node = self.trajectories[qid][idx]
         q_val = self._q_values.get(seq_id, 0.0)
-        seq_len = len(record.input_ids)
+        seq_len = len(node.input_ids)
         advantages = torch.zeros(seq_len, dtype=torch.float32)
-        for start, end in zip(record.turn_response_starts, record.turn_response_ends):
+        starts, ends = _find_turn_boundaries(node.loss_mask)
+        for start, end in zip(starts, ends):
             advantages[start:end] = q_val
         return advantages
 
     def get_prompt_mask(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Return boolean mask: True for response tokens, False for prompt."""
         qid, idx = self._seq_id_to_key[seq_id]
-        record = self.trajectories[qid][idx]
-        return torch.tensor(record.loss_mask, dtype=torch.bool)
+        node = self.trajectories[qid][idx]
+        return torch.tensor(node.loss_mask, dtype=torch.bool)
 
     def set_trained(self, query_id: str, seq_id: int, trained: bool = True) -> None:
         self._trained[seq_id] = trained
