@@ -156,52 +156,36 @@ class MCTSTreeStore:
 
     def _insert_list_dict(self, traj: dict[str, Any]) -> None:
         """Insert a list-based trajectory dict into the tree store."""
-        # Extract fields from list dict
         input_ids = traj["input_ids"]
         loss_mask = traj["loss_mask"]
-        reward = traj.get("reward", 0.0)
+        outcome_reward = traj.get("outcome_reward", traj.get("reward", 0.0))
         logprobs = traj.get("logprobs", [0.0] * len(input_ids))
         versions = traj.get("versions", [0] * len(input_ids))
 
         # New fields
-        logp = traj.get("logp")
         topk_ids = traj.get("topk_ids")
         topk_logp = traj.get("topk_logp")
         distill_reward = traj.get("distill_reward")
         teacher_logp = traj.get("teacher_logp")
 
-        # Get query ID
         query_id = traj.get("_mcts_query_id", "")
 
-        # Get turn boundaries
-        if "turn_response_starts" in traj and "turn_response_ends" in traj:
-            starts = traj["turn_response_starts"]
-            ends = traj["turn_response_ends"]
-        else:
-            starts, ends = _find_turn_boundaries(loss_mask)
-
-        # Create record
-        record = TrajectoryRecord(
+        node = Node(
             input_ids=input_ids,
             loss_mask=loss_mask,
             logprobs=logprobs,
             versions=versions,
-            reward=reward,
-            turn_response_starts=starts,
-            turn_response_ends=ends,
-            logp=logp,
+            outcome_reward=outcome_reward,
+            node_id=traj.get("node_id", traj.get("turn_ids", [""])[0] if traj.get("turn_ids") else ""),
+            parent_node_id=traj.get("parent_node_id", traj.get("parent_turn_ids", [None])[0] if traj.get("parent_turn_ids") else None),
+            episode_id=traj.get("episode_id", ""),
             topk_ids=topk_ids,
             topk_logp=topk_logp,
             distill_reward=distill_reward,
             teacher_logp=teacher_logp,
-            turn_ids=traj.get("turn_ids"),
-            parent_turn_ids=traj.get("parent_turn_ids"),
-            turn_rewards=traj.get("turn_rewards"),
-            outcome_reward=traj.get("outcome_reward", 0.0),
         )
 
-        # Insert into store
-        seq_id = self._insert_single(query_id, record)
+        seq_id = self._insert_single(query_id, node)
         traj["_mcts_seq_id"] = seq_id
         traj["_mcts_query_id"] = query_id
 
