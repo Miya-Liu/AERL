@@ -645,7 +645,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
                     traj["rl_loss_weight"] = 0.0
                 else:
                     traj["rl_loss_weight"] = self.tree_backup_config.rl_loss_weight
-                traj["distill_loss_weight"] = self.tree_backup_config.distill_loss_weight
+                traj["distill_loss_weight"] = (
+                    self.tree_backup_config.distill_loss_weight
+                )
 
         # Convert list-based dicts to tensor dicts for the downstream PPO pipeline.
         # New rollouts produce list-based per-episode dicts; cached trajectories
