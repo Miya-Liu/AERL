@@ -33,7 +33,10 @@ from customized_areal.tree_search.config import (
 from customized_areal.tree_search.grouped_workflow import (
     TreeSearchGroupedRolloutWorkflow,
 )
-from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+from customized_areal.tree_search.mcts_tree_store import (
+    MCTSTreeStore,
+    _node_to_tensor_dict,
+)
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
 from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor
 
@@ -382,8 +385,10 @@ class _CacheAwareBatchBuilder:
             query_id = item["query_id"]
             if not query_id or item["cached_count"] == 0:
                 continue
-            trajs = self.tree_store.load_trajectories(query_id, item["cached_count"])
-            all_trajs.extend(trajs)
+            nodes = self.tree_store.load_trajectories(query_id, item["cached_count"])
+            for node in nodes:
+                traj_dict = _node_to_tensor_dict(node, query_id, getattr(node, '_mcts_seq_id', 0))
+                all_trajs.append(traj_dict)
         return all_trajs
 
 

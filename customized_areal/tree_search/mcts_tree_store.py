@@ -93,6 +93,60 @@ def _is_list_dict(traj: dict[str, Any]) -> bool:
     return isinstance(input_ids, list)
 
 
+def _response_span(loss_mask: list[int]) -> tuple[int, int]:
+    """Return (start, end) of the first response region in loss_mask."""
+    starts, ends = _find_turn_boundaries(loss_mask)
+    if starts:
+        return starts[0], ends[0]
+    return 0, 0
+
+
+def _node_to_tensor_dict(node: Node, query_id: str, seq_id: int) -> dict[str, Any]:
+    """Convert a single Node to a tensor dict with shape [1, seq_len]."""
+    seq_len = len(node.input_ids)
+    traj: dict[str, Any] = {
+        "input_ids": torch.tensor(node.input_ids, dtype=torch.int32).unsqueeze(0),
+        "loss_mask": torch.tensor(node.loss_mask, dtype=torch.int32).unsqueeze(0),
+        "logprobs": torch.tensor(node.logprobs, dtype=torch.float32).unsqueeze(0),
+        "versions": torch.tensor(node.versions, dtype=torch.int32).unsqueeze(0),
+        "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
+        "rewards": torch.tensor([node.outcome_reward], dtype=torch.float32).unsqueeze(0),
+        "_mcts_query_id": query_id,
+        "_mcts_seq_id": seq_id,
+    }
+    # Response-only fields: extract response portion from full sequence
+    resp_start, resp_end = _response_span(node.loss_mask)
+    if node.topk_ids is not None:
+        traj["topk_ids"] = torch.tensor(node.topk_ids, dtype=torch.int32).unsqueeze(0)
+    if node.topk_logp is not None:
+        traj["topk_logp"] = torch.tensor(node.topk_logp, dtype=torch.float32).unsqueeze(0)
+    if node.distill_reward is not None:
+        traj["distill_reward"] = torch.tensor(node.distill_reward, dtype=torch.float32).unsqueeze(0)
+    if node.teacher_logp is not None:
+        traj["teacher_logp"] = torch.tensor(node.teacher_logp, dtype=torch.float32).unsqueeze(0)
+    # Derived from logprobs for response tokens
+    if resp_end > resp_start:
+        traj["logp"] = torch.tensor(
+            node.logprobs[resp_start:resp_end], dtype=torch.float32
+        ).unsqueeze(0)
+    # Carry advantages if set by advantage computer
+    if hasattr(node, 'advantages') and node.advantages is not None:
+        traj["advantages"] = node.advantages.unsqueeze(0) if node.advantages.dim() == 1 else node.advantages
+    if hasattr(node, 'returns') and node.returns is not None:
+        traj["returns"] = node.returns.unsqueeze(0) if node.returns.dim() == 1 else node.returns
+    # Turn metadata
+    if node.node_id:
+        traj["_turn_id"] = node.node_id
+    if node.parent_node_id is not None:
+        traj["_parent_turn_id"] = node.parent_node_id
+    traj["_turn_reward"] = node.outcome_reward
+    traj["_outcome_reward"] = node.outcome_reward
+    traj["_episode_idx"] = 0
+    traj["_turn_idx_in_episode"] = 0
+    traj["_num_turns_in_episode"] = 1
+    return traj
+
+
 class MCTSTreeStore:
     """Flat trajectory store with MCTS statistics.
 
@@ -389,210 +443,26 @@ class MCTSTreeStore:
         return result
 
     def load_trajectories(
-        self, query_id: str, n_samples: int, as_list: bool = False
-    ) -> list[dict[str, Any]]:
-        """Load untrained trajectories.
+        self, query_id: str, n_samples: int
+    ) -> list[Node]:
+        """Load untrained trajectories as Node objects.
 
-        If `as_list=False` (default), returns per-turn dicts with tensors. Each
-        episode record is split back into per-turn dicts using
-        turn_response_starts/turn_response_ends to slice the stored sequence.
-        Metadata keys (_turn_id, _parent_turn_id, _turn_reward, _outcome_reward)
-        are populated from Node.
+        Returns per-turn Node objects. Callers can:
+        - Read Node attributes directly for advantage computation
+        - Convert to tensor dicts via _node_to_tensor_dict() for training
 
-        If `as_list=True`, returns one dict per episode with Python lists instead
-        of tensors. No per-turn splitting is done.
+        Each Node carries _mcts_query_id and _mcts_seq_id set during
+        insertion (accessible as regular attributes).
         """
         if query_id not in self.trajectories:
             return []
 
         untrained_ids = self.get_untrained_seq_ids(query_id, n_samples)
-        result: list[dict[str, Any]] = []
+        result: list[Node] = []
         for seq_id in untrained_ids:
             qid, idx = self._seq_id_to_key[seq_id]
-            record = self.trajectories[qid][idx]
-            seq_len = len(record.input_ids)
-
-            # List-based output: one dict per episode
-            if as_list:
-                traj = {
-                    "input_ids": record.input_ids.copy(),
-                    "loss_mask": record.loss_mask.copy(),
-                    "logprobs": record.logprobs.copy(),
-                    "versions": record.versions.copy(),
-                    "attention_mask": [1] * seq_len,
-                    "reward": record.reward,
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                }
-                # Add new fields if present
-                if record.logp is not None:
-                    traj["logp"] = record.logp.copy()
-                if record.topk_ids is not None:
-                    traj["topk_ids"] = [row.copy() for row in record.topk_ids]
-                if record.topk_logp is not None:
-                    traj["topk_logp"] = [row.copy() for row in record.topk_logp]
-                if record.distill_reward is not None:
-                    traj["distill_reward"] = [
-                        row.copy() for row in record.distill_reward
-                    ]
-                if record.teacher_logp is not None:
-                    traj["teacher_logp"] = [row.copy() for row in record.teacher_logp]
-                # Add turn metadata if present
-                if record.turn_ids is not None:
-                    traj["turn_ids"] = record.turn_ids.copy()
-                    traj["turn_response_starts"] = record.turn_response_starts.copy()
-                    traj["turn_response_ends"] = record.turn_response_ends.copy()
-                if record.parent_turn_ids is not None:
-                    traj["parent_turn_ids"] = record.parent_turn_ids.copy()
-                if record.turn_rewards is not None:
-                    traj["turn_rewards"] = record.turn_rewards.copy()
-                traj["outcome_reward"] = record.outcome_reward
-                result.append(traj)
-                continue
-
-            # Tensor-based output: per-turn dicts (legacy behavior)
-            full_input_ids = torch.tensor(record.input_ids, dtype=torch.int32)
-            full_loss_mask = torch.tensor(record.loss_mask, dtype=torch.int32)
-            full_logprobs = torch.tensor(record.logprobs, dtype=torch.float32)
-            full_versions = torch.tensor(record.versions, dtype=torch.int32)
-            full_attention = torch.ones(seq_len, dtype=torch.bool)
-
-            # New fields - full tensors
-            full_logp = (
-                torch.tensor(record.logp, dtype=torch.float32)
-                if record.logp is not None
-                else None
-            )
-            full_topk_ids = (
-                torch.tensor(record.topk_ids, dtype=torch.int32)
-                if record.topk_ids is not None
-                else None
-            )
-            full_topk_logp = (
-                torch.tensor(record.topk_logp, dtype=torch.float32)
-                if record.topk_logp is not None
-                else None
-            )
-            full_distill_reward = (
-                torch.tensor(record.distill_reward, dtype=torch.float32)
-                if record.distill_reward is not None
-                else None
-            )
-            full_teacher_logp = (
-                torch.tensor(record.teacher_logp, dtype=torch.float32)
-                if record.teacher_logp is not None
-                else None
-            )
-
-            # If no turn metadata, return as a single dict (legacy behavior)
-            if record.turn_ids is None or not record.turn_response_starts:
-                traj = {
-                    "input_ids": full_input_ids.unsqueeze(0),
-                    "loss_mask": full_loss_mask.unsqueeze(0),
-                    "logprobs": full_logprobs.unsqueeze(0),
-                    "versions": full_versions.unsqueeze(0),
-                    "attention_mask": full_attention.unsqueeze(0),
-                    "rewards": torch.tensor(
-                        [record.reward], dtype=torch.float32
-                    ).unsqueeze(0),
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                }
-                # Add new fields if present
-                if full_logp is not None:
-                    traj["logp"] = full_logp.unsqueeze(0)
-                if full_topk_ids is not None:
-                    traj["topk_ids"] = full_topk_ids.unsqueeze(0)
-                if full_topk_logp is not None:
-                    traj["topk_logp"] = full_topk_logp.unsqueeze(0)
-                if full_distill_reward is not None:
-                    traj["distill_reward"] = full_distill_reward.unsqueeze(0)
-                if full_teacher_logp is not None:
-                    traj["teacher_logp"] = full_teacher_logp.unsqueeze(0)
-                result.append(traj)
-                continue
-
-            # Split episode into per-turn dicts
-            n_turns = len(record.turn_response_starts)
-
-            # Precompute per-turn response lengths for correct slicing of
-            # response-only fields (logp, topk_ids, teacher_logp, etc.).
-            # These fields are concatenated across turns and have length
-            # total_response_len, not full_seq_len.
-            turn_resp_lens = [
-                record.turn_response_ends[t] - record.turn_response_starts[t]
-                for t in range(n_turns)
-            ]
-            resp_offset = 0  # running offset into response-only tensors
-
-            for t in range(n_turns):
-                end = record.turn_response_ends[t]
-                resp_len = turn_resp_lens[t]
-
-                # For individual-style, each turn needs its own prompt context.
-                # Include all tokens from beginning to end of this turn's response.
-                turn_seq_len = end
-                turn_input_ids = full_input_ids[:turn_seq_len]
-                turn_loss_mask = full_loss_mask[:turn_seq_len]
-                turn_logprobs = full_logprobs[:turn_seq_len]
-                turn_versions = full_versions[:turn_seq_len]
-                turn_attention = full_attention[:turn_seq_len]
-
-                turn_reward = (
-                    record.turn_rewards[t]
-                    if record.turn_rewards and t < len(record.turn_rewards)
-                    else 0.0
-                )
-                turn_id = record.turn_ids[t] if t < len(record.turn_ids) else ""
-                parent_turn_id = (
-                    record.parent_turn_ids[t]
-                    if record.parent_turn_ids and t < len(record.parent_turn_ids)
-                    else None
-                )
-
-                traj = {
-                    "input_ids": turn_input_ids.unsqueeze(0),
-                    "loss_mask": turn_loss_mask.unsqueeze(0),
-                    "logprobs": turn_logprobs.unsqueeze(0),
-                    "versions": turn_versions.unsqueeze(0),
-                    "attention_mask": turn_attention.unsqueeze(0),
-                    "rewards": torch.tensor([turn_reward], dtype=torch.float32),
-                    "_mcts_query_id": query_id,
-                    "_mcts_seq_id": seq_id,
-                    "_episode_idx": idx,
-                    "_turn_idx_in_episode": t,
-                    "_turn_id": turn_id,
-                    "_parent_turn_id": parent_turn_id,
-                    "_turn_reward": turn_reward,
-                    "_outcome_reward": record.outcome_reward,
-                    "_num_turns_in_episode": n_turns,
-                }
-                # Add new fields if present — slice by response offset, not
-                # full-sequence position, since these are response-only.
-                if full_logp is not None:
-                    traj["logp"] = full_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_topk_ids is not None:
-                    traj["topk_ids"] = full_topk_ids[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_topk_logp is not None:
-                    traj["topk_logp"] = full_topk_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_distill_reward is not None:
-                    traj["distill_reward"] = full_distill_reward[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                if full_teacher_logp is not None:
-                    traj["teacher_logp"] = full_teacher_logp[
-                        resp_offset : resp_offset + resp_len
-                    ].unsqueeze(0)
-                result.append(traj)
-
-                resp_offset += resp_len
-
+            node = self.trajectories[qid][idx]
+            result.append(node)
         return result
 
     def reset_trained_flags(self) -> None:
