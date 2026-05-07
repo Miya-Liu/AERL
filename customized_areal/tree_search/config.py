@@ -13,11 +13,20 @@ class AdvantageMode(str, Enum):
     TREE = "tree"
 
 
+class LossMode(str, Enum):
+    GRPO = "grpo"
+    DISTILL = "distill"
+    BOTH = "both"
+
+
 @dataclass
 class TreeBackupConfig:
     mode: TreeBackupMode = TreeBackupMode.OFF
     checkpoint_dir: str = ""
     advantage_mode: AdvantageMode = AdvantageMode.TREE
+    loss_mode: LossMode = LossMode.GRPO
+    rl_loss_weight: float = 1.0
+    distill_loss_weight: float = 0.005
 
 
 @dataclass
