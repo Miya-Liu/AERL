@@ -199,14 +199,17 @@ class MCTSTreeStore:
         self._seq_id_to_key[seq_id] = (query_id, idx)
         self._query_seq_ids.setdefault(query_id, []).append(seq_id)
 
+        # Set metadata directly on the Node (dataclass permits non-field attrs when not frozen)
+        object.__setattr__(node, '_mcts_seq_id', seq_id)
+        object.__setattr__(node, '_mcts_query_id', query_id)
+
         self._backup(seq_id, node.outcome_reward)
         self._trained[seq_id] = False
         self._rewards[seq_id] = node.outcome_reward
 
-        # Register turn_id → seq_id mappings for shared-node MCTS
-        if node.node_id:
-            if node.node_id not in self._turn_nodes:
-                self._turn_nodes[node.node_id] = seq_id
+        # Register node_id → seq_id mapping for shared-node MCTS
+        if node.node_id and node.node_id not in self._turn_nodes:
+            self._turn_nodes[node.node_id] = seq_id
 
         return seq_id
 
@@ -284,10 +287,15 @@ class MCTSTreeStore:
                 traj["_mcts_query_id"] = query_id
 
     def _insert_per_turn_dicts(self, turn_dicts: list[dict[str, Any]]) -> None:
-        """Group per-turn dicts by (query_id, episode_idx) and insert as episode records."""
+        """Insert per-turn dicts as individual Node objects.
+
+        Each turn dict becomes a separate Node in the tree store.
+        Turns from the same episode share the same episode_id (derived
+        from _mcts_query_id + _episode_idx) and are linked via
+        node_id/parent_node_id.
+        """
         from itertools import groupby
 
-        # Sort by (query_id, episode_idx) for stable grouping
         sorted_turns = sorted(
             turn_dicts,
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
@@ -298,18 +306,9 @@ class MCTSTreeStore:
             key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
         ):
             turns = list(group_iter)
-            # Sort turns within the episode by turn_idx_in_episode
             turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
 
-            # Collect per-turn data for episode reconstruction
-            all_input_ids: list[int] = []
-            all_loss_mask: list[int] = []
-            all_logprobs: list[float] = []
-            all_versions: list[int] = []
-            turn_ids: list[str] = []
-            parent_turn_ids: list[str | None] = []
-            turn_rewards: list[float] = []
-            outcome_reward: float = 0.0
+            episode_id = f"{query_id}_{ep_idx}"
 
             for turn in turns:
                 seq_len = int(turn["attention_mask"].sum())
@@ -326,35 +325,19 @@ class MCTSTreeStore:
                     else [0] * seq_len
                 )
 
-                all_input_ids.extend(input_ids)
-                all_loss_mask.extend(loss_mask)
-                all_logprobs.extend(logprobs)
-                all_versions.extend(versions)
+                node = Node(
+                    input_ids=input_ids,
+                    loss_mask=loss_mask,
+                    logprobs=logprobs,
+                    versions=versions,
+                    outcome_reward=turn.get("_outcome_reward", 0.0),
+                    node_id=turn.get("_turn_id", ""),
+                    parent_node_id=turn.get("_parent_turn_id"),
+                    episode_id=episode_id,
+                )
 
-                turn_ids.append(turn.get("_turn_id", ""))
-                parent_turn_ids.append(turn.get("_parent_turn_id"))
-                turn_rewards.append(turn.get("_turn_reward", 0.0))
-                outcome_reward = turn.get("_outcome_reward", 0.0)
-
-            starts, ends = _find_turn_boundaries(all_loss_mask)
-
-            record = TrajectoryRecord(
-                input_ids=all_input_ids,
-                loss_mask=all_loss_mask,
-                logprobs=all_logprobs,
-                versions=all_versions,
-                reward=outcome_reward,
-                turn_response_starts=starts,
-                turn_response_ends=ends,
-                turn_ids=turn_ids,
-                parent_turn_ids=parent_turn_ids,
-                turn_rewards=turn_rewards,
-                outcome_reward=outcome_reward,
-            )
-            seq_id = self._insert_single(query_id, record)
-
-            # Set _mcts_seq_id on all turn dicts in this group
-            for turn in turns:
+                seq_id = self._insert_single(query_id, node)
+                # Also set metadata on dict for downstream dict-key readers
                 turn["_mcts_seq_id"] = seq_id
                 turn["_mcts_query_id"] = query_id
 
