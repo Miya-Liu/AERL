@@ -2,7 +2,7 @@
 # customized_areal/tree_search/mcts_tree_store.py
 """Flat trajectory store with MCTS statistics.
 
-Replaces the TrieNode-based trie with a per-query list of TrajectoryRecord
+Replaces the TrieNode-based trie with a per-query list of Node
 objects. Each record stores the complete, unpadded sequence from the rollout,
 with turn boundaries derived from loss_mask transitions.
 
@@ -30,23 +30,34 @@ def _materialize_rtensors(traj: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass
-class TrajectoryRecord:
-    """Stores a complete multi-turn trajectory for cache storage."""
+class Node:
+    """A single turn in a multi-turn conversation tree.
 
+    Each Node represents one assistant response turn, including its prompt
+    context (all tokens from the beginning of the conversation up through
+    this turn's response). Nodes are linked via node_id/parent_node_id and
+    grouped into episodes via episode_id.
+
+    Metadata fields (_mcts_query_id, _mcts_seq_id) are set by the tree
+    store after insertion. advantages/returns are set by the advantage
+    computer.
+    """
+
+    # Core sequence (full turn: prompt + response)
     input_ids: list[int]
-    loss_mask: list[int]
-    logprobs: list[float]
-    versions: list[int]
-    reward: float
-    turn_response_starts: list[int]
-    turn_response_ends: list[int]
-    # Episode metadata for tree search:
-    turn_ids: list[str] | None = None
-    parent_turn_ids: list[str | None] | None = None
-    turn_rewards: list[float] | None = None
+    loss_mask: list[int]              # 0=prompt, 1=response
+    logprobs: list[float]             # full sequence (0.0 on prompt positions)
+    versions: list[int]               # policy version (-1 on prompt)
+
+    # Tree structure
+    node_id: str                      # interaction ID for this turn
+    parent_node_id: str | None        # parent interaction ID (None for root)
+    episode_id: str                   # groups turns into a trajectory path
+
+    # Reward
     outcome_reward: float = 0.0
-    # New fields for distillation training:
-    logp: list[float] | None = None
+
+    # Response-only (aligned to loss_mask==1 positions)
     topk_ids: list[list[int]] | None = None
     topk_logp: list[list[float]] | None = None
     distill_reward: list[list[float]] | None = None
@@ -91,7 +102,7 @@ class MCTSTreeStore:
     """
 
     def __init__(self) -> None:
-        self.trajectories: dict[str, list[TrajectoryRecord]] = {}
+        self.trajectories: dict[str, list[Node]] = {}
         self._seq_id_to_key: dict[int, tuple[str, int]] = {}
         self._query_seq_ids: dict[str, list[int]] = {}
         self._next_seq_id: int = 0
@@ -115,7 +126,7 @@ class MCTSTreeStore:
 
     def _make_record(
         self, traj: dict[str, Any], idx: int, seq_len: int
-    ) -> TrajectoryRecord:
+    ) -> Node:
         """Extract an unpadded sample from traj[idx] and derive turn boundaries."""
         input_ids = traj["input_ids"][idx, :seq_len].tolist()
         loss_mask = traj["loss_mask"][idx, :seq_len].tolist()
@@ -194,25 +205,24 @@ class MCTSTreeStore:
         traj["_mcts_seq_id"] = seq_id
         traj["_mcts_query_id"] = query_id
 
-    def _insert_single(self, query_id: str, record: TrajectoryRecord) -> int:
-        """Insert a single TrajectoryRecord and assign a seq_id."""
+    def _insert_single(self, query_id: str, node: Node) -> int:
+        """Insert a single Node and assign a seq_id."""
         seq_id = self._next_seq_id
         self._next_seq_id += 1
 
         idx = len(self.trajectories.setdefault(query_id, []))
-        self.trajectories[query_id].append(record)
+        self.trajectories[query_id].append(node)
         self._seq_id_to_key[seq_id] = (query_id, idx)
         self._query_seq_ids.setdefault(query_id, []).append(seq_id)
 
-        self._backup(seq_id, record.reward)
+        self._backup(seq_id, node.outcome_reward)
         self._trained[seq_id] = False
-        self._rewards[seq_id] = record.reward
+        self._rewards[seq_id] = node.outcome_reward
 
         # Register turn_id → seq_id mappings for shared-node MCTS
-        if record.turn_ids:
-            for turn_id in record.turn_ids:
-                if turn_id and turn_id not in self._turn_nodes:
-                    self._turn_nodes[turn_id] = seq_id
+        if node.node_id:
+            if node.node_id not in self._turn_nodes:
+                self._turn_nodes[node.node_id] = seq_id
 
         return seq_id
 
@@ -225,7 +235,7 @@ class MCTSTreeStore:
            shape [1, seq_len] with _episode_idx, _turn_idx_in_episode,
            _parent_turn_id, _turn_reward, _outcome_reward metadata.
            Turns are grouped by (_mcts_query_id, _episode_idx) into a
-           single episode TrajectoryRecord.
+           single episode Node.
 
         2. **Individual trajectory dicts** (batch_size=1): single trajectory
            without episode metadata. Same as legacy behavior.
@@ -419,7 +429,7 @@ class MCTSTreeStore:
         episode record is split back into per-turn dicts using
         turn_response_starts/turn_response_ends to slice the stored sequence.
         Metadata keys (_turn_id, _parent_turn_id, _turn_reward, _outcome_reward)
-        are populated from TrajectoryRecord.
+        are populated from Node.
 
         If `as_list=True`, returns one dict per episode with Python lists instead
         of tensors. No per-turn splitting is done.
