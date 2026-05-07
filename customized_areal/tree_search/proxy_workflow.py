@@ -4,7 +4,7 @@
 When rollout_batch returns trajectories asynchronously, the ordering between
 submitted prompts and returned trajectories may differ. This workflow injects
 the dataset ``query_id`` (a string) from the input ``data`` dict into the
-output trajectory as ``_mcts_query_id``, so that MCTSTreeStore can use it
+output trajectory as ``query_id``, so that MCTSTreeStore can use it
 instead of computing an MD5 hash from prompt tokens.
 
 Usage in config:
@@ -37,7 +37,7 @@ logger = logging.getLogger("QueryIDProxyWorkflow")
 class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
     """OpenAIProxyWorkflow that preserves dataset query_id in trajectories.
 
-    Overrides ``arun_episode`` to inject ``_mcts_query_id`` (from
+    Overrides ``arun_episode`` to inject ``query_id`` (from
     ``data["query_id"]``) into the returned trajectory dict. The base class
     converts ``InteractionWithTokenLogpReward`` objects to tensor dicts via
     ``concat_padded_tensors``, which drops non-tensor keys. This subclass
@@ -178,13 +178,13 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
             if query_id:
                 for traj in result:
                     if isinstance(traj, dict):
-                        traj["_mcts_query_id"] = query_id
+                        traj["query_id"] = query_id
             return result
 
         # Legacy: result is tensor dict → wrap in list
         if isinstance(result, dict):
             if query_id:
-                result["_mcts_query_id"] = query_id
+                result["query_id"] = query_id
             return [result]
 
         return None

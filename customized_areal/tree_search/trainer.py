@@ -4,7 +4,7 @@
 Subclass of PPOTrainer that adds MCTS tree backup to PPO training.
 
 Tree insert and advantage computation happen in _cache_aware_prepare_batch
-(where _mcts_query_id / _mcts_seq_id are still available), before the
+(where query_id / _mcts_seq_id are still available), before the
 concat_padded_tensors pipeline drops non-tensor metadata.
 
 Flow:
@@ -84,14 +84,14 @@ def _list_dict_to_tensor(traj: dict[str, Any]) -> dict[str, Any]:
 def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Any]) -> None:
     """Mark all trajectories in a batch as trained after tree backup.
 
-    Handles both Node objects (with _mcts_query_id/_mcts_seq_id attrs)
-    and legacy dicts (with _mcts_query_id/_mcts_seq_id keys).
+    Handles both Node objects (with query_id/_mcts_seq_id attrs)
+    and legacy dicts (with query_id/_mcts_seq_id keys).
     """
     count = 0
     for traj in trajectories:
-        query_id = getattr(traj, "_mcts_query_id", None)
+        query_id = getattr(traj, "query_id", None)
         if query_id is None and isinstance(traj, dict):
-            query_id = traj.get("_mcts_query_id")
+            query_id = traj.get("query_id")
         if query_id is None:
             continue
 
@@ -273,7 +273,7 @@ def patch_ppo_actor_for_tree_backup(
     """Patch PPOActor.compute_advantages to restore tree advantages after GAE.
 
     Tree insert and advantage computation already happened in
-    _cache_aware_prepare_batch (where _mcts_query_id / _mcts_seq_id are
+    _cache_aware_prepare_batch (where query_id / _mcts_seq_id are
     available). Tree advantages are stashed as ``_tree_advantages`` /
     ``_tree_returns`` on each trajectory dict so they survive
     concat_padded_tensors → _compute_advantages → split_batch.
@@ -345,7 +345,7 @@ class _CacheAwareBatchBuilder:
 
         Query ID derivation fallback chain:
         1. ``prompt["query_id"]`` — dataset-provided string (preferred)
-        2. ``prompt["_mcts_query_id"]`` — from prior injection
+        2. ``prompt["query_id"]`` — from prior injection
         3. Empty string (no tree lookup possible)
 
         Returns:
@@ -357,7 +357,7 @@ class _CacheAwareBatchBuilder:
         need_gen = []
 
         for prompt in prompts:
-            query_id = prompt.get("query_id") or prompt.get("_mcts_query_id") or ""
+            query_id = prompt.get("query_id") or prompt.get("query_id") or ""
 
             untrained_count = (
                 self.tree_store.get_untrained_count(query_id) if query_id else 0
@@ -411,7 +411,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
     On each training step:
     1. _cache_aware_prepare_batch:
        a. Check cache / generate trajectories
-       b. Insert into MCTS tree (while _mcts_query_id is available)
+       b. Insert into MCTS tree (while query_id is available)
        c. Compute tree advantages (TREE mode) and stash as
           _tree_advantages / _tree_returns
        d. Mark trajectories as trained
@@ -525,7 +525,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         and freshly-generated trajectories in a single batch.
 
         After assembling trajectories, this method also:
-        1. Inserts them into the MCTS tree (where _mcts_query_id / _mcts_seq_id
+        1. Inserts them into the MCTS tree (where query_id / _mcts_seq_id
            are still available, before concat_padded_tensors drops them)
         2. If advantage_mode is TREE, computes tree Q-values and stashes them
            as _tree_advantages / _tree_returns so they survive the GAE pipeline
@@ -535,7 +535,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         Returns:
             List of trajectory dicts from rollout_batch (may be grouped with
             shape [group_size, seq_len]) or cache (shape [1, seq_len]),
-            carrying ``_mcts_query_id`` and ``_mcts_seq_id`` metadata.
+            carrying ``query_id`` and ``_mcts_seq_id`` metadata.
         """
         from areal.utils.data import cycle_dataloader
 
@@ -582,7 +582,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
             )
             return []
 
-        # --- Tree operations (while _mcts_query_id / _mcts_seq_id are available) ---
+        # --- Tree operations (while query_id / _mcts_seq_id are available) ---
 
         # Insert trajectories into the MCTS tree
         self.tree_store.insert_batch(trajs)
@@ -636,7 +636,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         converted: list[dict[str, Any]] = []
         for t in trajs:
             if isinstance(t, Node):
-                query_id = getattr(t, "_mcts_query_id", "")
+                query_id = getattr(t, "query_id", "")
                 seq_id = getattr(t, "_mcts_seq_id", 0)
                 converted.append(_node_to_tensor_dict(t, query_id, seq_id))
             elif _is_list_traj(t):

@@ -213,7 +213,7 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
                     if merged.input_ids:
                         if query_id:
                             merged.episode_id = f"{query_id}_{len(episode_nodes)}"
-                            object.__setattr__(merged, "_mcts_query_id", query_id)
+                            object.__setattr__(merged, "query_id", query_id)
                             object.__setattr__(merged, "_mcts_seq_ids", [])
                         episode_nodes.append(merged)
                 return episode_nodes if episode_nodes else None
@@ -225,7 +225,7 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
                     merged = _merge_turn_dicts_to_episode(result)
                     if merged:
                         if query_id:
-                            merged["_mcts_query_id"] = query_id
+                            merged["query_id"] = query_id
                         episode_trajs.append(merged)
                 return episode_trajs if episode_trajs else None
 

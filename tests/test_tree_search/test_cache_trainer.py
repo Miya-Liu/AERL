@@ -16,7 +16,7 @@ def _make_traj_for_store(
         "loss_mask": torch.tensor([loss_mask], dtype=torch.int32),
         "rewards": torch.tensor([reward], dtype=torch.float32),
         "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
-        "_mcts_query_id": query_id,
+        "query_id": query_id,
     }
 
 
@@ -35,7 +35,7 @@ class TestCacheAwareBatchBuilder:
             store.insert_batch([traj])
 
         builder = _CacheAwareBatchBuilder(store, n_samples=4, tokenizer=None)
-        prompts = [{"_mcts_query_id": "q1"}]
+        prompts = [{"query_id": "q1"}]
         cached, need_gen = builder.split_prompts(prompts)
         assert len(cached) == 1
         assert len(need_gen) == 0
@@ -56,7 +56,7 @@ class TestCacheAwareBatchBuilder:
             store.insert_batch([traj])
 
         builder = _CacheAwareBatchBuilder(store, n_samples=4, tokenizer=None)
-        prompts = [{"_mcts_query_id": "q1"}]
+        prompts = [{"query_id": "q1"}]
         cached, need_gen = builder.split_prompts(prompts)
         assert len(cached) == 1
         assert len(need_gen) == 0
@@ -68,7 +68,7 @@ class TestCacheAwareBatchBuilder:
 
         store = MCTSTreeStore()
         builder = _CacheAwareBatchBuilder(store, n_samples=4, tokenizer=None)
-        prompts = [{"_mcts_query_id": "q1"}]
+        prompts = [{"query_id": "q1"}]
         cached, need_gen = builder.split_prompts(prompts)
         assert len(cached) == 0
         assert len(need_gen) == 1
@@ -82,6 +82,6 @@ class TestCacheAwareBatchBuilder:
         store.insert_batch([t1, t2])
 
         builder = _CacheAwareBatchBuilder(store, n_samples=4, tokenizer=None)
-        cached, _ = builder.split_prompts([{"_mcts_query_id": "q1"}])
+        cached, _ = builder.split_prompts([{"query_id": "q1"}])
         loaded = builder.load_cached_trajectories(cached)
         assert len(loaded) == 2

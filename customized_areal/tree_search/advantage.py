@@ -14,7 +14,7 @@ class TreeAdvantageComputer:
     """Replace GAE advantages with tree Q-values from MCTS backup.
 
     Works with both Node objects and legacy trajectory dicts. For Nodes,
-    reads _mcts_query_id and _mcts_seq_id attributes. Sets advantages
+    reads query_id and _mcts_seq_id attributes. Sets advantages
     and returns on the object in-place.
 
     Supports per-query GRPO normalization: Q-values are normalized within
@@ -43,9 +43,9 @@ class TreeAdvantageComputer:
     def _get_query_id(traj: Any) -> str | None:
         """Extract query_id from Node or dict."""
         if isinstance(traj, Node):
-            return getattr(traj, "_mcts_query_id", None)
+            return getattr(traj, "query_id", None)
         if isinstance(traj, dict):
-            return traj.get("_mcts_query_id")
+            return traj.get("query_id")
         return None
 
     @staticmethod

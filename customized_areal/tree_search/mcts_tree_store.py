@@ -38,7 +38,7 @@ class Node:
     this turn's response). Nodes are linked via node_id/parent_node_id and
     grouped into episodes via episode_id.
 
-    Metadata fields (_mcts_query_id, _mcts_seq_id) are set by the tree
+    Metadata fields (query_id, _mcts_seq_id) are set by the tree
     store after insertion. advantages/returns are set by the advantage
     computer.
     """
@@ -113,7 +113,7 @@ def _node_to_tensor_dict(node: Node, query_id: str, seq_id: int) -> dict[str, An
         "rewards": torch.tensor([node.outcome_reward], dtype=torch.float32).unsqueeze(
             0
         ),
-        "_mcts_query_id": query_id,
+        "query_id": query_id,
         "_mcts_seq_id": seq_id,
     }
     # Response-only fields: extract response portion from full sequence
@@ -241,7 +241,7 @@ class MCTSTreeStore:
         distill_reward = traj.get("distill_reward")
         teacher_logp = traj.get("teacher_logp")
 
-        query_id = traj.get("_mcts_query_id", "")
+        query_id = traj.get("query_id", "")
 
         node = Node(
             input_ids=input_ids,
@@ -267,7 +267,7 @@ class MCTSTreeStore:
 
         seq_id = self._insert_single(query_id, node)
         traj["_mcts_seq_id"] = seq_id
-        traj["_mcts_query_id"] = query_id
+        traj["query_id"] = query_id
 
     def _insert_single(self, query_id: str, node: Node) -> int:
         """Insert a single Node and assign a seq_id."""
@@ -281,7 +281,7 @@ class MCTSTreeStore:
 
         # Set metadata directly on the Node (dataclass permits non-field attrs when not frozen)
         object.__setattr__(node, "_mcts_seq_id", seq_id)
-        object.__setattr__(node, "_mcts_query_id", query_id)
+        object.__setattr__(node, "query_id", query_id)
 
         self._backup(seq_id, node.outcome_reward)
         self._trained[seq_id] = False
@@ -305,7 +305,7 @@ class MCTSTreeStore:
         2. **Per-turn dicts** (from _split_to_turn_dicts): each dict has
            shape [1, seq_len] with _episode_idx, _turn_idx_in_episode,
            _parent_turn_id, _turn_reward, _outcome_reward metadata.
-           Turns are grouped by (_mcts_query_id, _episode_idx) into a
+           Turns are grouped by (query_id, _episode_idx) into a
            single episode Node.
 
         3. **Individual trajectory dicts** (batch_size=1): single trajectory
@@ -337,7 +337,7 @@ class MCTSTreeStore:
 
         if nodes:
             for node in nodes:
-                query_id = getattr(node, "_mcts_query_id", None) or ""
+                query_id = getattr(node, "query_id", None) or ""
                 self._insert_single(query_id, node)
 
         # Separate per-turn dicts, list dicts, and legacy-style dicts
@@ -369,15 +369,15 @@ class MCTSTreeStore:
             batch_size = input_ids.shape[0]
 
             if batch_size == 1:
-                query_id = traj.get("_mcts_query_id", "")
+                query_id = traj.get("query_id", "")
                 seq_len = int(traj["attention_mask"].sum())
                 record = self._make_record(traj, 0, seq_len)
                 seq_id = self._insert_single(query_id, record)
                 traj["_mcts_seq_id"] = seq_id
-                traj["_mcts_query_id"] = query_id
+                traj["query_id"] = query_id
             else:
                 seq_ids: list[int] = []
-                query_id = traj.get("_mcts_query_id", "")
+                query_id = traj.get("query_id", "")
                 for i in range(batch_size):
                     seq_len = int(traj["attention_mask"][i].sum())
                     record = self._make_record(traj, i, seq_len)
@@ -385,26 +385,26 @@ class MCTSTreeStore:
                     seq_ids.append(seq_id)
 
                 traj["_mcts_seq_ids"] = seq_ids
-                traj["_mcts_query_id"] = query_id
+                traj["query_id"] = query_id
 
     def _insert_per_turn_dicts(self, turn_dicts: list[dict[str, Any]]) -> None:
         """Insert per-turn dicts as individual Node objects.
 
         Each turn dict becomes a separate Node in the tree store.
         Turns from the same episode share the same episode_id (derived
-        from _mcts_query_id + _episode_idx) and are linked via
+        from query_id + _episode_idx) and are linked via
         node_id/parent_node_id.
         """
         from itertools import groupby
 
         sorted_turns = sorted(
             turn_dicts,
-            key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
+            key=lambda d: (d.get("query_id", ""), d.get("_episode_idx", 0)),
         )
 
         for (query_id, ep_idx), group_iter in groupby(
             sorted_turns,
-            key=lambda d: (d.get("_mcts_query_id", ""), d.get("_episode_idx", 0)),
+            key=lambda d: (d.get("query_id", ""), d.get("_episode_idx", 0)),
         ):
             turns = list(group_iter)
             turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
@@ -440,7 +440,7 @@ class MCTSTreeStore:
                 seq_id = self._insert_single(query_id, node)
                 # Also set metadata on dict for downstream dict-key readers
                 turn["_mcts_seq_id"] = seq_id
-                turn["_mcts_query_id"] = query_id
+                turn["query_id"] = query_id
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Return per-token advantages: Q-value on response tokens, 0 on prompt."""
@@ -496,7 +496,7 @@ class MCTSTreeStore:
         - Read Node attributes directly for advantage computation
         - Convert to tensor dicts via _node_to_tensor_dict() for training
 
-        Each Node carries _mcts_query_id and _mcts_seq_id set during
+        Each Node carries query_id and _mcts_seq_id set during
         insertion (accessible as regular attributes).
         """
         if query_id not in self.trajectories:

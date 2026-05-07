@@ -17,7 +17,7 @@ def _make_traj(
         "loss_mask": torch.tensor([loss_mask], dtype=torch.int32),
         "rewards": torch.tensor([reward], dtype=torch.float32),
         "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
-        "_mcts_query_id": query_id,
+        "query_id": query_id,
     }
 
 
