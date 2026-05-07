@@ -504,6 +504,18 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # which accepts list[dict] returns from arun_episode.
         _patch_workflow_executor(self.rollout)
 
+        # Patch PPOActor._ppo_update with grpo_distill_loss_fn when distill is enabled
+        if self.tree_backup_config.loss_mode != LossMode.GRPO:
+            from customized_areal.on_policy_distill.training.actor import (
+                patch_ppo_actor_class_to_use_distill_loss,
+            )
+
+            patch_ppo_actor_class_to_use_distill_loss()
+            logger.info(
+                f"Patched PPOActor._ppo_update with grpo_distill_loss_fn "
+                f"(loss_mode={self.tree_backup_config.loss_mode.value})"
+            )
+
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
     ) -> None:
