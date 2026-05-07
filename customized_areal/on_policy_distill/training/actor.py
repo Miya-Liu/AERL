@@ -19,6 +19,7 @@ from areal.utils.data import split_padded_tensor_dict_into_mb_list
 logger = logging.getLogger("OnPolicyDistill")
 
 _patch_applied = False
+_original_ppo_update = None
 
 
 def patch_ppo_actor_class_to_use_distill_loss() -> None:
@@ -35,12 +36,11 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
     modified to pass logits to the loss function. See ENGINE_MODIFICATION.md
     in the training directory.
     """
-    global _patch_applied
+    global _patch_applied, _original_ppo_update
     if _patch_applied:
         return
 
-    # Store original for potential future restoration
-    _original_ppo_update = PPOActor._ppo_update  # noqa: F841
+    _original_ppo_update = PPOActor._ppo_update
 
     def _ppo_update_with_distill_loss(self, data: dict[str, Any]) -> None:
         """PPO update using grpo_distill_loss_fn."""
@@ -103,6 +103,19 @@ def patch_ppo_actor_class_to_use_distill_loss() -> None:
     PPOActor._ppo_update = _ppo_update_with_distill_loss
     _patch_applied = True
     logger.info("PPOActor class patched to use grpo_distill_loss_fn")
+
+
+def unpatch_ppo_actor_distill_loss() -> None:
+    """Restore the original PPOActor._ppo_update method.
+
+    Must be called after patch_ppo_actor_class_to_use_distill_loss().
+    """
+    global _patch_applied, _original_ppo_update
+    if _patch_applied and _original_ppo_update is not None:
+        PPOActor._ppo_update = _original_ppo_update
+        _original_ppo_update = None
+        _patch_applied = False
+        logger.info("Restored original PPOActor._ppo_update")
 
 
 def _distribute_position_rewards(mb_inputs, position_rewards: list) -> None:

@@ -434,7 +434,8 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 f"Cache-aware training enabled "
                 f"(mode={self.tree_backup_config.mode.value}, "
                 f"advantage={self.tree_backup_config.advantage_mode.value}, "
-                f"n_samples={self.cache_config.n_samples})"
+                f"n_samples={self.cache_config.n_samples}, "
+                f"loss_mode={self.tree_backup_config.loss_mode.value})"
             )
 
     def _create_train_engine(self, actor_config, alloc):
@@ -726,4 +727,10 @@ class CacheAwarePPOTrainer(PPOTrainer):
             unpatch_ppo_actor()
             _unpatch_wrap_openai_agent(self.rollout)
             _unpatch_workflow_executor(self.rollout)
+            if self.tree_backup_config.loss_mode != LossMode.GRPO:
+                from customized_areal.on_policy_distill.training.actor import (
+                    unpatch_ppo_actor_distill_loss,
+                )
+
+                unpatch_ppo_actor_distill_loss()
         super().close()
