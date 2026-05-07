@@ -26,6 +26,7 @@ from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
     TreeBackupMode,
@@ -41,6 +42,7 @@ from areal import PPOTrainer
 from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
 from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
+from areal.utils.environ import is_single_controller
 
 logger = logging.getLogger("TreeBackupPPOTrainer")
 
@@ -434,6 +436,31 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 f"advantage={self.tree_backup_config.advantage_mode.value}, "
                 f"n_samples={self.cache_config.n_samples})"
             )
+
+    def _create_train_engine(self, actor_config, alloc):
+        """Override to use MultiCandidateFSDPPPOActor when distill loss is enabled."""
+        if self.tree_backup_config.loss_mode != LossMode.GRPO:
+            if alloc.backend != "fsdp":
+                raise ValueError(
+                    f"Distillation loss mode requires FSDP backend, "
+                    f"got: {alloc.backend}"
+                )
+            from customized_areal.on_policy_distill.engine import (
+                MultiCandidateFSDPPPOActor,
+            )
+
+            actor_cls = MultiCandidateFSDPPPOActor
+            if is_single_controller():
+                actor = actor_cls.as_controller(actor_config, self.scheduler)
+            else:
+                actor = actor_cls(config=actor_config)
+            actor.create_process_group(parallel_strategy=alloc.parallel)
+            logger.info(
+                f"Created MultiCandidateFSDPPPOActor "
+                f"(loss_mode={self.tree_backup_config.loss_mode.value})"
+            )
+            return actor
+        return super()._create_train_engine(actor_config, alloc)
 
     def _init_tree_components(self) -> None:
         """Create tree store, advantage computer, and checkpoint manager."""
