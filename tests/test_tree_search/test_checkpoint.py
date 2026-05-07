@@ -15,14 +15,14 @@ def _make_store_with_data() -> MCTSTreeStore:
         "loss_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.int32),
         "rewards": torch.tensor([2.0], dtype=torch.float32),
         "attention_mask": torch.ones(1, 5, dtype=torch.bool),
-        "_mcts_query_id": "q1",
+        "query_id": "q1",
     }
     t2 = {
         "input_ids": torch.tensor([[6, 7, 8]], dtype=torch.int32),
         "loss_mask": torch.tensor([[0, 0, 1]], dtype=torch.int32),
         "rewards": torch.tensor([0.5], dtype=torch.float32),
         "attention_mask": torch.ones(1, 3, dtype=torch.bool),
-        "_mcts_query_id": "q2",
+        "query_id": "q2",
     }
     store.insert_batch([t1, t2])
     return store
@@ -66,7 +66,7 @@ class TestTreeCheckpointManager:
             "loss_mask": torch.tensor([[0, 1]], dtype=torch.int32),
             "rewards": torch.tensor([1.0], dtype=torch.float32),
             "attention_mask": torch.ones(1, 2, dtype=torch.bool),
-            "_mcts_query_id": "q3",
+            "query_id": "q3",
         }
         loaded.insert_batch([t3])
         assert t3["_mcts_seq_id"] == 2
@@ -116,7 +116,7 @@ class TestTreeCheckpointManager:
             "loss_mask": torch.tensor([[0, 0, 1, 1, 0, 0, 1, 1]], dtype=torch.int32),
             "rewards": torch.tensor([0.75], dtype=torch.float32),
             "attention_mask": torch.ones(1, 8, dtype=torch.bool),
-            "_mcts_query_id": "q1",
+            "query_id": "q1",
         }
         store.insert_batch([traj])
         manager.save(store)
@@ -159,7 +159,7 @@ class TestTreeCheckpointManager:
                 [-1.7, -1.8],
                 [-1.9, -2.0],
             ],
-            "_mcts_query_id": "q1",
+            "query_id": "q1",
         }
         store.insert_batch([traj])
         manager.save(store)

@@ -129,15 +129,15 @@ class TestConcatPaddedTensorsPreservesValues:
 
     def test_concat_non_tensor_keys(self):
         """Scalar non-tensor keys keep first dict's value; list keys are flat-concatenated."""
-        t1 = _make_traj(1, 3, _mcts_query_id="q1")
+        t1 = _make_traj(1, 3, query_id="q1")
         t1["_mcts_seq_ids"] = [10, 11]
-        t2 = _make_traj(1, 3, _mcts_query_id="q2")
+        t2 = _make_traj(1, 3, query_id="q2")
         t2["_mcts_seq_ids"] = [20]
 
         result = concat_padded_tensors([t1, t2])
 
         # Scalar non-tensor: first dict's value
-        assert result["_mcts_query_id"] == "q1"
+        assert result["query_id"] == "q1"
         # List: flat-concatenated
         assert result["_mcts_seq_ids"] == [10, 11, 20]
 

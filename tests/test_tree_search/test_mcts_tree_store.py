@@ -127,7 +127,7 @@ def _make_traj(
     if versions is not None:
         traj["versions"] = torch.tensor([versions], dtype=torch.int32)
     if query_id is not None:
-        traj["_mcts_query_id"] = query_id
+        traj["query_id"] = query_id
     return traj
 
 
@@ -142,9 +142,9 @@ class TestMCTSTreeStoreInsertBatch:
         }
         store.insert_batch([traj])
         assert "_mcts_seq_id" in traj
-        assert "_mcts_query_id" in traj
+        assert "query_id" in traj
         assert len(store.trajectories) == 1
-        query_id = traj["_mcts_query_id"]
+        query_id = traj["query_id"]
         assert len(store.trajectories[query_id]) == 1
         node = store.trajectories[query_id][0]
         assert node.input_ids == [1, 2, 3, 4, 5]
@@ -163,7 +163,7 @@ class TestMCTSTreeStoreInsertBatch:
             "teacher_logp": [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]],
         }
         store.insert_batch([traj])
-        query_id = traj["_mcts_query_id"]
+        query_id = traj["query_id"]
         node = store.trajectories[query_id][0]
         assert node.topk_ids == [[10, 20], [30, 40], [50, 60]]
         assert node.topk_logp == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]]
@@ -177,10 +177,10 @@ class TestMCTSTreeStoreInsertBatch:
             "loss_mask": [0, 0, 1, 1, 1],
             "reward": 1.0,
             "attention_mask": [1, 1, 1, 1, 1],
-            "_mcts_query_id": "custom_query_id",
+            "query_id": "custom_query_id",
         }
         store.insert_batch([traj])
-        assert traj["_mcts_query_id"] == "custom_query_id"
+        assert traj["query_id"] == "custom_query_id"
         assert "custom_query_id" in store.trajectories
 
     def test_insert_single_trajectory(self):
@@ -188,7 +188,7 @@ class TestMCTSTreeStoreInsertBatch:
         traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
         store.insert_batch([traj])
         assert "_mcts_seq_id" in traj
-        assert traj["_mcts_query_id"] == "q1"
+        assert traj["query_id"] == "q1"
         assert len(store.trajectories["q1"]) == 1
 
     def test_insert_two_trajectories_same_query(self):
@@ -208,7 +208,7 @@ class TestMCTSTreeStoreInsertBatch:
             "attention_mask": torch.tensor(
                 [[1, 1, 1, 1], [1, 1, 1, 0]], dtype=torch.bool
             ),
-            "_mcts_query_id": "q1",
+            "query_id": "q1",
         }
         store.insert_batch([traj])
         assert "_mcts_seq_ids" in traj
@@ -254,7 +254,7 @@ class TestMCTSTreeStoreInsertBatch:
             episode_id="q1_0",
             outcome_reward=1.0,
         )
-        object.__setattr__(node, "_mcts_query_id", "q1")
+        object.__setattr__(node, "query_id", "q1")
         store.insert_batch([node])
         assert hasattr(node, "_mcts_seq_id")
         assert len(store.trajectories) == 1
@@ -371,7 +371,7 @@ class TestMCTSTreeStoreLoadTrajectories:
             ],
         }
         store.insert_batch([traj])
-        loaded = store.load_trajectories(traj["_mcts_query_id"], n_samples=1)
+        loaded = store.load_trajectories(traj["query_id"], n_samples=1)
         assert len(loaded) == 1
         node = loaded[0]
         assert isinstance(node, Node)
@@ -385,7 +385,7 @@ class TestMCTSTreeStoreLoadTrajectories:
             [-1.7, -1.8],
             [-1.9, -2.0],
         ]
-        assert hasattr(node, "_mcts_query_id")
+        assert hasattr(node, "query_id")
         assert hasattr(node, "_mcts_seq_id")
 
     def test_load_trajectories_basic(self):
@@ -397,7 +397,7 @@ class TestMCTSTreeStoreLoadTrajectories:
         node = loaded[0]
         assert isinstance(node, Node)
         assert len(node.input_ids) == 5
-        assert hasattr(node, "_mcts_query_id")
+        assert hasattr(node, "query_id")
 
     def test_load_trajectories_only_untrained(self):
         store = MCTSTreeStore()
