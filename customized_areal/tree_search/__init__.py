@@ -2,6 +2,7 @@ from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
     TreeBackupMode,
@@ -13,6 +14,7 @@ from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 __all__ = [
     "AdvantageMode",
     "CacheAwarePPOTrainer",
+    "LossMode",
     "MCTSTreeStore",
     "QueryIDProxyWorkflow",
     "RolloutCacheConfig",
