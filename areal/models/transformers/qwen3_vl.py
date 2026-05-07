@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 # Qwen3VL-specific Ulysses sequence parallelism patch
 # Based on transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLTextAttention
 
@@ -57,17 +59,14 @@ def ulysses_flash_attn_forward(
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-    cos, sin = position_embeddings
-
-    # Apply RoPE while q/k/v still have the local (sliced) sequence length,
-    # so that cos/sin match the local sequence dimension.
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
-
-    if ulysses_sp_size > 1:
         # (1, num_heads / sp_size, total_seqlen, head_dim)
         query_states = gather_seq_scatter_heads(query_states, seq_dim=2, head_dim=1)
         key_states = gather_seq_scatter_heads(key_states, seq_dim=2, head_dim=1)
         value_states = gather_seq_scatter_heads(value_states, seq_dim=2, head_dim=1)
+
+    cos, sin = position_embeddings
+
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
     if past_key_values is not None:
         # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -76,16 +75,12 @@ def ulysses_flash_attn_forward(
             key_states, value_states, self.layer_idx, cache_kwargs
         )
 
-    # The causal mask created by Qwen3VLTextModel.forward is sized for the
-    # local (sliced) sequence, but after gather_seq_scatter_heads q/k/v have
-    # the full sequence length. Pass None so flash_attention_forward uses the
-    # cu_seq_lens / max_length kwargs (provided by fsdp_engine) instead.
     attn_output, attn_weights = flash_attention_forward(
         self,
         query_states,
         key_states,
         value_states,
-        None if ulysses_sp_size > 1 else attention_mask,
+        attention_mask,
         dropout=0.0 if not self.training else self.attention_dropout,
         scaling=self.scaling,
         is_causal=self.is_causal,

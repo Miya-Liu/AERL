@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import abc
@@ -507,6 +509,12 @@ class TrainEngine(abc.ABC):
     @abc.abstractmethod
     def get_device_stats(self) -> DeviceRuntimeInfo:
         raise NotImplementedError()
+
+    def start_memory_profile(self, max_entries: int = 100000) -> None:
+        pass
+
+    def stop_memory_profile(self, snapshot_dir: str) -> None:
+        pass
 
     def save_perf_tracer(self, step: int | None = None, force: bool = False) -> None:
         """Save performance tracer data.

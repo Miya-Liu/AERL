@@ -28,7 +28,7 @@ echo "api_backend  started (PID: $API_PID), log: $BACKEND_DIR/api.log"
 
 # 3. Dramatiq workers
 cd "$BACKEND_DIR"
-nohup bash -c '.venv/bin/python -m dramatiq core.agents.worker core.app.workflow.worker core.triggers.worker core.billing.worker --queues agents sub_agents workflows triggers system --processes 8 --threads 8 2>&1 | tee worker.log' > /dev/null 2>&1 &
+nohup bash -c '.venv/bin/python -m dramatiq core.agents.worker core.app.workflow.worker core.triggers.worker core.billing.worker --queues agents sub_agents workflows triggers system --processes 6 --threads 6 2>&1 | tee worker.log' > /dev/null 2>&1 &
 WORKER_PID=$!
 echo "worker_backend started (PID: $WORKER_PID), log: $BACKEND_DIR/worker.log"
 

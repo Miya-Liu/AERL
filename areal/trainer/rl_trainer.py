@@ -1,10 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import functools
 import os
 from collections.abc import Callable
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch.distributed as dist
 from torchdata.stateful_dataloader import StatefulDataLoader
@@ -33,6 +35,9 @@ from areal.api.cli_args import (
     vLLMConfig,
 )
 from areal.engine import RemoteSGLangEngine, RemotevLLMEngine
+from areal.experimental.inference_service.controller.controller import (
+    RolloutControllerV2,
+)
 from areal.infra import (
     LocalScheduler,
     RayScheduler,
@@ -145,8 +150,8 @@ class PPOTrainer:
 
         self._amend_xccl_weight_update_envvar()
 
-        openai_cfg = config.rollout.openai
-        self._online_mode = openai_cfg is not None and openai_cfg.mode == "online"
+        agent_cfg = config.rollout.agent
+        self._online_mode = agent_cfg is not None and agent_cfg.mode == "online"
 
         if self._online_mode and config.valid_dataset is not None:
             raise ValueError(
@@ -205,7 +210,9 @@ class PPOTrainer:
         else:
             assert train_dataset is not None
             if is_single_controller() and isinstance(train_dataset, RDataset):
-                ds_cfg = DataServiceConfig.from_dataset_config(config.train_dataset)
+                ds_cfg = DataServiceConfig.from_dataset_config(
+                    config.train_dataset, seed=config.seed
+                )
                 assert self.scheduler is not None
                 controller = DataController(ds_cfg, self.scheduler)
                 controller.initialize(
@@ -216,7 +223,6 @@ class PPOTrainer:
                     controller,
                     dataset_id=f"{config.experiment_name}_{config.trial_name}_train",
                     tokenizer_or_processor_path=config.tokenizer_path,
-                    seed=config.seed,
                     shuffle=config.train_dataset.shuffle,
                     drop_last=config.train_dataset.drop_last,
                 )
@@ -238,7 +244,6 @@ class PPOTrainer:
                     self.data_controller,
                     dataset_id=f"{config.experiment_name}_{config.trial_name}_valid",
                     tokenizer_or_processor_path=config.tokenizer_path,
-                    seed=config.seed,
                     shuffle=self.config.valid_dataset.shuffle,
                     drop_last=self.config.valid_dataset.drop_last,
                 )
@@ -520,13 +525,13 @@ class PPOTrainer:
 
         # Initialize proxy workers if not using RolloutWorkflow
         if workflow is None:
-            openai_cfg = self.config.rollout.openai
-            if openai_cfg is not None and openai_cfg.mode == "online":
+            agent_cfg = self.config.rollout.agent
+            if agent_cfg is not None and agent_cfg.mode == "online":
                 self._ensure_proxy_started()
             else:
                 raise ValueError(
                     "workflow must be specified for train() unless "
-                    "openai.mode='online' is configured. "
+                    "agent.mode='online' is configured. "
                     "Pass a RolloutWorkflow, AgentWorkflow, or callable."
                 )
         elif self._requires_proxy_workflow(workflow):
@@ -580,8 +585,7 @@ class PPOTrainer:
                     for traj, v in zip(rollout_batch, values):
                         traj["values"] = v
                     self.critic.get_device_stats().log("critic values")
-                if self._should_offload_critic:
-                    self._offload_model(self.critic, role="critic")
+                # Critic stays onloaded — offloaded after ppo_update below
 
             if self.ref is not None:
                 if self._should_offload_ref:
@@ -639,10 +643,6 @@ class PPOTrainer:
                         traj["prox_logp"] = logp
                     self.actor.get_device_stats().log("recompute logp")
 
-            # Inject global_step into trajectories for tree backup recording
-            for traj in rollout_batch:
-                traj["_global_step"] = global_step
-
             with (
                 stats_tracker.record_timing("compute_advantage"),
                 perf_tracer.trace_scope(
@@ -657,6 +657,12 @@ class PPOTrainer:
             # Wait for async checkpoint staging to complete before modifying parameters
             self.saver.maybe_wait_for_staging()
 
+            if (
+                config.memory_profiler is not None
+                and global_step in config.memory_profiler.profile_steps
+            ):
+                self.actor.start_memory_profile(config.memory_profiler.max_entries)
+
             with (
                 stats_tracker.record_timing("train_step"),
                 perf_tracer.trace_scope(
@@ -668,12 +674,20 @@ class PPOTrainer:
                 self.actor.ppo_update(adv_batch)
                 self.actor.step_lr_scheduler()
                 self.actor.get_device_stats().log("ppo update")
-            if self._should_offload_actor:
-                self._offload_model(self.actor, role="actor")
+
+            if (
+                config.memory_profiler is not None
+                and global_step in config.memory_profiler.profile_steps
+            ):
+                log_dir = StatsLogger.get_log_path(config.stats_logger)
+                snapshot_dir = os.path.join(
+                    log_dir, "memory_snapshots", f"step_{global_step}"
+                )
+                os.makedirs(snapshot_dir, exist_ok=True)
+                self.actor.stop_memory_profile(snapshot_dir)
+                logger.info(f"Memory snapshots saved to {snapshot_dir}")
 
             if self.critic is not None:
-                if self._should_offload_critic:
-                    self._onload_model(self.critic, role="critic")
                 with (
                     stats_tracker.record_timing("critic_train_step"),
                     perf_tracer.trace_scope(
@@ -690,6 +704,9 @@ class PPOTrainer:
 
             # pause inference for updating weights, save, and evaluation
             self.rollout.pause()
+
+            # Actor already onloaded; engine-internal _offload_aware_context
+            # calls in update_weights/save are no-ops.
 
             with (
                 stats_tracker.record_timing("update_weights"),
@@ -733,6 +750,10 @@ class PPOTrainer:
                     epoch=epoch, epoch_step=step, global_step=global_step
                 )
 
+            # Offload actor before eval
+            if self._should_offload_actor:
+                self._offload_model(self.actor, role="actor")
+
             if self._should_offload_rollout:
                 self._onload_rollout(is_eval=True)
             with (
@@ -761,11 +782,21 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                # Since all RTensor objects are affiliated IPs,
-                # calling `clear_batches` once should be sufficient.
-                self.actor.clear_batches(rollout_batch, adv_batch)
-                if self.data_controller is not None:
-                    self.data_controller.clear_batches()
+                # Each role runs in its own Python process with a
+                # process-local ``_fetch_buffer``; one HTTP DELETE to the
+                # storage owner clears ``_storage`` but not per-consumer
+                # caches. Fan out ``clear_batches`` to every role that
+                # localized the batch — see inclusionAI/AReaL#1209.
+                # SPMD mode never populates ``_fetch_buffer`` (no RTensor
+                # round-trip), so the fan-out is single-controller only.
+                if is_single_controller():
+                    self.actor.clear_batches(rollout_batch, adv_batch)
+                    if self.critic is not None:
+                        self.critic.clear_batches(rollout_batch, adv_batch)
+                    if self.ref is not None:
+                        self.ref.clear_batches(rollout_batch)
+                    if self.data_controller is not None:
+                        self.data_controller.clear_batches()
 
             with perf_tracer.trace_scope(
                 "train.log_stats",
@@ -990,7 +1021,12 @@ class PPOTrainer:
             return engine
 
         # Single-controller mode - no engine instantiation needed
-        controller = engine_cls.as_controller(config, self.scheduler)
+        if config._version == "v2":
+            controller = RolloutControllerV2(
+                config=config, scheduler=cast(Scheduler, self.scheduler)
+            )
+        else:
+            controller = engine_cls.as_controller(config, self.scheduler)
         init_kwargs = dict(
             role="rollout",
             server_args=server_args,
@@ -1259,8 +1295,8 @@ class PPOTrainer:
             self.eval_rollout.start_proxy()
 
         # Start proxy gateway for online mode.
-        openai_cfg = self.config.rollout.openai
-        if openai_cfg is not None and openai_cfg.mode == "online":
+        agent_cfg = self.config.rollout.agent
+        if agent_cfg is not None and agent_cfg.mode == "online":
             self.rollout.start_proxy_gateway()
             logger.info(
                 "Proxy gateway available at %s",

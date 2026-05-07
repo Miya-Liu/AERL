@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """AReaL: A Large-Scale Asynchronous Reinforcement Learning System for Language Reasoning"""
 
 from .version import __version__  # noqa
@@ -13,10 +15,11 @@ from .infra import (
 
 
 def __getattr__(name: str):
-    if name in ("PPOTrainer", "RWTrainer", "SFTTrainer"):
-        from .trainer import PPOTrainer, RWTrainer, SFTTrainer
+    if name in ("DPOTrainer", "PPOTrainer", "RWTrainer", "SFTTrainer"):
+        from .trainer import DPOTrainer, PPOTrainer, RWTrainer, SFTTrainer
 
         _map = {
+            "DPOTrainer": DPOTrainer,
             "PPOTrainer": PPOTrainer,
             "RWTrainer": RWTrainer,
             "SFTTrainer": SFTTrainer,
@@ -27,6 +30,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "DPOTrainer",
     "PPOTrainer",
     "RolloutController",
     "RWTrainer",

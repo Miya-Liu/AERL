@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """mbridge Bridge for BailingMoeV2.5 (bailing_moe_linear model_type).
 
 Registers with mbridge so that MegatronEngine.initialize() can use AutoBridge
@@ -163,7 +165,9 @@ class BailingMoeBridge(LLMBridge):
             qk_head_dim=getattr(hf_config, "qk_nope_head_dim", 128),
             qk_pos_emb_head_dim=getattr(hf_config, "qk_rope_head_dim", 64),
             v_head_dim=getattr(hf_config, "v_head_dim", 128),
-            rotary_base=getattr(hf_config, "rope_theta", 10000.0),
+            rotary_base=(getattr(hf_config, "rope_parameters", None) or {}).get(
+                "rope_theta", getattr(hf_config, "rope_theta", 10000.0)
+            ),
             rope_type="rope",
             rotary_percent=1.0,
             rotary_scaling_factor=(getattr(hf_config, "rope_scaling", None) or {}).get(

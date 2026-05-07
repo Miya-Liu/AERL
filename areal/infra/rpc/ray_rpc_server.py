@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import traceback
 from concurrent.futures import Future
@@ -42,6 +44,11 @@ class RayRPCServer:
         from areal.infra.platforms import current_platform
 
         return current_platform.current_device()
+
+    def _get_device_type(self) -> str:
+        from areal.infra.platforms import current_platform
+
+        return current_platform.device_type
 
     def _should_broadcast_payload(
         self,
@@ -179,7 +186,7 @@ class RayRPCServer:
             if (
                 isinstance(engine, TrainEngine)
                 and engine.initialized
-                and self._get_device().type != "cpu"
+                and self._get_device_type() != "cpu"
             ):
                 from areal.infra.platforms import current_platform
 

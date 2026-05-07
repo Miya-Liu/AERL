@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import os
 import subprocess
 import sys
@@ -13,6 +15,7 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from areal.api import (
     InferenceEngine,
     LocalInfServerInfo,
+    ModelAllocation,
     ModelRequest,
     ModelResponse,
     ParamSpec,
@@ -116,25 +119,11 @@ class SGLangBackend:
         output_tokens = [x[1] for x in meta_info["output_token_logprobs"]]
         output_logprobs = [x[0] for x in meta_info["output_token_logprobs"]]
 
-        # Extract top-k logprobs per position if available
-        output_top_logprobs = None
-        if "output_top_logprobs" in meta_info:
-            raw_top_logprobs = meta_info["output_top_logprobs"]
-            output_top_logprobs = []
-            for pos_top_logprobs in raw_top_logprobs:
-                position_logprobs = []
-                if pos_top_logprobs is not None:
-                    for token_key, logprob in pos_top_logprobs.items():
-                        if isinstance(token_key, int):
-                            position_logprobs.append((token_key, logprob))
-                output_top_logprobs.append(position_logprobs)
-
         return HttpGenerationResult(
             output_tokens=output_tokens,
             output_logprobs=output_logprobs,
             stop_reason=stop_reason,
             routed_experts=routed_experts,
-            output_top_logprobs=output_top_logprobs,
         )
 
     def build_disk_weight_update_requests(
@@ -277,6 +266,45 @@ class RemoteSGLangEngine(InferenceEngine):
         # Pure composition - create internal engine with SGLang backend
         self._engine = RemoteInfEngine(config, SGLangBackend())
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        tokenizer_path: str | None = None,
+        dp_size: int = 1,
+        max_concurrent_rollouts: int | None = None,
+        **kwargs,
+    ) -> "RemoteInfEngine":
+        """Create a RemoteInfEngine without kwargs instead of InferenceEngineConfig.
+
+        Parameters
+        ----------
+        tokenizer_path: str | None = None
+            Path to the tokenizer
+        dp_size : int
+            Data parallelism size
+        max_concurrent_rollouts : int | None
+            Maximum concurrent rollouts
+        **kwargs : dict
+            Additional config parameters passed to InferenceEngineConfig
+
+        Returns
+        -------
+        RemoteInfEngine
+        """
+
+        backend_str = f"sglang:d{dp_size}"
+
+        config = InferenceEngineConfig(
+            backend=backend_str,
+            max_concurrent_rollouts=max_concurrent_rollouts,
+            tokenizer_path=tokenizer_path,
+            **kwargs,
+        )
+
+        engine = cls(config)
+
+        return engine
+
     def initialize(
         self,
         engine_id: str | None = None,
@@ -284,6 +312,10 @@ class RemoteSGLangEngine(InferenceEngine):
         train_data_parallel_size: int | None = None,
     ):
         """Initialize the engine by discovering and connecting to servers."""
+        if train_data_parallel_size is None:
+            train_data_parallel_size = ModelAllocation.from_str(
+                self.config.backend, name="rollout"
+            ).parallel.data_parallel_size
         return self._engine.initialize(engine_id, addr, train_data_parallel_size)
 
     def destroy(self):
@@ -440,8 +472,23 @@ class RemoteSGLangEngine(InferenceEngine):
     ) -> RolloutController:
         return RolloutController(cls, config=config, scheduler=scheduler)
 
-    def clear_batches(self, *args):
-        """Placeholder method of single-controller API."""
+    def clear_batches(self, shard_ids: list[str]) -> None:
+        """Drain this worker's client-side RTensor fetch buffer.
+
+        Called via RPC by ``TrainController.clear_batches`` at step end so
+        cross-node consumer DP heads release cached tensors. See #1209.
+        Upstream ``TrainController.clear_batches`` guards against empty
+        input, so ``shard_ids`` is always a non-empty ``list[str]``.
+        """
+        from areal.infra.rpc.rtensor import clear_fetch_buffer
+
+        clear_fetch_buffer(shard_ids)
+
+    def fetch_buffer_stats(self) -> dict[str, int]:
+        """Expose local fetch-buffer stats for post-step drain verification."""
+        from areal.infra.rpc.rtensor import fetch_buffer_stats
+
+        return fetch_buffer_stats()
 
     def save_perf_tracer(self, step: int | None = None, force: bool = False) -> None:
         perf_tracer.save(step=step, force=force)

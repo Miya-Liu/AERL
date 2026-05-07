@@ -1,4 +1,8 @@
 #!/bin/bash
+# Guard: if accidentally executed by Python, re-exec with bash
+if [ -n "${_PYTHON_RUNNING:-}" ] 2>/dev/null; then exec bash "$0" "$@"; fi
+if type python3 &>/dev/null && python3 -c "import sys; sys.exit(0 if 'python' in __import__('os').getenv('_', '') else 1)" 2>/dev/null; then exec bash "$0" "$@"; fi
+
 set -e
 
 AREAL_DIR="/dfs/share-groups/letrain/zhoujie/AReaL-main"

@@ -1,7 +1,7 @@
 """Training script for TPFC Agent with Tree Search Distilling.
 
 Combines the TPFC dataset and agent with MCTS tree backup advantages,
-on-policy distillation loss, and rollout caching via TreeDistillPPOTrainer.
+on-policy distillation loss, and rollout caching via CacheAwarePPOTrainer.
 
 The ``workflow`` CLI override specifies the agent class to use inside
 OpenAIProxyWorkflow.  For example, to use TPFCAgent:
@@ -13,8 +13,10 @@ OpenAIProxyWorkflow.  For example, to use TPFCAgent:
 
 When ``workflow`` points to an agent class (has an ``async run`` method),
 it is instantiated and passed as the ``agent`` kwarg to
-TreeDistillPPOTrainer so that OpenAIProxyWorkflow wraps it.
+CacheAwarePPOTrainer so that OpenAIProxyWorkflow wraps it.
 """
+
+# ruff: noqa: E402
 
 import pathlib
 import sys
@@ -22,14 +24,14 @@ import sys
 project_root = pathlib.Path(__file__).parent.parent.parent.parent.absolute()
 sys.path.insert(0, str(project_root))
 
-from customized_areal.on_policy_distill.core.config import OnPolicyDistillConfig
 from customized_areal.tpfc.tpfc_dataset import get_tpfc_rl_dataset
 from customized_areal.tree_search.config import (
     RolloutCacheConfig,
     TreeBackupConfig,
     TreeBackupMode,
 )
-from customized_areal.tree_search_distilling.trainer import TreeDistillPPOTrainer
+from customized_areal.tree_search.core.config import OnPolicyDistillConfig
+from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 
 from areal.api.cli_args import load_expr_config
 from areal.utils import logging
@@ -44,7 +46,7 @@ def _resolve_agent(workflow_path: str):
 
     If *workflow_path* points to a class with an ``async run`` method it is
     treated as an agent class and instantiated.  Otherwise ``None`` is
-    returned and TreeDistillPPOTrainer falls back to its default TreeDistillAgent.
+    returned and CacheAwarePPOTrainer falls back to its default agent.
     """
     try:
         cls = import_from_string(workflow_path)
@@ -116,7 +118,7 @@ def main(args: list[str] | None = None) -> None:
         type(agent).__name__ if agent else "(default)",
     )
 
-    trainer = TreeDistillPPOTrainer(
+    trainer = CacheAwarePPOTrainer(
         config=config,
         cache_config=cache_config,
         tree_backup_config=tree_backup_config,

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """Data Blueprint: RTensor ``/data/*`` storage endpoints.
 
 Provides a Flask Blueprint that handles tensor shard storage and
@@ -110,8 +112,12 @@ def retrieve_batch_data_many():
 
         # USE PYDANTIC MODEL FOR VALIDATION
         try:
+            if not isinstance(raw_payload, dict):
+                raise TypeError(
+                    "Expected a JSON object, got " + type(raw_payload).__name__
+                )
             payload_model = BatchShardRequest(**raw_payload)
-        except ValidationError:
+        except (ValidationError, TypeError):
             return (
                 jsonify(
                     {

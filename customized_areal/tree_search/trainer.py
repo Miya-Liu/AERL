@@ -154,17 +154,20 @@ def _patch_wrap_openai_agent_for_tree_search(
     original_wrap = engine._wrap_openai_agent
 
     def _tree_search_wrap(agent: Any, proxy_addr: str):
-        from areal.api.cli_args import OpenAIProxyConfig
-
-        openai_cfg = engine.config.openai or OpenAIProxyConfig()
+        agent_cfg = engine.config.agent
+        if agent_cfg is None:
+            logger.warning(
+                "config.agent is None; tree search workflow will not be available"
+            )
+            return
         inner = QueryIDProxyWorkflow(
-            mode=openai_cfg.mode,
+            mode=agent_cfg.mode,
             agent=agent,
             proxy_addr=proxy_addr,
-            admin_api_key=openai_cfg.admin_api_key,
-            discount=openai_cfg.turn_discount,
-            export_style=openai_cfg.export_style,
-            subproc_max_workers=openai_cfg.subproc_max_workers,
+            admin_api_key=agent_cfg.admin_api_key,
+            discount=agent_cfg.turn_discount,
+            export_style=agent_cfg.export_style,
+            subproc_max_workers=agent_cfg.subproc_max_workers,
             proxy_gateway_addr=getattr(engine, "_proxy_gateway_addr", None),
         )
         return TreeSearchGroupedRolloutWorkflow(
@@ -464,7 +467,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                     f"Distillation loss mode requires FSDP backend, "
                     f"got: {alloc.backend}"
                 )
-            from customized_areal.on_policy_distill.engine import (
+            from customized_areal.tree_search.engine import (
                 MultiCandidateFSDPPPOActor,
             )
 
@@ -525,7 +528,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         # Patch PPOActor._ppo_update with grpo_distill_loss_fn when distill is enabled
         if self.tree_backup_config.loss_mode != LossMode.GRPO:
-            from customized_areal.on_policy_distill.training.actor import (
+            from customized_areal.tree_search.training.actor import (
                 patch_ppo_actor_class_to_use_distill_loss,
             )
 
@@ -772,7 +775,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
             _unpatch_wrap_openai_agent(self.rollout)
             _unpatch_workflow_executor(self.rollout)
             if self.tree_backup_config.loss_mode != LossMode.GRPO:
-                from customized_areal.on_policy_distill.training.actor import (
+                from customized_areal.tree_search.training.actor import (
                     unpatch_ppo_actor_distill_loss,
                 )
 

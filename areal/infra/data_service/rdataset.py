@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 """RDataset — remote dataset proxy, analogous to RTensor for tensors.
 
 Provides a map-style dataset interface backed by remote data workers.
@@ -201,7 +203,6 @@ class RDataset:
         controller: DataController,
         dataset_id: str,
         tokenizer_or_processor_path: str = "",
-        seed: int = 42,
         shuffle: bool = True,
         drop_last: bool = True,
         prefetch_chunk_size: int = 64,
@@ -224,7 +225,6 @@ class RDataset:
             max_length=self._max_length,
             dataset_kwargs=self._dataset_kwargs,
             tokenizer_or_processor_path=tokenizer_or_processor_path,
-            seed=seed,
             shuffle=shuffle,
             drop_last=drop_last,
         )

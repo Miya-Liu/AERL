@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from customized_areal.on_policy_distill.core.reward_compute import (
+from customized_areal.tree_search.core.reward_compute import (
     _compute_token_rewards,
 )
-from customized_areal.on_policy_distill.core.teacher_client import (
+from customized_areal.tree_search.core.teacher_client import (
     TeacherClient,
     TeacherConfig,
 )
-from customized_areal.on_policy_distill.proxy.cache import PositionRewardInfo
+from customized_areal.tree_search.distill_types import PositionRewardInfo
 
 # ---------------------------------------------------------------------------
 # Helpers

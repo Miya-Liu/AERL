@@ -276,7 +276,7 @@ def _prepare_form_data(
         "prompt": task_description,
         "agent_id": agent_id,
         "skip_check_pending": True,
-        "clean_filename": True,
+        "clean_filename": False,
     }
     if model_name is not None:
         form_data["model_name"] = model_name
@@ -680,7 +680,6 @@ if __name__ == "__main__":
             ),
             refresh_token=DEFAULT_REFRESH_TOKEN,
         )
-        
     )
 
     print("Messages:", messages)

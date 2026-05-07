@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import os
@@ -103,7 +105,9 @@ class RWTrainer:
         self.actor = self._create_actor(config.actor)
 
         if is_single_controller() and isinstance(train_dataset, RDataset):
-            ds_cfg = DataServiceConfig.from_dataset_config(config.train_dataset)
+            ds_cfg = DataServiceConfig.from_dataset_config(
+                config.train_dataset, seed=config.seed
+            )
             controller = DataController(ds_cfg, self.scheduler)
             controller.initialize(role="data", num_dataset_workers=ds_cfg.num_workers)
             self.data_controller = controller
@@ -112,7 +116,6 @@ class RWTrainer:
                 controller,
                 dataset_id=f"{config.experiment_name}_{config.trial_name}_train",
                 tokenizer_or_processor_path=config.tokenizer_path,
-                seed=config.seed,
                 shuffle=config.train_dataset.shuffle,
                 drop_last=config.train_dataset.drop_last,
             )
@@ -142,7 +145,6 @@ class RWTrainer:
                     self.data_controller,
                     dataset_id=f"{config.experiment_name}_{config.trial_name}_valid",
                     tokenizer_or_processor_path=config.tokenizer_path,
-                    seed=config.seed,
                     shuffle=config.valid_dataset.shuffle,
                     drop_last=config.valid_dataset.drop_last,
                 )
@@ -212,6 +214,12 @@ class RWTrainer:
             # Wait for async checkpoint staging to complete before modifying parameters
             self.saver.maybe_wait_for_staging()
 
+            if (
+                config.memory_profiler is not None
+                and global_step in config.memory_profiler.profile_steps
+            ):
+                self.actor.start_memory_profile(config.memory_profiler.max_entries)
+
             with (
                 stats_tracker.record_timing("train_step"),
                 perf_tracer.trace_scope(
@@ -223,6 +231,18 @@ class RWTrainer:
                 self.actor.train_rw(batch)
                 self.actor.step_lr_scheduler()
                 self.actor.get_device_stats().log("after train step")
+
+            if (
+                config.memory_profiler is not None
+                and global_step in config.memory_profiler.profile_steps
+            ):
+                log_dir = StatsLogger.get_log_path(config.stats_logger)
+                snapshot_dir = os.path.join(
+                    log_dir, "memory_snapshots", f"step_{global_step}"
+                )
+                os.makedirs(snapshot_dir, exist_ok=True)
+                self.actor.stop_memory_profile(snapshot_dir)
+                logger.info(f"Memory snapshots saved to {snapshot_dir}")
 
             self.actor.set_version(global_step + 1)
 
@@ -270,9 +290,12 @@ class RWTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                self.actor.clear_batches(batch)
-                if self.data_controller is not None:
-                    self.data_controller.clear_batches()
+                # SPMD mode never populates ``_fetch_buffer`` (no RTensor
+                # round-trip), so the fan-out is single-controller only.
+                if is_single_controller():
+                    self.actor.clear_batches(batch)
+                    if self.data_controller is not None:
+                        self.data_controller.clear_batches()
 
             with perf_tracer.trace_scope(
                 "train.log_stats",

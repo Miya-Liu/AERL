@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import dataclasses
@@ -45,6 +47,7 @@ from areal.api import (
     FinetuneSpec,
     FSDPParallelStrategy,
     InferenceEngine,
+    ModelAllocation,
     ParallelStrategy,
     ParamSpec,
     SaveLoadMeta,
@@ -52,7 +55,7 @@ from areal.api import (
     WeightUpdateMeta,
     WorkflowLike,
 )
-from areal.api.cli_args import PerfTracerConfig, TrainEngineConfig
+from areal.api.cli_args import OptimizerConfig, PerfTracerConfig, TrainEngineConfig
 from areal.api.io_struct import DeviceRuntimeInfo
 from areal.engine.core import (
     aggregate_eval_losses,
@@ -62,6 +65,7 @@ from areal.engine.core import (
 from areal.engine.core.distributed import (
     init_custom_process_group,
     patch_dist_group_timeout,
+    warmup_process_groups,
 )
 from areal.engine.core.model import (
     disable_dropout_in_model,
@@ -114,6 +118,7 @@ from areal.utils.data import (
     MicroBatchList,
     amend_position_ids,
     concat_batch,
+    is_multi_modal_key,
     pack_tensor_dict,
     pad_mb_list,
     split_batch,
@@ -129,7 +134,7 @@ from areal.utils.save_load import get_state_dict_from_repo_id_or_path
 
 if TYPE_CHECKING:
     from areal.api import Scheduler
-    from areal.api.cli_args import PPOActorConfig, PPOCriticConfig
+    from areal.api.cli_args import DPOEngineConfig, PPOActorConfig, PPOCriticConfig
 
 
 @dataclasses.dataclass
@@ -169,6 +174,45 @@ class _PendingWeightUpdateBucket:
     fut: Future[None]
     named_tensors: list[tuple[str, torch.Tensor]]
     stream: torch.cuda.Stream | None = None
+
+
+_MULTIMODAL_FORWARD_KEYS = ("image_grid_thw", "pixel_values", "video_grid_thw")
+
+
+def _is_multimodal_payload_key(key: str) -> bool:
+    return is_multi_modal_key(key) or key in _MULTIMODAL_FORWARD_KEYS
+
+
+def _drop_multimodal_payloads(data: dict[str, Any]) -> None:
+    for key in list(data.keys()):
+        if _is_multimodal_payload_key(key):
+            data.pop(key, None)
+
+
+def _prepare_multimodal_forward_inputs(
+    mb: dict[str, Any],
+    padded_mb: dict[str, Any],
+) -> None:
+    """Keep multimodal tensors only in the forward micro-batch.
+
+    ``mb`` is used by loss and bookkeeping callbacks, while ``padded_mb`` is
+    passed to the model forward. Large multimodal tensors such as
+    ``pixel_values`` should not be duplicated on both sides.
+    """
+
+    multi_modal_input = mb.pop("multi_modal_input", None)
+    if multi_modal_input is None:
+        multi_modal_input = padded_mb.pop("multi_modal_input", None)
+    else:
+        padded_mb.pop("multi_modal_input", None)
+
+    if multi_modal_input is not None:
+        for key in _MULTIMODAL_FORWARD_KEYS:
+            values = [item[key] for item in multi_modal_input if key in item]
+            if values:
+                padded_mb[key] = torch.cat(values, dim=0)
+
+    _drop_multimodal_payloads(mb)
 
 
 class FSDPEngine(TrainEngine):
@@ -216,8 +260,60 @@ class FSDPEngine(TrainEngine):
         self.dp_rank: int
 
         self.is_offload: bool = False
+        self._offload_depth: int = 0
         self._per_layer_optim_wrapper: PerLayerOptimWrapper | None = None
         self.enable_tree_training: bool = self.config.enable_tree_training
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model: str,
+        experiment_name: str,
+        trial_name: str,
+        dp_size: int = 1,
+        tp_size: int = 1,
+        dtype: str = "bfloat16",
+        learning_rate: float | None = None,
+        use_lora: bool = False,
+        lora_rank: int = 32,
+        lora_alpha: int = 16,
+        **kwargs,
+    ) -> FSDPEngine:
+        """Construct an FSDPEngine directly without assembling a TrainEngineConfig.
+
+        Parameters
+        ----------
+        model : str
+            Path to HuggingFace checkpoint or model.
+        experiment_name: str
+        trial_name: str
+        dp_size: int
+            Data parallel size, default 1.
+        tp_size: int
+            Tensor parallel size, default 1.
+        dtype : str
+            Parameter data type, default 'bfloat16'.
+        learning_rate : float | None
+            Learning rate. If None, no optimizer is created (inference-only).
+        use_lora : bool
+            Whether to use LoRA.
+        """
+        optimizer_config = (
+            OptimizerConfig(lr=learning_rate) if learning_rate is not None else None
+        )
+        config = TrainEngineConfig(
+            path=model,
+            experiment_name=experiment_name,
+            trial_name=trial_name,
+            backend=f"fsdp:d{dp_size}t{tp_size}",
+            dtype=dtype,
+            optimizer=optimizer_config,
+            use_lora=use_lora,
+            lora_rank=lora_rank,
+            lora_alpha=lora_alpha,
+            **kwargs,
+        )
+        return cls(config)
 
     def create_process_group(self, parallel_strategy: ParallelStrategy | None = None):
         patch_dist_group_timeout(DIST_GROUP_DEFAULT_TIMEOUT)
@@ -236,7 +332,12 @@ class FSDPEngine(TrainEngine):
 
         # FSDP-specific process group setup
         if parallel_strategy is None:
-            parallel_strategy = ParallelStrategy()
+            if self.config.backend:
+                parallel_strategy = ModelAllocation.from_str(
+                    self.config.backend
+                ).parallel
+            else:
+                parallel_strategy = ParallelStrategy()
 
         self.logger = logging.getLogger(f"[FSDPEngine Rank {dist.get_rank()}]")
 
@@ -263,6 +364,10 @@ class FSDPEngine(TrainEngine):
         self.dp_rank = dist.get_rank(self.dp_group)
 
         self.logger.info(f"Data parallel head {self.dp_head} and rank {self.dp_rank}")
+
+        # Eagerly initialize HCCL/NCCL communicators for the subgroups so
+        # that lazy init doesn't race with colocated engines (issue #1099).
+        warmup_process_groups(self.dp_group, self.sp_group, self.mp_group)
 
     def initialize(self, addr: str | None, ft_spec: FinetuneSpec, *args, **kwargs):
         # Initialize distributed enviroments and load model.
@@ -416,7 +521,25 @@ class FSDPEngine(TrainEngine):
         # handles still exist and we expect another engine to
         # clean up these groups.
         if dist.is_initialized() and self.own_global_group:
+            # Pre-destroy synchronization on a CPU (gloo) group so that all
+            # ranks leave the NCCL collective phase together. Without this
+            # barrier, rank-0 (which owns the TCPStore server) may exit
+            # before peers finish their final NCCL abort, causing
+            # HeartbeatMonitor background threads on other ranks to observe
+            # "recvValue failed" on the already-closed store. This is
+            # harmless but produces a noisy stderr backtrace at teardown.
+            if getattr(self, "_cpu_group", None) is not None:
+                try:
+                    dist.barrier(group=self._cpu_group)
+                except Exception as e:  # pragma: no cover - best-effort
+                    self.logger.warning(
+                        f"pre-destroy CPU barrier failed (ignored): {e}"
+                    )
             dist.destroy_process_group()
+            # Make destroy() idempotent: if the controller calls destroy
+            # more than once (e.g. via cleanup hooks), the second call
+            # must not try to destroy already-destroyed groups.
+            self.own_global_group = False
 
     @property
     def initialized(self) -> bool:
@@ -532,17 +655,24 @@ class FSDPEngine(TrainEngine):
 
     @contextmanager
     def _offload_aware_context(self):
-        """Temporarily onload parameters for offload-unsafe operations."""
+        """Temporarily onload parameters for offload-unsafe operations.
+
+        Reentrant: nested calls increment depth; only the outermost
+        call performs actual onload/offload transitions.
+        """
         if not self.is_offload:
-            with nullcontext():
-                yield
+            yield
             return
 
-        self.onload()
+        self._offload_depth += 1
+        if self._offload_depth == 1:
+            self.onload()
         try:
             yield
         finally:
-            self.offload()
+            self._offload_depth -= 1
+            if self._offload_depth == 0:
+                self.offload()
 
     def optimizer_zero_grad(self):
         assert self.optimizer is not None
@@ -662,7 +792,9 @@ class FSDPEngine(TrainEngine):
         self.forward_backward_batch(mb_list, process_output, forward_only=False)
 
         # Step 4: Optimizer step
-        return self.optimizer_step()
+        stats = self.optimizer_step()
+        stats["num_micro_batches"] = len(mb_list.mbs)
+        return stats
 
     @torch.no_grad()
     def eval_batch(
@@ -801,8 +933,23 @@ class FSDPEngine(TrainEngine):
 
         self.is_offload = False
 
-    def clear_batches(self, *args):
-        """Placeholder method of single-controller API."""
+    def clear_batches(self, shard_ids: list[str]) -> None:
+        """Drain this worker's client-side RTensor fetch buffer.
+
+        Called via RPC by ``TrainController.clear_batches`` at step end so
+        cross-node consumer DP heads release cached tensors. See #1209.
+        Upstream ``TrainController.clear_batches`` guards against empty
+        input, so ``shard_ids`` is always a non-empty ``list[str]``.
+        """
+        from areal.infra.rpc.rtensor import clear_fetch_buffer
+
+        clear_fetch_buffer(shard_ids)
+
+    def fetch_buffer_stats(self) -> dict[str, int]:
+        """Expose local fetch-buffer stats for post-step drain verification."""
+        from areal.infra.rpc.rtensor import fetch_buffer_stats
+
+        return fetch_buffer_stats()
 
     def get_device_stats(self) -> DeviceRuntimeInfo:
         return DeviceRuntimeInfo.get_current()
@@ -864,7 +1011,15 @@ class FSDPEngine(TrainEngine):
         dtype = getattr(torch, self.config.dtype)
 
         if self.config.fsdp.memory_efficient_load:
-            loading_device = "cpu"
+            # Only rank 0 loads on CPU; other ranks use meta device (zero memory)
+            # to avoid CPU OOM when multiple workers share a node.
+            # Weights are broadcast from rank 0 after FSDP sharding in initialize().
+            # Note: meta device optimization only applies to LLM (not VLM), because
+            # VLM uses from_pretrained() which doesn't support meta device context.
+            if not self.is_vision_model and dist.get_rank() != 0:
+                loading_device = "meta"
+            else:
+                loading_device = "cpu"
         else:
             loading_device = current_platform.device_type
 
@@ -1316,6 +1471,7 @@ class FSDPEngine(TrainEngine):
         fut = Future()
 
         if dist.get_rank() == 0:
+            self.rollout_engine.pause_generation()
             fut = self.rollout_engine.update_weights_from_disk(meta)
 
         assert meta.path is not None
@@ -1333,6 +1489,7 @@ class FSDPEngine(TrainEngine):
             )
 
             fut.result()
+            self.rollout_engine.continue_generation()
 
         current_platform.synchronize()
         dist.barrier(group=self.cpu_group)
@@ -1476,11 +1633,14 @@ class FSDPEngine(TrainEngine):
                 if video_grid_thw_list:
                     video_grid_thw = torch.cat(video_grid_thw_list)
 
-            position_ids, _ = self.model.model.get_rope_index(
+            position_ids = self.model.model.compute_3d_position_ids(
                 input_ids=input_ids,
                 image_grid_thw=image_grid_thw,
                 video_grid_thw=video_grid_thw,
                 attention_mask=attn_mask,
+                mm_token_type_ids=input_["mm_token_type_ids"],
+                inputs_embeds=None,
+                past_key_values=None,
             )
             position_ids = torch.einsum("ijk->jki", position_ids)
             input_["position_ids"] = position_ids
@@ -1534,31 +1694,8 @@ class FSDPEngine(TrainEngine):
                 padded_mb["attention_mask"] = dict(
                     full_attention=None, sliding_attention=None
                 )
-            if "multi_modal_input" in mb:
-                image_grid_thw_list = [
-                    item["image_grid_thw"]
-                    for item in mb["multi_modal_input"]
-                    if "image_grid_thw" in item
-                ]
-                if image_grid_thw_list:
-                    mb["image_grid_thw"] = torch.cat(image_grid_thw_list, dim=0)
-                    padded_mb["image_grid_thw"] = torch.cat(image_grid_thw_list, dim=0)
-                pixel_values_list = [
-                    item["pixel_values"]
-                    for item in mb["multi_modal_input"]
-                    if "pixel_values" in item
-                ]
-                if pixel_values_list:
-                    mb["pixel_values"] = torch.cat(pixel_values_list, dim=0)
-                    padded_mb["pixel_values"] = torch.cat(pixel_values_list, dim=0)
-                video_grid_thw_list = [
-                    item["video_grid_thw"]
-                    for item in mb["multi_modal_input"]
-                    if "video_grid_thw" in item
-                ]
-                if video_grid_thw_list:
-                    mb["video_grid_thw"] = torch.cat(video_grid_thw_list, dim=0)
-                    padded_mb["video_grid_thw"] = torch.cat(video_grid_thw_list, dim=0)
+            _prepare_multimodal_forward_inputs(mb, padded_mb)
+        _drop_multimodal_payloads(mb_list.data)
         return mb_list
 
     def _prepare_mb_inputs(
@@ -1837,6 +1974,15 @@ class FSDPPPOActor(FSDPEngine):
 
     @classmethod
     def as_controller(cls, config: PPOActorConfig, scheduler: Scheduler):
+        if config._version == "v2":
+            from areal.trainer.ppo.actor import PPOActorControllerV2
+
+            return PPOActorControllerV2(
+                train_engine=cls,
+                config=config,
+                scheduler=scheduler,
+            )
+
         from areal.trainer.ppo.actor import PPOActorController
 
         return PPOActorController(train_engine=cls, config=config, scheduler=scheduler)
@@ -1860,6 +2006,15 @@ class FSDPPPOCritic(FSDPEngine):
 
     @classmethod
     def as_controller(cls, config: PPOCriticConfig, scheduler: Scheduler):
+        if config._version == "v2":
+            from areal.trainer.ppo.critic import PPOCriticControllerV2
+
+            return PPOCriticControllerV2(
+                train_engine=cls,
+                config=config,
+                scheduler=scheduler,
+            )
+
         from areal.trainer.ppo.critic import PPOCriticController
 
         return PPOCriticController(train_engine=cls, config=config, scheduler=scheduler)
@@ -1882,6 +2037,15 @@ class FSDPLMEngine(FSDPEngine):
 
     @classmethod
     def as_controller(cls, config: TrainEngineConfig, scheduler: Scheduler):
+        if config._version == "v2":
+            from areal.trainer.sft.lm_engine import LMControllerV2
+
+            return LMControllerV2(
+                train_engine=cls,
+                config=config,
+                scheduler=scheduler,
+            )
+
         from areal.trainer.sft.lm_engine import LMController
 
         return LMController(train_engine=cls, config=config, scheduler=scheduler)
@@ -1911,6 +2075,52 @@ class FSDPRWEngine(FSDPEngine):
 
     @classmethod
     def as_controller(cls, config: TrainEngineConfig, scheduler: Scheduler):
+        if config._version == "v2":
+            from areal.trainer.rw.rw_engine import RWControllerV2
+
+            return RWControllerV2(train_engine=cls, config=config, scheduler=scheduler)
+
         from areal.trainer.rw.rw_engine import RWController
 
         return RWController(train_engine=cls, config=config, scheduler=scheduler)
+
+
+class FSDPDPOEngine(FSDPEngine):
+    """DPO training engine using FSDP backend."""
+
+    def __init__(self, config: DPOEngineConfig):
+        from copy import deepcopy
+
+        from areal.trainer.dpo.dpo_engine import DPOEngine
+
+        super().__init__(config)
+        self.dpo_engine = DPOEngine(self)
+        if self.config.mb_spec.granularity != 2:
+            dpo_logger = logging.getLogger("DPOEngine")
+            dpo_logger.warning("mb_spec.granularity must be 2 for DPO training")
+            self.config = deepcopy(self.config)
+            self.config.mb_spec.granularity = 2
+
+    def train_dpo(self, data):
+        return self.dpo_engine.train_dpo(data)
+
+    def evaluate_dpo(self, data):
+        return self.dpo_engine.evaluate_dpo(data)
+
+    def compute_logp(self, data: list[dict[str, Any]]) -> list[torch.Tensor] | None:
+        return self.dpo_engine.compute_logp(data)
+
+    @classmethod
+    def as_controller(
+        cls,
+        config: DPOEngineConfig,
+        scheduler: Scheduler,
+    ):
+        if config._version == "v2":
+            from areal.trainer.dpo.dpo_engine import DPOControllerV2
+
+            return DPOControllerV2(train_engine=cls, config=config, scheduler=scheduler)
+
+        from areal.trainer.dpo.dpo_engine import DPOController
+
+        return DPOController(train_engine=cls, config=config, scheduler=scheduler)

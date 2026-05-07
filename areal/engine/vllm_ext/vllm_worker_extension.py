@@ -1,4 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+
 import traceback
+from contextlib import contextmanager
 
 import torch
 import torch.distributed as dist
@@ -7,6 +10,15 @@ from vllm.lora.lora_model import LoRAModel
 from vllm.lora.peft_helper import PEFTHelper
 from vllm.lora.request import LoRARequest
 from vllm.model_executor.model_loader import get_model_loader
+
+try:
+    from vllm.config import set_current_vllm_config
+except ImportError:
+    # vLLM < 0.19 does not require an explicit config context for weight loading.
+    @contextmanager
+    def set_current_vllm_config(*_args, **_kwargs):
+        yield
+
 
 from areal.engine.core.distributed import init_custom_process_group
 from areal.infra.platforms import current_platform
@@ -31,9 +43,10 @@ class VLLMWorkerExtension:
             self.model_runner.model_config.model = model_path
             model_loader = get_model_loader(self.model_runner.vllm_config.load_config)
             logger.info("Reloading weights inplace...")
-            model_loader.load_weights(
-                self.model_runner.model, model_config=self.model_runner.model_config
-            )
+            with set_current_vllm_config(self.model_runner.vllm_config):
+                model_loader.load_weights(
+                    self.model_runner.model, model_config=self.model_runner.model_config
+                )
             self.sync()
 
             return True, "Success"
@@ -63,7 +76,8 @@ class VLLMWorkerExtension:
                 base_model_name=base_model_name,
             )
             logger.info(f"Reloading lora weights with request {lora_request}")
-            self.model_runner.add_lora(lora_request)
+            with set_current_vllm_config(self.model_runner.vllm_config):
+                self.model_runner.add_lora(lora_request)
 
             self.sync()
             return True, "Success"
@@ -141,7 +155,8 @@ class VLLMWorkerExtension:
                     group=group,
                     async_op=False,
                 )
-                self.model_runner.model.load_weights(weights=[(name, tensor)])
+                with set_current_vllm_config(self.model_runner.vllm_config):
+                    self.model_runner.model.load_weights(weights=[(name, tensor)])
             self.sync()
             return True, "Success"
         except Exception as e:
@@ -207,7 +222,7 @@ class VLLMWorkerExtension:
                     async_op=False,
                 )
 
-                received_weights[name] = tensor
+                received_weights[name] = tensor.cpu()
 
             logger.info(f"Received {len(received_weights)} LoRA parameters via XCCL")
 
@@ -257,7 +272,7 @@ class VLLMWorkerExtension:
                 lora_model_id=self.areal_lora_int_id,
                 tensors=merged_weights,
                 peft_helper=peft_helper,
-                device=self.model_runner.device,
+                device="cpu",
                 dtype=self.model_runner.lora_manager.lora_config.lora_dtype,
                 model_vocab_size=model_vocab_size,
                 weights_mapper=getattr(
@@ -267,10 +282,13 @@ class VLLMWorkerExtension:
 
             self.model_runner.lora_manager.remove_adapter(lora_int_id)
 
-            self.model_runner.lora_manager._adapter_manager._add_adapter(new_lora_model)
-            self.model_runner.lora_manager._adapter_manager.activate_adapter(
-                new_lora_model.id
-            )
+            with set_current_vllm_config(self.model_runner.vllm_config):
+                self.model_runner.lora_manager._adapter_manager._add_adapter(
+                    new_lora_model
+                )
+                self.model_runner.lora_manager._adapter_manager.activate_adapter(
+                    new_lora_model.id
+                )
             logger.info(
                 f"Updated New LoRA model with {len(new_lora_model.loras)} LoRA modules "
                 f"from {len(merged_weights)} tensors across {len(self.weight_update_groups)} groups"

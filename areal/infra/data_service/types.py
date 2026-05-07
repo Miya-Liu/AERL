@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 # pyright: reportMissingImports=false
@@ -12,7 +14,6 @@ class WorkerLoadDatasetRequest(BaseModel):
     dataset_type: str
     split: str = "train"
     tokenizer_or_processor_path: str = ""
-    seed: int = 42
     max_length: int | None = None
     shuffle: bool = True
     drop_last: bool = True
