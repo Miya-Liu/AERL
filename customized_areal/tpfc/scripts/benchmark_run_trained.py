@@ -20,7 +20,7 @@ def main():
                     "metadata_file": "metadata.jsonl",
                     "whitelist": [],
                 },
-                "execution": {"max_concurrent": 10, "max_tasks": 166, "pass_at_k": 1},
+                "execution": {"max_concurrent": 5, "max_tasks": 166, "pass_at_k": 1},
             },
             "llm": {
                 "provider": "openai",
@@ -47,7 +47,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "trained_0427_new",
+        "trained_0507_",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

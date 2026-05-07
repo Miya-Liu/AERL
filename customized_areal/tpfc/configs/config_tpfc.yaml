@@ -2,23 +2,26 @@ experiment_name: tpfc-grpo
 trial_name: trial0
 
 seed: 1
-enable_offload: false
+enable_offload: true
+
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
 # TPFC Agent workflow
-workflow: customized_areal.tpfc_agent.TPFCAgent
+workflow: customized_areal.tpfc.tpfc_agent.TPFCAgent
 eval_workflow: ${workflow}
 
 cluster:
   n_nodes: 1
-  n_gpus_per_node: 2
+  n_gpus_per_node: 3
   fileroot: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/experiments
   name_resolve:
     type: nfs
     nfs_record_root: /dfs/share-groups/letrain/zhoujie/AReaL-main/tmp/areal/name_resolve
 
-allocation_mode: sglang:d1+fsdp:d1
+# 3 GPUs: 1 for inference (sglang DP), 2 for training (fsdp DP)
+# train_dataset.batch_size must be divisible by fsdp DP size (2)
+allocation_mode: sglang:d1+fsdp:d2
 
 scheduler:
   type: local
@@ -29,10 +32,10 @@ rollout:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   tokenizer_path: ${tokenizer_path}
-  max_concurrent_rollouts: 8
+  max_concurrent_rollouts: 40
   queue_size: null
   consumer_batch_size: ${train_dataset.batch_size}
-  max_head_offpolicyness: 2
+  max_head_offpolicyness: 20
   enable_rollout_tracing: false
   scheduling_spec: ${actor.scheduling_spec}
   dump_to_file: true
@@ -44,29 +47,34 @@ rollout:
     reasoning_parser: qwen3
     export_style: individual
     turn_discount: 1.0
+    engine_max_tokens: 15000
 
 gconfig:
-  n_samples: 8
+  n_samples: 4
   min_new_tokens: 0
   max_new_tokens: 1024
-  max_tokens: 2048
+  max_tokens: 15000
   greedy: false
   temperature: 1.0
 
 actor:
-  backend: fsdp:d1
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  attn_impl: eager
+  attn_impl: flash_attention_2
+  fsdp:
+    offload_params: true
   # path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
   path: /dfs/share-groups/letrain/ckpt/Qwen3-VL-8B-Instruct
   # path: /dfs/share-groups/letrain/ckpt/Qwen3.5-9B
   init_from_scratch: false
   disable_dropout: true
   gradient_checkpointing: true
+  enable_tree_training: true
+  pad_to_maximum: true
   dtype: bfloat16
   mb_spec:
-    max_tokens_per_mb: 4096
+    max_tokens_per_mb: 40960
   optimizer:
     type: adam
     lr: 1.70e-5
@@ -82,8 +90,8 @@ actor:
   reward_scaling: 10.0
   reward_bias: -0.5
   kl_ctl: 0.0
-  ppo_n_minibatches: 1
-  recompute_logprob: true
+  ppo_n_minibatches: 4
+  recompute_logprob: false
   use_decoupled_loss: true
   behave_imp_weight_cap: 5.0
   reward_norm: null
@@ -101,17 +109,20 @@ actor:
         NCCL_DEBUG: "WARN"
         NCCL_IB_DISABLE: "1"
         NCCL_SOCKET_IFNAME: "eth0"
+        PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
 
 ref:
-  backend: ${actor.backend}
+  backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${actor.path}
   init_from_scratch: false
   disable_dropout: true
+  enable_tree_training: true
+  pad_to_maximum: true
   dtype: ${actor.dtype}
   mb_spec:
-    max_tokens_per_mb: 4096
+    max_tokens_per_mb: 81920
   optimizer: null
   scheduling_strategy:
     type: colocation
@@ -126,8 +137,8 @@ sglang:
   dtype: ${actor.dtype}
   max_running_requests: null
   context_length: 40960
-  mem_fraction_static: 0.7
-  # enable_multimodal: true
+  mem_fraction_static: 0.85
+  enable_multimodal: true
 
 vllm:
   model: ${actor.path}
@@ -141,21 +152,21 @@ vllm:
 # TPFC dataset configuration - uses generated_training_final.parquet
 # NOTE: All samples have ~1034-1366 tokens due to long system prompts
 train_dataset:
-  batch_size: 8
-  shuffle: true
+  batch_size: 2
+  shuffle: false
   pin_memory: true
-  num_workers: 4
+  num_workers: 2
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
-  max_length: 2048
+  max_length: 15000
 
 valid_dataset:
   batch_size: 2
   pin_memory: true
-  num_workers: 4
+  num_workers: 2
   path: customized_areal/tpfc/data/generated_training_final_update.parquet
   type: rl
-  max_length: 2048
+  max_length: 15000
 
 # Utilities
 saver:
@@ -179,7 +190,7 @@ evaluator:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  freq_epochs: 1
+  freq_epochs: null
   freq_steps: null
   freq_secs: null
 
@@ -189,11 +200,15 @@ stats_logger:
   fileroot: ${cluster.fileroot}
   wandb:
     mode: disabled
+  swanlab:
+    project: tpfc-grpo
+    mode: cloud
+    api_key: WVB9KhdtDjWVAozYQgHu5
 
 perf_tracer:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  enabled: false
+  enabled: true
   session_tracer:
-    enabled: false
+    enabled: true

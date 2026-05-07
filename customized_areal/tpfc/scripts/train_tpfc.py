@@ -5,8 +5,7 @@ This script demonstrates how to train the TPFC Agent using AReaL's
 PPO/GRPO trainer with the OpenAI proxy workflow.
 
 Usage:
-uv run customized_areal/tpfc/scripts/train_tpfc.py \
-    --config customized_areal/tpfc/configs/config_tpfc.yaml
+uv run customized_areal/tpfc/scripts/train_tpfc.py  --config customized_areal/tpfc/configs/config_tpfc.yaml
 """
 
 import pathlib

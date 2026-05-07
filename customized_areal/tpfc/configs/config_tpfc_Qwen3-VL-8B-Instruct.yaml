@@ -7,7 +7,7 @@ total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
 # TPFC Agent workflow
-workflow: customized_areal.tpfc_agent.TPFCAgent
+workflow: customized_areal.tpfc.tpfc_agent.TPFCAgent
 eval_workflow: ${workflow}
 
 agent:

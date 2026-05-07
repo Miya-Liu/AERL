@@ -78,7 +78,7 @@ Each training step begins with rollout generation. Because
      etc.)
 
 1. **Merge cached and new trajectories**: Combines both into a single list, preserving
-   per-trajectory metadata (`_mcts_query_id`, `_mcts_seq_id`).
+   per-trajectory metadata (`query_id`, `_mcts_seq_id`).
 
 ______________________________________________________________________
 
@@ -358,7 +358,7 @@ count = store.get_untrained_count("abc123")  # → 2
 # Load up to 2 trajectories from cache (no inference needed)
 cached = store.load_trajectories("abc123", n_samples=2)
 # Returns list of dicts with keys: input_ids, logprobs, loss_mask,
-# attention_mask, rewards, versions, _mcts_query_id, _mcts_seq_id
+# attention_mask, rewards, versions, query_id, _mcts_seq_id
 ```
 
 After training on these trajectories, they are marked as trained:

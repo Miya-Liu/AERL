@@ -143,7 +143,7 @@ class TPFCAgent:
 
         The ``query_id`` from ``data`` is logged and preserved in the data
         dict so that ``QueryIDProxyWorkflow`` can inject it into the
-        trajectory as ``_mcts_query_id`` for tree search.
+        trajectory as ``query_id`` for tree search.
 
         Args:
             data: Input data for the agent. Expected keys:
