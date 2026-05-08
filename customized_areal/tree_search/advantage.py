@@ -1,8 +1,6 @@
 # customized_areal/tree_search/advantage.py
 from __future__ import annotations
 
-import torch
-
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
 
 GRPO_NORM_EPS = 1e-8
@@ -12,7 +10,7 @@ class TreeAdvantageComputer:
     """Replace GAE advantages with tree Q-values from MCTS backup.
 
     Reads query_id and node_id from Node objects. Sets advantages
-    and returns on the Node in-place via object.__setattr__.
+    and returns on the Node in-place.
 
     Supports per-query GRPO normalization: Q-values are normalized within
     each query group (all episodes for the same query), producing
@@ -23,64 +21,47 @@ class TreeAdvantageComputer:
         self.tree_store = tree_store
         self.grpo_eps = grpo_eps
 
-    def _compute_single(self, seq_id: int, seq_len: int, query_id: str) -> torch.Tensor:
-        """Compute tree Q-value advantages for a single sample."""
-        normalized_q = self.tree_store._normalized_advantages.get(seq_id)
-        if normalized_q is None:
-            normalized_q = self.tree_store._q_values.get(seq_id, 0.0)
-
-        prompt_mask = self.tree_store.get_prompt_mask(query_id, seq_id)
-        mask = torch.zeros(seq_len, dtype=torch.bool)
-        common_len = min(seq_len, prompt_mask.shape[0])
-        mask[:common_len] = prompt_mask[:common_len]
-
-        return mask.float() * normalized_q
-
     @staticmethod
     def _get_query_id(traj: Node) -> str | None:
         """Extract query_id from Node."""
-        return getattr(traj, "query_id", None)
-
-    @staticmethod
-    def _get_seq_len(traj: Node) -> int:
-        """Get sequence length from Node."""
-        return len(traj.input_ids)
+        return traj.query_id or None
 
     def compute(self, trajectories: list[Node]) -> None:
         """Replace GAE advantages with tree Q-values. Mutates Nodes in-place.
 
-        Sets node.advantages/node.returns via object.__setattr__.
+        Sets node.advantages (normalized Q-values) and node.returns
+        (outcome_reward broadcast on response positions).
 
         After inserting all trajectories, performs per-query GRPO normalization
         of Q-values so that episodes within the same query group have
         zero-mean unit-variance advantages.
         """
-        # Collect unique (query_id, seq_id) pairs for GRPO normalization.
-        query_seq_sets: dict[str, dict[int, None]] = {}
+        # Collect unique (query_id, node_id) pairs for GRPO normalization.
+        query_node_sets: dict[str, set[int]] = {}
 
         for traj in trajectories:
             query_id = self._get_query_id(traj)
             if query_id is None:
                 continue
-            qset = query_seq_sets.setdefault(query_id, {})
+            nset = query_node_sets.setdefault(query_id, set())
 
-            seq_id = getattr(traj, "node_id", None)
-            if seq_id is not None:
-                qset[seq_id] = None
+            node_id = getattr(traj, "node_id", None)
+            if node_id is not None:
+                nset.add(node_id)
 
-        # Per-query GRPO normalization (deduplicated seq_ids)
-        for query_id, seq_id_set in query_seq_sets.items():
-            seq_ids = list(seq_id_set)
-            q_values = [self.tree_store._rewards.get(sid, 0.0) for sid in seq_ids]
+        # Per-query GRPO normalization (deduplicated node_ids)
+        for query_id, node_id_set in query_node_sets.items():
+            node_ids = list(node_id_set)
+            q_values = [self.tree_store._rewards.get(nid, 0.0) for nid in node_ids]
             if len(q_values) < 2:
-                if seq_ids:
-                    self.tree_store._normalized_advantages[seq_ids[0]] = q_values[0]
+                if node_ids:
+                    self.tree_store._normalized_advantages[node_ids[0]] = q_values[0]
                 continue
             mean_q = sum(q_values) / len(q_values)
-            var_q = sum((q - mean_q) ** 2 for q in q_values) / len(q_values)
+            var_q = sum((q - mean_q) ** 2 for q in q_values) / max(len(q_values) - 1, 1)
             std_q = var_q**0.5
-            for sid, q in zip(seq_ids, q_values):
-                self.tree_store._normalized_advantages[sid] = (q - mean_q) / (
+            for nid, q in zip(node_ids, q_values):
+                self.tree_store._normalized_advantages[nid] = (q - mean_q) / (
                     std_q + self.grpo_eps
                 )
 
@@ -90,10 +71,13 @@ class TreeAdvantageComputer:
             if query_id is None:
                 continue
 
-            seq_id = getattr(traj, "node_id", None)
-            if seq_id is None:
+            node_id = getattr(traj, "node_id", None)
+            if node_id is None:
                 continue
-            seq_len = len(traj.input_ids)
-            advantages = self._compute_single(seq_id, seq_len, query_id)
-            object.__setattr__(traj, "advantages", advantages)
-            object.__setattr__(traj, "returns", advantages.clone())
+            mask = self.tree_store.get_prompt_mask(query_id, node_id)
+            advantages = mask.float() * self.tree_store._normalized_advantages.get(
+                node_id,
+                self.tree_store._q_values.get(node_id, 0.0),
+            )
+            traj.advantages = advantages
+            traj.returns = mask.float() * traj.outcome_reward

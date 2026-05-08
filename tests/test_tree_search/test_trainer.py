@@ -1,57 +1,87 @@
 # tests/test_tree_search/test_trainer.py
 
+from unittest.mock import MagicMock
+
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    LossMode,
     TreeBackupConfig,
     TreeBackupMode,
 )
-from customized_areal.tree_search.trainer import (
-    patch_ppo_actor_for_tree_backup,
-    unpatch_ppo_actor,
-)
+from customized_areal.tree_search.patches import TreeSearchPatches
 
 from areal.trainer.ppo.actor import PPOActor
 
 
-class TestPatchOuterMethod:
+def _make_mock_engine():
+    engine = MagicMock()
+    engine._wrap_openai_agent = MagicMock()
+    engine._resolve_workflow = MagicMock()
+    engine.workflow_executor = MagicMock()
+    engine.config = MagicMock()
+    engine.config.agent = MagicMock(
+        mode="mode",
+        admin_api_key="key",
+        turn_discount=1.0,
+        export_style="concat",
+        subproc_max_workers=1,
+    )
+    return engine
+
+
+class TestPatchApplyRestore:
     def setup_method(self):
-        unpatch_ppo_actor()
+        # Ensure no leftover sentinel from prior tests
+        if hasattr(PPOActor, "_original_compute_advantages"):
+            del PPOActor._original_compute_advantages
 
     def teardown_method(self):
-        unpatch_ppo_actor()
+        if hasattr(PPOActor, "_original_compute_advantages"):
+            del PPOActor._original_compute_advantages
 
-    def test_patch_replaces_compute_advantages(self):
+    def test_apply_replaces_compute_advantages(self):
         original = PPOActor.compute_advantages
-        patch_ppo_actor_for_tree_backup(advantage_mode=AdvantageMode.TREE)
+        patches = TreeSearchPatches(
+            _make_mock_engine(), AdvantageMode.TREE, LossMode.GRPO, 4
+        )
+        patches.apply()
         assert PPOActor.compute_advantages is not original
         assert hasattr(PPOActor, "_original_compute_advantages")
+        patches.restore()
 
-    def test_unpatch_restores_original(self):
+    def test_restore_recovers_original(self):
         original = PPOActor.compute_advantages
-        patch_ppo_actor_for_tree_backup(advantage_mode=AdvantageMode.TREE)
-        unpatch_ppo_actor()
+        patches = TreeSearchPatches(
+            _make_mock_engine(), AdvantageMode.TREE, LossMode.GRPO, 4
+        )
+        patches.apply()
+        patches.restore()
         assert PPOActor.compute_advantages is original
         assert not hasattr(PPOActor, "_original_compute_advantages")
 
-    def test_double_patch_replaces_previous(self):
+    def test_apply_twice_is_noop(self):
         original = PPOActor.compute_advantages
-        patch_ppo_actor_for_tree_backup(advantage_mode=AdvantageMode.TREE)
+        patches = TreeSearchPatches(
+            _make_mock_engine(), AdvantageMode.TREE, LossMode.GRPO, 4
+        )
+        patches.apply()
         first_patched = PPOActor.compute_advantages
-        patch_ppo_actor_for_tree_backup(advantage_mode=AdvantageMode.GAE)
-        assert PPOActor._original_compute_advantages is original
-        unpatch_ppo_actor()
+        patches.apply()  # second call is a no-op
+        assert PPOActor.compute_advantages is first_patched
+        patches.restore()
         assert PPOActor.compute_advantages is original
 
 
-class TestUnpatchSafety:
+class TestRestoreSafety:
     def setup_method(self):
-        unpatch_ppo_actor()
+        if hasattr(PPOActor, "_original_compute_advantages"):
+            del PPOActor._original_compute_advantages
 
-    def teardown_method(self):
-        unpatch_ppo_actor()
-
-    def test_unpatch_without_patch_is_safe(self):
-        unpatch_ppo_actor()
+    def test_restore_without_apply_is_safe(self):
+        patches = TreeSearchPatches(
+            _make_mock_engine(), AdvantageMode.TREE, LossMode.GRPO, 4
+        )
+        patches.restore()  # should not raise
 
 
 class TestTreeBackupConfigDefaults:

@@ -34,11 +34,11 @@ class TreeCheckpointManager:
 
         # Save metadata (indices, stats, tracking)
         metadata = {
-            "next_seq_id": tree_store._next_seq_id,
-            "seq_id_to_key": {
-                str(k): [v[0], v[1]] for k, v in tree_store._seq_id_to_key.items()
+            "next_node_id": tree_store._next_node_id,
+            "node_id_to_key": {
+                str(k): [v[0], v[1]] for k, v in tree_store._node_id_to_key.items()
             },
-            "query_seq_ids": {k: v for k, v in tree_store._query_seq_ids.items()},
+            "query_node_ids": {k: v for k, v in tree_store._query_node_ids.items()},
             "visit_counts": {str(k): v for k, v in tree_store._visit_counts.items()},
             "total_values": {str(k): v for k, v in tree_store._total_values.items()},
             "q_values": {str(k): v for k, v in tree_store._q_values.items()},
@@ -58,11 +58,18 @@ class TreeCheckpointManager:
         with open(os.path.join(self.save_dir, "metadata.json")) as f:
             metadata = json.load(f)
 
-        store._next_seq_id = metadata.get("next_seq_id", 0)
-        store._seq_id_to_key = {
-            int(k): (v[0], v[1]) for k, v in metadata.get("seq_id_to_key", {}).items()
+        store._next_node_id = metadata.get(
+            "next_node_id", metadata.get("next_seq_id", 0)
+        )
+        node_id_to_key_raw = metadata.get(
+            "node_id_to_key", metadata.get("seq_id_to_key", {})
+        )
+        store._node_id_to_key = {
+            int(k): (v[0], v[1]) for k, v in node_id_to_key_raw.items()
         }
-        store._query_seq_ids = metadata.get("query_seq_ids", {})
+        store._query_node_ids = metadata.get(
+            "query_node_ids", metadata.get("query_seq_ids", {})
+        )
         store._visit_counts = {
             int(k): v for k, v in metadata.get("visit_counts", {}).items()
         }
@@ -102,6 +109,7 @@ class TreeCheckpointManager:
             "node_id": node.node_id,
             "parent_node_id": node.parent_node_id,
             "episode_id": node.episode_id,
+            "query_id": node.query_id,
         }
         if node.topk_ids is not None:
             data["topk_ids"] = node.topk_ids
@@ -124,6 +132,7 @@ class TreeCheckpointManager:
             node_id=data.get("node_id", 0),
             parent_node_id=data.get("parent_node_id"),
             episode_id=data.get("episode_id", ""),
+            query_id=data.get("query_id", ""),
             topk_ids=data.get("topk_ids"),
             topk_logp=data.get("topk_logp"),
             distill_reward=data.get("distill_reward"),

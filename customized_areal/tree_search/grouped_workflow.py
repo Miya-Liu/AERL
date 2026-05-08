@@ -8,6 +8,7 @@ rollouts and collect all per-turn Nodes into a flat list[Node].
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any
 
 from customized_areal.tree_search.mcts_tree_store import Node
@@ -46,10 +47,14 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
             query_id = data.get("query_id") or ""
             all_nodes: list[Node] = []
             for group_idx, result in enumerate(valid_results):
-                episode_id = f"{query_id}_{group_idx}" if query_id else f"{group_idx}"
+                episode_id = (
+                    f"{query_id}_{group_idx}_{uuid.uuid4().hex[:8]}"
+                    if query_id
+                    else f"{group_idx}_{uuid.uuid4().hex[:8]}"
+                )
                 for node in result:
                     node.episode_id = episode_id
-                    object.__setattr__(node, "query_id", query_id)
+                    node.query_id = query_id
                 all_nodes.extend(result)
             return all_nodes if all_nodes else None
 
