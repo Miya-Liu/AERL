@@ -64,10 +64,10 @@ def tpfc_reward_fn(
     if not response_text:
         return 0.0
 
-    # Use default judge model if not specified
-    model_name = "z-ai/glm-5.1"
-    base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    # Use provided judge params, fall back to env vars
+    model_name = judge_model_name or os.environ.get("TPFC_JUDGE_MODEL", "z-ai/glm-5.1")
+    base_url = judge_base_url or os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    api_key = judge_api_key or os.environ.get("OPENROUTER_API_KEY", "")
 
     try:
         result = compute_reward(

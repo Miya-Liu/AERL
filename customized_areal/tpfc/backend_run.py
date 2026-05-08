@@ -44,11 +44,10 @@ except ImportError:
 
     logger = logging.getLogger("BackendRun")
 
-DEFAULT_REFRESH_TOKEN = "4uhiohwgwp7e"
-DEFAULT_AGENT_ID = "ef383a00-7c6b-4117-a2af-6d3ab9dbb8bb"
-# DEFAULT_AGENT_ID = None
+DEFAULT_REFRESH_TOKEN = os.environ.get("TPFC_REFRESH_TOKEN", "")
+DEFAULT_AGENT_ID = os.environ.get("TPFC_AGENT_ID", "")
 
-DEFAULT_USER_ID = "13183c90-ac94-403e-893e-c53552ad429d"
+DEFAULT_USER_ID = os.environ.get("TPFC_USER_ID", "")
 LE_AGENT_API_URL = os.environ.get("LE_AGENT_API_URL", "http://localhost:8000")
 TOKEN_REFRESH_MARGIN = 60  # seconds — refresh 1 min before expiry, not 5
 _REFRESH_WAIT_TIMEOUT = 30  # seconds to wait for another process to finish refreshing
@@ -293,7 +292,7 @@ def _prepare_form_data(
 
 async def _resolve_agent_id(client, user_id: str, agent_id: str | None) -> str:
     """Return the provided agent_id or create a default one if missing."""
-    if agent_id is not None:
+    if agent_id:
         return agent_id
 
     agent_service = AgentService(client)
@@ -601,6 +600,10 @@ async def run_backend(
     client = await db.client
 
     user_id = user_id or DEFAULT_USER_ID
+    if not user_id:
+        raise ValueError(
+            "user_id is required. Set TPFC_USER_ID env var or pass user_id argument."
+        )
     resolved_agent_id = await _resolve_agent_id(client, user_id, agent_id)
 
     task_id = await create_task(
