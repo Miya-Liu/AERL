@@ -1,29 +1,33 @@
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
+    Node,
     _find_turn_boundaries,
 )
 
 
+def _make_node(
+    input_ids: list[int],
+    loss_mask: list[int],
+    *,
+    reward: float = 1.0,
+    query_id: str = "q1",
+) -> Node:
+    return Node(
+        input_ids=input_ids,
+        loss_mask=loss_mask,
+        logprobs=[0.0] * len(input_ids),
+        versions=[-1] * len(input_ids),
+        outcome_reward=reward,
+        query_id=query_id,
+    )
+
+
 def _make_store_with_data() -> MCTSTreeStore:
     """Create a store with sample data for checkpoint tests."""
-    import torch
-
     store = MCTSTreeStore()
-    t1 = {
-        "input_ids": torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.int32),
-        "loss_mask": torch.tensor([[0, 0, 1, 1, 1]], dtype=torch.int32),
-        "rewards": torch.tensor([2.0], dtype=torch.float32),
-        "attention_mask": torch.ones(1, 5, dtype=torch.bool),
-        "query_id": "q1",
-    }
-    t2 = {
-        "input_ids": torch.tensor([[6, 7, 8]], dtype=torch.int32),
-        "loss_mask": torch.tensor([[0, 0, 1]], dtype=torch.int32),
-        "rewards": torch.tensor([0.5], dtype=torch.float32),
-        "attention_mask": torch.ones(1, 3, dtype=torch.bool),
-        "query_id": "q2",
-    }
+    t1 = _make_node([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
+    t2 = _make_node([6, 7, 8], [0, 0, 1], reward=0.5, query_id="q2")
     store.insert_batch([t1, t2])
     return store
 
@@ -53,23 +57,15 @@ class TestTreeCheckpointManager:
 
         assert os.path.isdir(os.path.join(save_dir, "mcts_trees"))
 
-    def test_load_preserves_seq_id_counter(self, tmp_path):
+    def test_load_preserves_node_id_counter(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
         store = _make_store_with_data()
         manager.save(store)
 
         loaded = manager.load()
-        import torch
-
-        t3 = {
-            "input_ids": torch.tensor([[9, 10]], dtype=torch.int32),
-            "loss_mask": torch.tensor([[0, 1]], dtype=torch.int32),
-            "rewards": torch.tensor([1.0], dtype=torch.float32),
-            "attention_mask": torch.ones(1, 2, dtype=torch.bool),
-            "query_id": "q3",
-        }
+        t3 = _make_node([9, 10], [0, 1], reward=1.0, query_id="q3")
         loaded.insert_batch([t3])
-        assert t3["node_id"] == 2
+        assert t3.node_id == 3  # 2 existing + 1 new
 
     def test_load_preserves_trajectory_data(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
@@ -91,34 +87,28 @@ class TestTreeCheckpointManager:
         manager.save(store)
 
         loaded = manager.load()
-        seq_ids = loaded._query_seq_ids["q1"]
-        assert loaded._q_values[seq_ids[0]] == 2.0
-        seq_ids = loaded._query_seq_ids["q2"]
-        assert loaded._q_values[seq_ids[0]] == 0.5
+        node_ids = loaded._query_node_ids["q1"]
+        assert loaded._q_values[node_ids[0]] == 2.0
+        node_ids = loaded._query_node_ids["q2"]
+        assert loaded._q_values[node_ids[0]] == 0.5
 
     def test_load_preserves_trained_flags(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
         store = _make_store_with_data()
-        seq_ids = store._query_seq_ids["q1"]
-        store.set_trained("q1", seq_ids[0], True)
+        node_ids = store._query_node_ids["q1"]
+        store.set_trained(node_ids[0], True)
         manager.save(store)
 
         loaded = manager.load()
-        assert loaded.is_trained("q1", seq_ids[0]) is True
+        assert loaded.is_trained(node_ids[0]) is True
 
     def test_load_preserves_turn_boundaries(self, tmp_path):
-        import torch
-
         manager = TreeCheckpointManager(str(tmp_path))
         store = MCTSTreeStore()
-        traj = {
-            "input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=torch.int32),
-            "loss_mask": torch.tensor([[0, 0, 1, 1, 0, 0, 1, 1]], dtype=torch.int32),
-            "rewards": torch.tensor([0.75], dtype=torch.float32),
-            "attention_mask": torch.ones(1, 8, dtype=torch.bool),
-            "query_id": "q1",
-        }
-        store.insert_batch([traj])
+        node = _make_node(
+            [1, 2, 3, 4, 5, 6, 7, 8], [0, 0, 1, 1, 0, 0, 1, 1], reward=0.75, query_id="q1"
+        )
+        store.insert_batch([node])
         manager.save(store)
 
         loaded = manager.load()
@@ -127,41 +117,22 @@ class TestTreeCheckpointManager:
         assert starts == [2, 6]
         assert ends == [4, 8]
 
-    def test_save_and_load_new_fields(self, tmp_path):
+    def test_save_and_load_distill_fields(self, tmp_path):
         manager = TreeCheckpointManager(str(tmp_path))
         store = MCTSTreeStore()
-        # Insert list-based traj with new fields
-        traj = {
-            "input_ids": [1, 2, 3, 4, 5],
-            "loss_mask": [0, 0, 1, 1, 1],
-            "reward": 1.0,
-            "attention_mask": [1, 1, 1, 1, 1],
-            "logprobs": [-0.1, -0.2, -0.3, -0.4, -0.5],
-            "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
-            "topk_logp": [
-                [-0.1, -0.2],
-                [-0.3, -0.4],
-                [-0.5, -0.6],
-                [-0.7, -0.8],
-                [-0.9, -1.0],
-            ],
-            "distill_reward": [
-                [0.1, 0.2],
-                [0.3, 0.4],
-                [0.5, 0.6],
-                [0.7, 0.8],
-                [0.9, 1.0],
-            ],
-            "teacher_logp": [
-                [-1.1, -1.2],
-                [-1.3, -1.4],
-                [-1.5, -1.6],
-                [-1.7, -1.8],
-                [-1.9, -2.0],
-            ],
-            "query_id": "q1",
-        }
-        store.insert_batch([traj])
+        node = Node(
+            input_ids=[1, 2, 3, 4, 5],
+            loss_mask=[0, 0, 1, 1, 1],
+            logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
+            versions=[-1, -1, 1, 1, 1],
+            outcome_reward=1.0,
+            query_id="q1",
+            topk_ids=[[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
+            topk_logp=[[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]],
+            distill_reward=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]],
+            teacher_logp=[[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]],
+        )
+        store.insert_batch([node])
         manager.save(store)
 
         loaded = manager.load()
@@ -189,3 +160,27 @@ class TestTreeCheckpointManager:
             [-1.7, -1.8],
             [-1.9, -2.0],
         ]
+
+    def test_sanitize_query_id_special_chars(self, tmp_path):
+        """Query IDs with special chars (/, \\, :) should be safely saved and loaded."""
+        manager = TreeCheckpointManager(str(tmp_path))
+        store = MCTSTreeStore()
+        node = _make_node([1, 2, 3], [0, 0, 1], reward=1.0, query_id="path/with:special\\chars")
+        store.insert_batch([node])
+        manager.save(store)
+
+        loaded = manager.load()
+        assert "path/with:special\\chars" in loaded.trajectories
+        assert loaded.trajectories["path/with:special\\chars"][0].outcome_reward == 1.0
+
+    def test_atomic_save_no_partial_files(self, tmp_path):
+        """Verify no .tmp files remain after successful save."""
+        import os
+
+        manager = TreeCheckpointManager(str(tmp_path))
+        store = _make_store_with_data()
+        manager.save(store)
+
+        mcts_dir = os.path.join(str(tmp_path), "mcts_trees")
+        tmp_files = [f for f in os.listdir(mcts_dir) if f.endswith(".tmp")]
+        assert len(tmp_files) == 0

@@ -9,8 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
+
+
+def _sanitize_filename(query_id: str) -> str:
+    """Replace characters unsafe for filenames with underscores."""
+    return re.sub(r"[^\w\-.]", "_", query_id)
 
 
 class TreeCheckpointManager:
@@ -25,14 +31,21 @@ class TreeCheckpointManager:
     def save(self, tree_store: MCTSTreeStore) -> None:
         os.makedirs(self.save_dir, exist_ok=True)
 
-        # Save per-query trajectory records
+        # Save per-query trajectory records (atomic per file)
+        query_id_to_file: dict[str, str] = {}
         for query_id, records in tree_store.trajectories.items():
             data = {"records": [self._serialize_record(r) for r in records]}
-            filepath = os.path.join(self.save_dir, f"query_{query_id}.json")
-            with open(filepath, "w") as f:
+            sanitized = _sanitize_filename(query_id)
+            query_id_to_file[query_id] = sanitized
+            filepath = os.path.join(self.save_dir, f"query_{sanitized}.json")
+            tmp_path = filepath + ".tmp"
+            with open(tmp_path, "w") as f:
                 json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, filepath)
 
-        # Save metadata (indices, stats, tracking)
+        # Save metadata (atomic)
         metadata = {
             "next_node_id": tree_store._next_node_id,
             "node_id_to_key": {
@@ -48,9 +61,15 @@ class TreeCheckpointManager:
                 str(k): v for k, v in tree_store._normalized_advantages.items()
             },
             "turn_nodes": tree_store._turn_nodes,
+            "query_id_to_file": query_id_to_file,
         }
-        with open(os.path.join(self.save_dir, "metadata.json"), "w") as f:
+        meta_path = os.path.join(self.save_dir, "metadata.json")
+        tmp_meta = meta_path + ".tmp"
+        with open(tmp_meta, "w") as f:
             json.dump(metadata, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_meta, meta_path)
 
     def load(self) -> MCTSTreeStore:
         store = MCTSTreeStore()
@@ -84,11 +103,16 @@ class TreeCheckpointManager:
         }
         store._turn_nodes = metadata.get("turn_nodes", {})
 
+        # Build reverse mapping from sanitized filenames back to query_ids
+        query_id_to_file = metadata.get("query_id_to_file", {})
+        file_to_query = {v: k for k, v in query_id_to_file.items()}
+
         # Load per-query trajectory records
         for filename in os.listdir(self.save_dir):
             if not filename.startswith("query_") or not filename.endswith(".json"):
                 continue
-            query_id = filename[len("query_") : -len(".json")]
+            sanitized = filename[len("query_") : -len(".json")]
+            query_id = file_to_query.get(sanitized, sanitized)
             filepath = os.path.join(self.save_dir, filename)
             with open(filepath) as f:
                 data = json.load(f)
