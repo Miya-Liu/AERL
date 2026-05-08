@@ -445,5 +445,52 @@ class TestMCTSTreeStoreMCTSStats:
         t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
         t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.0, query_id="q1")
         store.insert_batch([t1, t2])
-        assert store._q_values[t1["node_id"]] == 1.0
-        assert store._q_values[t2["node_id"]] == 0.0
+        assert store._q_values[t1.node_id] == 1.0
+        assert store._q_values[t2.node_id] == 0.0
+
+
+class TestNodeToTensorDict:
+    def test_response_only_fields_sliced(self):
+        from customized_areal.tree_search.mcts_tree_store import (
+            Node,
+            _node_to_tensor_dict,
+        )
+
+        node = Node(
+            input_ids=[1, 2, 3, 4, 5],
+            loss_mask=[0, 0, 1, 1, 1],
+            logprobs=[0.0, 0.0, -0.3, -0.4, -0.5],
+            versions=[-1, -1, 1, 1, 1],
+            outcome_reward=1.0,
+            query_id="q1",
+            node_id=1,
+            topk_ids=[[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
+            topk_logp=[[-1.0, -2.0], [-3.0, -4.0], [-5.0, -6.0], [-7.0, -8.0], [-9.0, -10.0]],
+            distill_reward=[[0.1], [0.2], [0.3], [0.4], [0.5]],
+            teacher_logp=[[-0.1], [-0.2], [-0.3], [-0.4], [-0.5]],
+        )
+        result = _node_to_tensor_dict(node, "q1", 1)
+        # Response portion is positions 2:5 (loss_mask==1)
+        assert result["topk_ids"].shape == (1, 3, 2)  # [1, resp_len, topk]
+        assert result["topk_logp"].shape == (1, 3, 2)
+        assert result["distill_reward"].shape == (1, 3, 1)
+        assert result["teacher_logp"].shape == (1, 3, 1)
+
+    def test_logp_already_sliced(self):
+        """logp is already correctly sliced — verify it stays that way."""
+        from customized_areal.tree_search.mcts_tree_store import (
+            Node,
+            _node_to_tensor_dict,
+        )
+
+        node = Node(
+            input_ids=[1, 2, 3, 4, 5],
+            loss_mask=[0, 0, 1, 1, 1],
+            logprobs=[0.0, 0.0, -0.3, -0.4, -0.5],
+            versions=[-1, -1, 1, 1, 1],
+            outcome_reward=1.0,
+            query_id="q1",
+            node_id=1,
+        )
+        result = _node_to_tensor_dict(node, "q1", 1)
+        assert result["logp"].shape == (1, 3)

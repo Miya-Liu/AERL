@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
+from areal.utils import logging
 
 GRPO_NORM_EPS = 1e-8
+
+logger = logging.getLogger("TreeAdvantageComputer")
 
 
 class TreeAdvantageComputer:
@@ -52,17 +55,24 @@ class TreeAdvantageComputer:
         # Per-query GRPO normalization (deduplicated node_ids)
         for query_id, node_id_set in query_node_sets.items():
             node_ids = list(node_id_set)
-            q_values = [self.tree_store._rewards.get(nid, 0.0) for nid in node_ids]
+            q_values = [self.tree_store.get_reward(nid) for nid in node_ids]
             if len(q_values) < 2:
+                logger.warning(
+                    "Only %d sample(s) for query_id=%s — GRPO normalization "
+                    "produces zero advantages (model will ignore this trajectory). "
+                    "Consider increasing n_samples.",
+                    len(q_values),
+                    query_id,
+                )
                 for nid in node_ids:
-                    self.tree_store._normalized_advantages[nid] = 0.0
+                    self.tree_store.set_normalized_advantage(nid, 0.0)
                 continue
             mean_q = sum(q_values) / len(q_values)
             var_q = sum((q - mean_q) ** 2 for q in q_values) / max(len(q_values) - 1, 1)
             std_q = var_q**0.5
             for nid, q in zip(node_ids, q_values):
-                self.tree_store._normalized_advantages[nid] = (q - mean_q) / (
-                    std_q + self.grpo_eps
+                self.tree_store.set_normalized_advantage(
+                    nid, (q - mean_q) / (std_q + self.grpo_eps)
                 )
 
         # Compute per-trajectory advantages using normalized Q-values
@@ -75,9 +85,16 @@ class TreeAdvantageComputer:
             if node_id is None:
                 continue
             mask = self.tree_store.get_prompt_mask(query_id, node_id)
-            advantages = mask.float() * self.tree_store._normalized_advantages.get(
-                node_id,
-                self.tree_store._q_values.get(node_id, 0.0),
-            )
+            norm_adv = self.tree_store.get_normalized_advantage(node_id)
+            q_val = self.tree_store.get_q_value(node_id)
+            if norm_adv == 0.0 and q_val != 0.0:
+                logger.warning(
+                    "Normalized advantage missing for node_id=%d (query_id=%s), "
+                    "falling back to raw Q-value=%.4f",
+                    node_id,
+                    query_id,
+                    q_val,
+                )
+            advantages = mask.float() * (norm_adv if norm_adv != 0.0 else q_val)
             traj.advantages = advantages
             traj.returns = mask.float() * traj.outcome_reward
