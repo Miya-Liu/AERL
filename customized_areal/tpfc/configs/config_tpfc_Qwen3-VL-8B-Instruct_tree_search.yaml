@@ -51,7 +51,7 @@ rollout:
   enable_rollout_tracing: false
   scheduling_spec: ${actor.scheduling_spec}
   dump_to_file: true
-  openai:
+  agent:
     mode: inline
     # Qwen3.5-9B uses qwen25 tool call parser (same format as Qwen2.5)
     # and qwen3 reasoning parser for <think> tag detection
@@ -105,7 +105,11 @@ actor:
   ppo_n_minibatches: 4
   recompute_logprob: false
   use_decoupled_loss: true
-  behave_imp_weight_cap: 5.0
+  rejection_sampling:
+    level: token
+    action: mask
+    metric: ratio
+    upper: 5.0
   reward_norm: null
   adv_norm:
     mean_level: batch

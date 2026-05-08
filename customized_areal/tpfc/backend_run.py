@@ -508,7 +508,9 @@ async def _wait_for_agent_run(
                         .single()
                         .execute()
                     )
-                    status = agent_run.data["status"]
+                    run_data = getattr(agent_run, "data", None)
+                    if isinstance(run_data, dict) and "status" in run_data:
+                        status = run_data["status"]
                 else:
                     # No agent_run_id (queued status) — poll task for active run
                     task_row = (
@@ -518,9 +520,11 @@ async def _wait_for_agent_run(
                         .single()
                         .execute()
                     )
-                    task_status = task_row.data["status"]
-                    if task_status in {"completed", "failed", "stopped"}:
-                        status = task_status
+                    task_data = getattr(task_row, "data", None)
+                    if isinstance(task_data, dict) and "status" in task_data:
+                        task_status = task_data["status"]
+                        if task_status in {"completed", "failed", "stopped"}:
+                            status = task_status
             except Exception as exc:
                 if _time_left() <= 0:
                     break

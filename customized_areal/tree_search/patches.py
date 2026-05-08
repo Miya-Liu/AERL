@@ -108,15 +108,16 @@ class TreeSearchPatches:
         advantage_mode = self._advantage_mode
 
         def _patched(self_actor, data):
+            if advantage_mode == AdvantageMode.TREE:
+                saved_adv = [traj.get("advantages") for traj in data]
+                saved_ret = [traj.get("returns") for traj in data]
             result = original(self_actor, data)
             if advantage_mode == AdvantageMode.TREE:
                 restored = 0
-                for traj in result:
-                    tree_adv = traj.pop("_tree_advantages", None)
-                    tree_ret = traj.pop("_tree_returns", None)
-                    if tree_adv is not None:
-                        traj["advantages"] = tree_adv
-                        traj["returns"] = tree_ret
+                for i, traj in enumerate(result):
+                    if saved_adv[i] is not None:
+                        traj["advantages"] = saved_adv[i]
+                        traj["returns"] = saved_ret[i]
                         restored += 1
                 if restored < len(result):
                     logger.warning(

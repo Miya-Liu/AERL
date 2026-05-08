@@ -12,6 +12,8 @@ The dataset format matches openai/gsm8k RL format:
 from pathlib import Path
 from typing import Any
 
+import re
+
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -141,7 +143,7 @@ def get_tpfc_rl_dataset(
         query_id = extra_info.get("index") if isinstance(extra_info, dict) else None
 
         # Extract query text from the last user message after "<User Query>: ",
-        # stripping any leading "<context>...<context>" prefix
+        # stripping any leading "<context>...</context>" prefix
         query = ""
         for msg in reversed(messages):
             if msg.get("role") == "user":
@@ -150,10 +152,9 @@ def get_tpfc_rl_dataset(
                 idx = content.rfind(marker)
                 if idx != -1:
                     query = content[idx + len(marker) :]
-                    # Skip "<context>...<context>" prefix if present
-                    ctx_end = query.rfind("<context>")
-                    if ctx_end != -1:
-                        query = query[ctx_end + len("<context>") :]
+                    query = re.sub(
+                        r"^\s*<context>.*?</context>\s*", "", query, flags=re.DOTALL
+                    )
                 break
 
         result = {

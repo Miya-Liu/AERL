@@ -57,10 +57,9 @@ def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Node]) -> 
 class _CacheAwareBatchBuilder:
     """Splits prompts into cached/partially-cached/not-cached groups."""
 
-    def __init__(self, tree_store: MCTSTreeStore, n_samples: int, tokenizer: Any):
+    def __init__(self, tree_store: MCTSTreeStore, n_samples: int):
         self.tree_store = tree_store
         self.n_samples = n_samples
-        self.tokenizer = tokenizer
 
     def split_prompts(
         self, prompts: list[dict[str, Any]]
@@ -225,7 +224,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         self.tree_store.reset_trained_flags()
 
         self._batch_builder = _CacheAwareBatchBuilder(
-            self.tree_store, self.cache_config.n_samples, self.tokenizer
+            self.tree_store, self.cache_config.n_samples
         )
 
     def _save_recover_checkpoint(

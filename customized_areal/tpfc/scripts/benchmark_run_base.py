@@ -724,7 +724,7 @@ def main():
     cfg.tags = [
         f"{cfg.benchmark.name}",
         f"{cfg.llm.model_name}",
-        "base_0507_new",
+        "base_0508",
         # "compression_1w",
         f"level_{cfg.level}",
     ]

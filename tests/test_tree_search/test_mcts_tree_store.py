@@ -254,7 +254,7 @@ class TestMCTSTreeStoreInsertBatch:
             episode_id="q1_0",
             outcome_reward=1.0,
         )
-        object.__setattr__(node, "query_id", "q1")
+        node.query_id = "q1"
         store.insert_batch([node])
         assert hasattr(node, "node_id")
         assert len(store.trajectories) == 1

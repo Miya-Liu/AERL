@@ -54,8 +54,8 @@ class TreeAdvantageComputer:
             node_ids = list(node_id_set)
             q_values = [self.tree_store._rewards.get(nid, 0.0) for nid in node_ids]
             if len(q_values) < 2:
-                if node_ids:
-                    self.tree_store._normalized_advantages[node_ids[0]] = q_values[0]
+                for nid in node_ids:
+                    self.tree_store._normalized_advantages[nid] = 0.0
                 continue
             mean_q = sum(q_values) / len(q_values)
             var_q = sum((q - mean_q) ** 2 for q in q_values) / max(len(q_values) - 1, 1)
