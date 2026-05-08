@@ -26,7 +26,7 @@ from customized_areal.tree_search.config import (
     LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    TreeBackupMode,
+    CacheMode,
 )
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
@@ -164,7 +164,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         if (
             self.cache_config.enabled
-            and self.tree_backup_config.mode != TreeBackupMode.OFF
+            and self.tree_backup_config.mode != CacheMode.OFF
         ):
             self._init_tree_components()
             self._patches = TreeSearchPatches(
@@ -215,7 +215,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         )
 
         # Load existing tree checkpoint if available (CROSS_TRAINING mode)
-        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+        if self.tree_backup_config.mode == CacheMode.CROSS_TRAINING:
             if self.tree_checkpoint_manager.exists():
                 self.tree_store = self.tree_checkpoint_manager.load()
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
@@ -235,7 +235,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         if (
             self.cache_config.enabled
-            and self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING
+            and self.tree_backup_config.mode == CacheMode.CROSS_TRAINING
         ):
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.info("Saved MCTS tree checkpoint with rollout cache")
@@ -251,10 +251,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
     ):
         """Cache-aware replacement for prepare_batch.
 
-        Strategy: if *all* prompts in the batch have enough cached trajectories,
-        use cache only. If *any* prompt lacks sufficient cache, regenerate all
-        prompts via rollout_batch (all-or-nothing). This avoids mixing cached
-        and freshly-generated trajectories in a single batch.
+        Strategy: load cached trajectories for prompts that have them, and
+        generate only for prompts that lack sufficient cache. Both cached and
+        newly-generated trajectories are concatenated into a single batch.
 
         After assembling trajectories, this method also:
         1. Inserts them into the MCTS tree (where query_id / node_id
@@ -265,9 +264,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
         4. Saves tree checkpoint (CROSS_TRAINING mode)
 
         Returns:
-            List of trajectory dicts from rollout_batch (may be grouped with
-            shape [group_size, seq_len]) or cache (shape [1, seq_len]),
-            carrying ``query_id`` and ``node_id`` metadata.
+            List of trajectory dicts carrying ``query_id`` and ``node_id``
+            metadata.
+
+        Raises:
+            RuntimeError: If both cache and generation produce no trajectories.
         """
         from areal.utils.data import cycle_dataloader
 
@@ -281,74 +282,79 @@ class CacheAwarePPOTrainer(PPOTrainer):
         # Split into cached / needs-generation
         cached_items, need_gen_items = self._batch_builder.split_prompts(raw_batch)
 
-        # All prompts have enough cache -> use cache only
-        if not need_gen_items:
-            trajs = list(self._batch_builder.load_cached_trajectories(cached_items))
-            logger.info(f"Cache-aware rollout: {len(trajs)} cached (all from cache)")
-        else:
-            # Any prompt lacks cache -> regenerate all prompts via rollout_batch
+        # Load cached trajectories for prompts that have them
+        cached_nodes: list = []
+        if cached_items:
+            cached_nodes = list(
+                self._batch_builder.load_cached_trajectories(cached_items)
+            )
+
+        # Generate trajectories for prompts that need them
+        generated_nodes: list = []
+        if need_gen_items:
             n_samples = self.cache_config.n_samples
-            all_prompts = [item["prompt"] for item in cached_items] + [
-                item["prompt"] for item in need_gen_items
-            ]
+            gen_prompts = [item["prompt"] for item in need_gen_items]
 
             logger.info(
-                f"Generating trajectories for {len(all_prompts)} query "
+                f"Generating trajectories for {len(gen_prompts)} queries "
                 f"(group_size={n_samples})"
             )
             new_trajs = self.actor.rollout_batch(
-                all_prompts,
+                gen_prompts,
                 workflow=workflow,
                 workflow_kwargs=workflow_kwargs,
                 group_size=group_size,
             )
+            if new_trajs:
+                generated_nodes = new_trajs
 
-            # TreeSearchWorkflowExecutor already returns flat list of Node objects
-            trajs = new_trajs if new_trajs else []
+        nodes = cached_nodes + generated_nodes
+        logger.info(
+            f"Cache-aware rollout: {len(cached_nodes)} cached + "
+            f"{len(generated_nodes)} generated = {len(nodes)} total"
+        )
 
-            logger.info(f"Cache-aware rollout: 0 cached, {len(trajs)} newly generated")
-
-        if not trajs:
-            logger.warning(
-                "No trajectories available for this step; returning empty batch"
+        if not nodes:
+            raise RuntimeError(
+                "No trajectories available for this training step "
+                "(both cache and generation returned empty). "
+                "Check rollout engine and dataset."
             )
-            return []
 
         # --- Tree operations (while query_id / node_id are available) ---
 
         # Insert trajectories into the MCTS tree
-        self.tree_store.insert_batch(trajs)
-        logger.debug(f"Inserted {len(trajs)} trajectories into tree")
+        self.tree_store.insert_batch(nodes)
+        logger.debug(f"Inserted {len(nodes)} trajectories into tree")
 
         # Compute tree advantages (stashed on Node fields, flow through to tensors)
         if self.tree_backup_config.advantage_mode == AdvantageMode.TREE:
-            self.tree_advantage_computer.compute(trajs)
+            self.tree_advantage_computer.compute(nodes)
             logger.debug(
-                f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
+                f"Computed tree advantages for {len(nodes)} trajectories (mode=TREE)"
             )
 
         # Mark trajectories as trained so they won't be loaded from cache again
-        _mark_batch_trained(self.tree_store, trajs)
-        logger.debug(f"Marked {len(trajs)} trajectories as trained")
+        _mark_batch_trained(self.tree_store, nodes)
+        logger.debug(f"Marked {len(nodes)} trajectories as trained")
 
         # Save tree checkpoint (CROSS_TRAINING mode)
-        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+        if self.tree_backup_config.mode == CacheMode.CROSS_TRAINING:
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.debug("Saved MCTS tree checkpoint after tree operations")
 
         # --- End tree operations ---
 
         # Convert Nodes to tensor dicts for the downstream PPO pipeline.
-        converted: list[dict[str, Any]] = []
-        for t in trajs:
-            query_id = t.query_id
-            node_id = t.node_id
-            converted.append(_node_to_tensor_dict(t, query_id, node_id))
-        trajs = converted
+        converted_trajs: list[dict[str, Any]] = []
+        for node in nodes:
+            query_id = node.query_id
+            node_id = node.node_id
+            converted_trajs.append(_node_to_tensor_dict(node, query_id, node_id))
 
         # Inject distillation loss weights into trajectory dicts
         if self.tree_backup_config.loss_mode != LossMode.GRPO:
-            for traj in trajs:
+            for traj in converted_trajs:
                 if self.tree_backup_config.loss_mode == LossMode.DISTILL:
                     traj["rl_loss_weight"] = 0.0
                 else:
@@ -357,7 +363,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                     self.tree_backup_config.distill_loss_weight
                 )
 
-        return trajs
+        return converted_trajs
 
     def train(
         self,
