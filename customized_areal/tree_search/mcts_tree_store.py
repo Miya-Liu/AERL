@@ -18,16 +18,6 @@ from typing import Any
 
 import torch
 
-from areal.infra.rpc.rtensor import RTensor
-
-
-def _materialize_rtensors(traj: dict[str, Any]) -> dict[str, Any]:
-    """Convert any RTensor values in a trajectory dict to local torch.Tensors."""
-    for key, val in traj.items():
-        if isinstance(val, RTensor):
-            traj[key] = val.to_local()
-    return traj
-
 
 @dataclass
 class Node:
@@ -84,12 +74,6 @@ def _find_turn_boundaries(
     if in_response:
         ends.append(len(loss_mask))
     return starts, ends
-
-
-def _is_list_dict(traj: dict[str, Any]) -> bool:
-    """Check if a trajectory dict uses Python lists instead of tensors."""
-    input_ids = traj.get("input_ids")
-    return isinstance(input_ids, list)
 
 
 def _response_span(loss_mask: list[int]) -> tuple[int, int]:
@@ -197,68 +181,6 @@ class MCTSTreeStore:
         self._total_values[seq_id] = self._total_values.get(seq_id, 0.0) + reward
         self._q_values[seq_id] = self._total_values[seq_id] / self._visit_counts[seq_id]
 
-    def _make_record(self, traj: dict[str, Any], idx: int, seq_len: int) -> Node:
-        """Extract an unpadded sample from traj[idx] and derive turn boundaries."""
-        input_ids = traj["input_ids"][idx, :seq_len].tolist()
-        loss_mask = traj["loss_mask"][idx, :seq_len].tolist()
-        logprobs = (
-            traj["logprobs"][idx, :seq_len].tolist()
-            if "logprobs" in traj
-            else [0.0] * seq_len
-        )
-        versions = (
-            traj["versions"][idx, :seq_len].tolist()
-            if "versions" in traj
-            else [0] * seq_len
-        )
-        rewards = traj["rewards"]
-        outcome_reward = rewards[idx].item() if rewards.dim() >= 1 else rewards.item()
-
-        return Node(
-            input_ids=input_ids,
-            loss_mask=loss_mask,
-            logprobs=logprobs,
-            versions=versions,
-            outcome_reward=outcome_reward,
-            node_id=0,
-            episode_id="",
-        )
-
-    def _insert_list_dict(self, traj: dict[str, Any]) -> None:
-        """Insert a list-based trajectory dict into the tree store."""
-        input_ids = traj["input_ids"]
-        loss_mask = traj["loss_mask"]
-        outcome_reward = traj.get("outcome_reward", traj.get("reward", 0.0))
-        logprobs = traj.get("logprobs", [0.0] * len(input_ids))
-        versions = traj.get("versions", [0] * len(input_ids))
-
-        # New fields
-        topk_ids = traj.get("topk_ids")
-        topk_logp = traj.get("topk_logp")
-        distill_reward = traj.get("distill_reward")
-        teacher_logp = traj.get("teacher_logp")
-
-        query_id = traj.get("query_id", "")
-
-        node = Node(
-            input_ids=input_ids,
-            loss_mask=loss_mask,
-            logprobs=logprobs,
-            versions=versions,
-            outcome_reward=outcome_reward,
-            node_id=traj.get("node_id", 0),
-            parent_node_id=traj.get("parent_node_id"),
-            episode_id=traj.get("episode_id", ""),
-            topk_ids=topk_ids,
-            topk_logp=topk_logp,
-            distill_reward=distill_reward,
-            teacher_logp=teacher_logp,
-        )
-
-        seq_id = self._insert_single(query_id, node)
-        traj["node_id"] = seq_id
-        traj["query_id"] = query_id
-
     def _insert_single(self, query_id: str, node: Node) -> int:
         """Insert a single Node and assign a seq_id."""
         seq_id = self._next_seq_id
@@ -279,153 +201,15 @@ class MCTSTreeStore:
 
         return seq_id
 
-    def insert_batch(self, trajectories: list[dict[str, Any]] | list[Node]) -> None:
-        """Insert trajectories into the store.
+    def insert_batch(self, trajectories: list[Node]) -> None:
+        """Insert Node trajectories into the store.
 
-        Supports five input formats:
-
-        1. **Node objects**: from the new workflow pipeline. Each Node is
-           inserted directly. Nodes with node_id (already from cache)
-           are skipped.
-
-        2. **Per-turn dicts** (from _split_to_turn_dicts): each dict has
-           shape [1, seq_len] with _episode_idx, _turn_idx_in_episode,
-           _parent_turn_id, _turn_reward, _outcome_reward metadata.
-           Turns are grouped by (query_id, _episode_idx) into a
-           single episode Node.
-
-        3. **Individual trajectory dicts** (batch_size=1): single trajectory
-           without episode metadata. Same as legacy behavior.
-
-        4. **Grouped trajectory dicts** (batch_size>1): multiple trajectories
-           stacked together. Each row gets its own seq_id.
-
-        5. **List-based dicts**: single trajectory with Python lists instead
-           of tensors for all fields.
-
-        Trajectories that already carry node_id or node_ids
-        are skipped (loaded from cache).
+        Each Node is inserted directly. Nodes that already have a
+        node_id assigned (loaded from cache) are skipped.
         """
-        # Materialize any RTensor values to local tensors (from RPC transfer)
-        trajectories = [
-            _materialize_rtensors(t) if isinstance(t, dict) else t for t in trajectories
-        ]
-
-        # Handle Node objects (new workflow pipeline)
-        nodes: list[Node] = []
-        dict_trajs: list[dict[str, Any]] = []
-        for traj in trajectories:
-            if isinstance(traj, Node):
-                nodes.append(traj)
-            else:
-                dict_trajs.append(traj)
-
-        if nodes:
-            for node in nodes:
-                query_id = getattr(node, "query_id", None) or ""
-                self._insert_single(query_id, node)
-
-        # Separate per-turn dicts, list dicts, and legacy-style dicts
-        per_turn_dicts: list[dict[str, Any]] = []
-        list_dicts: list[dict[str, Any]] = []
-        legacy_dicts: list[dict[str, Any]] = []
-
-        for traj in dict_trajs:
-            if "node_id" in traj or "node_ids" in traj:
-                continue
-            if _is_list_dict(traj):
-                list_dicts.append(traj)
-            elif "_episode_idx" in traj:
-                per_turn_dicts.append(traj)
-            else:
-                legacy_dicts.append(traj)
-
-        # Handle per-turn dicts: group by (query_id, episode_idx) → one record
-        if per_turn_dicts:
-            self._insert_per_turn_dicts(per_turn_dicts)
-
-        # Handle list-based dicts
-        for traj in list_dicts:
-            self._insert_list_dict(traj)
-
-        # Handle legacy-style dicts
-        for traj in legacy_dicts:
-            input_ids = traj["input_ids"]
-            batch_size = input_ids.shape[0]
-
-            if batch_size == 1:
-                query_id = traj.get("query_id", "")
-                seq_len = int(traj["attention_mask"].sum())
-                record = self._make_record(traj, 0, seq_len)
-                seq_id = self._insert_single(query_id, record)
-                traj["node_id"] = seq_id
-                traj["query_id"] = query_id
-            else:
-                seq_ids: list[int] = []
-                query_id = traj.get("query_id", "")
-                for i in range(batch_size):
-                    seq_len = int(traj["attention_mask"][i].sum())
-                    record = self._make_record(traj, i, seq_len)
-                    seq_id = self._insert_single(query_id, record)
-                    seq_ids.append(seq_id)
-
-                traj["node_ids"] = seq_ids
-                traj["query_id"] = query_id
-
-    def _insert_per_turn_dicts(self, turn_dicts: list[dict[str, Any]]) -> None:
-        """Insert per-turn dicts as individual Node objects.
-
-        Each turn dict becomes a separate Node in the tree store.
-        Turns from the same episode share the same episode_id (derived
-        from query_id + _episode_idx) and are linked via
-        node_id/parent_node_id.
-        """
-        from itertools import groupby
-
-        sorted_turns = sorted(
-            turn_dicts,
-            key=lambda d: (d.get("query_id", ""), d.get("_episode_idx", 0)),
-        )
-
-        for (query_id, ep_idx), group_iter in groupby(
-            sorted_turns,
-            key=lambda d: (d.get("query_id", ""), d.get("_episode_idx", 0)),
-        ):
-            turns = list(group_iter)
-            turns.sort(key=lambda d: d.get("_turn_idx_in_episode", 0))
-
-            episode_id = f"{query_id}_{ep_idx}"
-
-            for turn in turns:
-                seq_len = int(turn["attention_mask"].sum())
-                input_ids = turn["input_ids"][0, :seq_len].tolist()
-                loss_mask = turn["loss_mask"][0, :seq_len].tolist()
-                logprobs = (
-                    turn["logprobs"][0, :seq_len].tolist()
-                    if "logprobs" in turn
-                    else [0.0] * seq_len
-                )
-                versions = (
-                    turn["versions"][0, :seq_len].tolist()
-                    if "versions" in turn
-                    else [0] * seq_len
-                )
-
-                node = Node(
-                    input_ids=input_ids,
-                    loss_mask=loss_mask,
-                    logprobs=logprobs,
-                    versions=versions,
-                    outcome_reward=turn.get("_outcome_reward", 0.0),
-                    node_id=turn.get("_turn_id", 0),
-                    parent_node_id=turn.get("_parent_turn_id"),
-                    episode_id=episode_id,
-                )
-
-                seq_id = self._insert_single(query_id, node)
-                # Also set metadata on dict for downstream dict-key readers
-                turn["node_id"] = seq_id
-                turn["query_id"] = query_id
+        for node in trajectories:
+            query_id = getattr(node, "query_id", None) or ""
+            self._insert_single(query_id, node)
 
     def get_advantages(self, query_id: str, seq_id: int) -> torch.Tensor:
         """Return per-token advantages: Q-value on response tokens, 0 on prompt."""
@@ -482,7 +266,7 @@ class MCTSTreeStore:
         - Convert to tensor dicts via _node_to_tensor_dict() for training
 
         Each Node carries query_id and node_id set during
-        insertion (accessible as regular attributes).
+            insertion (accessible as regular attributes).
         """
         if query_id not in self.trajectories:
             return []

@@ -51,66 +51,18 @@ from areal.utils.environ import is_single_controller
 logger = logging.getLogger("TreeBackupPPOTrainer")
 
 
-def _is_list_traj(traj: dict[str, Any]) -> bool:
-    """Check if a trajectory dict uses Python lists instead of tensors."""
-    return isinstance(traj.get("input_ids"), list)
-
-
-def _list_dict_to_tensor(traj: dict[str, Any]) -> dict[str, Any]:
-    """Convert a list-based trajectory dict to tensor format [1, seq_len].
-
-    The downstream PPO pipeline (concat_batch → _compute_advantages →
-    compute_logp, etc.) expects tensor dicts. List-based dicts from new
-    rollouts must be converted before returning from prepare_batch.
-    """
-    seq_len = len(traj["input_ids"])
-
-    result: dict[str, Any] = {
-        "input_ids": torch.tensor(traj["input_ids"], dtype=torch.int32).unsqueeze(0),
-        "loss_mask": torch.tensor(traj["loss_mask"], dtype=torch.int32).unsqueeze(0),
-        "logprobs": torch.tensor(traj["logprobs"], dtype=torch.float32).unsqueeze(0),
-        "versions": torch.tensor(traj["versions"], dtype=torch.int32).unsqueeze(0),
-        "attention_mask": torch.ones(1, seq_len, dtype=torch.bool),
-        "rewards": torch.tensor([traj.get("reward", 0.0)], dtype=torch.float32),
-    }
-
-    # Carry over all remaining keys unchanged (metadata, tree search fields,
-    # response-only fields like topk_ids, logp, teacher_logp, etc.)
-    for key in traj:
-        if key not in result:
-            result[key] = traj[key]
-
-    return result
-
-
-def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Any]) -> None:
-    """Mark all trajectories in a batch as trained after tree backup.
-
-    Handles both Node objects (with query_id/node_id attrs)
-    and legacy dicts (with query_id/node_id keys).
-    """
+def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Node]) -> None:
+    """Mark all trajectories in a batch as trained after tree backup."""
     count = 0
     for traj in trajectories:
         query_id = getattr(traj, "query_id", None)
-        if query_id is None and isinstance(traj, dict):
-            query_id = traj.get("query_id")
         if query_id is None:
             continue
 
         seq_id = getattr(traj, "node_id", None)
-        if seq_id is None and isinstance(traj, dict):
-            seq_id = traj.get("node_id")
         if seq_id is not None:
             tree_store.set_trained(query_id, seq_id, True)
             count += 1
-
-        seq_ids = getattr(traj, "node_ids", None)
-        if seq_ids is None and isinstance(traj, dict):
-            seq_ids = traj.get("node_ids")
-        if seq_ids is not None:
-            for sid in seq_ids:
-                tree_store.set_trained(query_id, sid, True)
-                count += 1
     if count:
         logger.debug(f"Marked {count} trajectories as trained")
 
@@ -635,28 +587,18 @@ class CacheAwarePPOTrainer(PPOTrainer):
         if self.tree_backup_config.advantage_mode == AdvantageMode.TREE:
             self.tree_advantage_computer.compute(trajs)
             for traj in trajs:
-                if isinstance(traj, Node):
-                    if hasattr(traj, "advantages") and traj.advantages is not None:
-                        adv = traj.advantages
-                        ret = traj.returns
-                        object.__setattr__(
-                            traj,
-                            "_tree_advantages",
-                            adv.clone() if hasattr(adv, "clone") else adv,
-                        )
-                        object.__setattr__(
-                            traj,
-                            "_tree_returns",
-                            ret.clone() if hasattr(ret, "clone") else ret,
-                        )
-                elif isinstance(traj, dict) and "advantages" in traj:
-                    adv = traj["advantages"]
-                    ret = traj["returns"]
-                    traj["_tree_advantages"] = (
-                        adv.clone() if hasattr(adv, "clone") else adv
+                if hasattr(traj, "advantages") and traj.advantages is not None:
+                    adv = traj.advantages
+                    ret = traj.returns
+                    object.__setattr__(
+                        traj,
+                        "_tree_advantages",
+                        adv.clone() if hasattr(adv, "clone") else adv,
                     )
-                    traj["_tree_returns"] = (
-                        ret.clone() if hasattr(ret, "clone") else ret
+                    object.__setattr__(
+                        traj,
+                        "_tree_returns",
+                        ret.clone() if hasattr(ret, "clone") else ret,
                     )
             logger.debug(
                 f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
@@ -673,19 +615,12 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         # --- End tree operations ---
 
-        # Convert to tensor dicts for the downstream PPO pipeline.
-        # New rollouts produce Node objects or list-based per-episode dicts;
-        # cached trajectories are already tensor-based per-turn dicts.
+        # Convert Nodes to tensor dicts for the downstream PPO pipeline.
         converted: list[dict[str, Any]] = []
         for t in trajs:
-            if isinstance(t, Node):
-                query_id = getattr(t, "query_id", "")
-                seq_id = getattr(t, "node_id", 0)
-                converted.append(_node_to_tensor_dict(t, query_id, seq_id))
-            elif _is_list_traj(t):
-                converted.append(_list_dict_to_tensor(t))
-            else:
-                converted.append(t)
+            query_id = getattr(t, "query_id", "")
+            seq_id = getattr(t, "node_id", 0)
+            converted.append(_node_to_tensor_dict(t, query_id, seq_id))
         trajs = converted
 
         # Inject distillation loss weights into trajectory dicts

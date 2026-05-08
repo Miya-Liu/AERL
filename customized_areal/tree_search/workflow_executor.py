@@ -5,45 +5,31 @@ from dataclasses import dataclass
 from typing import Any
 
 from areal.api import RolloutWorkflow
-from areal.experimental.openai.types import InteractionWithTokenLogpReward
 from areal.infra import workflow_context
 from areal.infra.workflow_context import WorkflowContext
 from areal.infra.workflow_executor import WorkflowExecutor, _RolloutTaskInput
 from areal.utils import perf_tracer, stats_tracker
-from areal.utils.data import concat_padded_tensors
 from areal.utils.perf_tracer import trace_session_event
 
 
 @dataclass
 class _TreeSearchRolloutResult:
-    """Internal wrapper for tree search rollout results containing multiple trajectories."""
+    """Internal wrapper for tree search rollout results containing multiple Node objects."""
 
     task_id: int
-    trajectories: list[dict[str, Any]]
+    trajectories: list
 
 
 class TreeSearchWorkflowExecutor(WorkflowExecutor):
-    """
-    WorkflowExecutor subclass that handles list[dict] returns from arun_episode.
-
-    This executor is designed for tree search workflows that return multiple trajectories
-    per episode as a list of dictionaries, rather than a single trajectory dict.
-    """
+    """WorkflowExecutor subclass that handles list[Node] returns from arun_episode."""
 
     def _create_workflow_task(
         self, pending_task: _RolloutTaskInput
     ) -> Callable[[], Any]:
-        """
-        Wrapper to create an async function that handles list[dict] returns from arun_episode.
-
-        This overrides the base class method to:
-        - Accept list[dict] from arun_episode
-        - Skip InteractionWithTokenLogpReward conversion for tree search trajectories
-        - Store results as _TreeSearchRolloutResult
-        """
+        """Create an async function that handles list[Node] returns from arun_episode."""
 
         async def _execute_workflow() -> _TreeSearchRolloutResult | None:
-            """Execute workflow.arun_episode and handle list[dict] returns."""
+            """Execute workflow.arun_episode and handle list[Node] returns."""
             task_id = pending_task.task_id
 
             # Set task_id in ContextVar before entering arun_episode
@@ -55,7 +41,7 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
             )
 
             manager = self.staleness_manager
-            traj_result: list[dict[str, Any]] | dict[str, Any] | None = None
+            traj_result: list | None = None
             should_accept_fn = pending_task.should_accept_fn
             should_accept: bool | None = None
             reason: str | None = None
@@ -65,34 +51,13 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
                     self.inference_engine, pending_task.data
                 )
 
-                # Handle different return types from arun_episode
                 if traj_result is None:
                     should_accept_traj = False
                     reason = "returned_none"
                 else:
-                    # Convert to list[dict] format
-                    if isinstance(traj_result, dict):
-                        # Check if it's InteractionWithTokenLogpReward format
-                        if all(
-                            isinstance(v, InteractionWithTokenLogpReward)
-                            for v in traj_result.values()
-                        ):
-                            traj_result = [
-                                concat_padded_tensors(
-                                    [v.to_tensor_dict() for v in traj_result.values()]
-                                )
-                            ]
-                        else:
-                            traj_result = [traj_result]
-                    elif isinstance(traj_result, list):
-                        # Verify all items are dicts
-                        if not all(isinstance(traj, dict) for traj in traj_result):
-                            raise ValueError(
-                                f"Expected list of dicts from arun_episode, got {type(traj_result)}"
-                            )
-                    else:
+                    if not isinstance(traj_result, list):
                         raise ValueError(
-                            f"Expected list[dict], dict, or None from arun_episode, got {type(traj_result)}"
+                            f"Expected list or None from arun_episode, got {type(traj_result)}"
                         )
 
                     # Apply acceptance function if provided
@@ -160,14 +125,8 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
 
     def wait(
         self, count: int, timeout: float | None = None, raise_timeout: bool = True
-    ) -> list[dict[str, Any] | None]:
-        """
-        Wait for the completion of `count` workflows and extract trajectories.
-
-        Handles both _TreeSearchRolloutResult and legacy _RolloutResult.
-        For _TreeSearchRolloutResult, returns the list of trajectories.
-        For legacy _RolloutResult, wraps the single trajectory in a list.
-        """
+    ) -> list[Any | None]:
+        """Wait for the completion of `count` workflows and extract trajectories."""
         results = self.dispatcher.wait_results(count, timeout, raise_timeout)
 
         # Log and trace
@@ -181,7 +140,6 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
             elif isinstance(r, _TreeSearchRolloutResult):
                 extracted.extend(r.trajectories)
             else:
-                # Handle legacy _RolloutResult
                 extracted.append(r.trajectory)
 
         return extracted
@@ -190,10 +148,8 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
         self,
         data: list[dict[str, Any]],
         workflow: RolloutWorkflow,
-    ) -> list[dict[str, Any]]:
-        """
-        Submit a batch of requests and wait for results, flattening list[list[dict]] → list[dict].
-        """
+    ) -> list[Any]:
+        """Submit a batch of requests and wait for results."""
         perf_tracer.instant(
             "workflow_executor.rollout_batch",
             category="scheduler",

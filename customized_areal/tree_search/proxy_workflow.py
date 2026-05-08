@@ -147,7 +147,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
 
         return nodes
 
-    async def arun_episode(self, engine, data: dict[str, Any]) -> list | None:
+    async def arun_episode(self, engine, data: dict) -> list[Node] | None:
         query_id = data.get("query_id") or ""
 
         result = await super().arun_episode(engine, data)
@@ -165,19 +165,5 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                 for node in nodes:
                     node.episode_id = query_id
             return nodes
-
-        # Legacy: result is list of dicts — inject query_id
-        if isinstance(result, list):
-            if query_id:
-                for traj in result:
-                    if isinstance(traj, dict):
-                        traj["query_id"] = query_id
-            return result
-
-        # Legacy: result is tensor dict → wrap in list
-        if isinstance(result, dict):
-            if query_id:
-                result["query_id"] = query_id
-            return [result]
 
         return None

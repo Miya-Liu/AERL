@@ -1,8 +1,6 @@
 # customized_areal/tree_search/advantage.py
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 
 from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
@@ -13,9 +11,8 @@ GRPO_NORM_EPS = 1e-8
 class TreeAdvantageComputer:
     """Replace GAE advantages with tree Q-values from MCTS backup.
 
-    Works with both Node objects and legacy trajectory dicts. For Nodes,
-    reads query_id and node_id attributes. Sets advantages
-    and returns on the object in-place.
+    Reads query_id and node_id from Node objects. Sets advantages
+    and returns on the Node in-place via object.__setattr__.
 
     Supports per-query GRPO normalization: Q-values are normalized within
     each query group (all episodes for the same query), producing
@@ -40,30 +37,19 @@ class TreeAdvantageComputer:
         return mask.float() * normalized_q
 
     @staticmethod
-    def _get_query_id(traj: Any) -> str | None:
-        """Extract query_id from Node or dict."""
-        if isinstance(traj, Node):
-            return getattr(traj, "query_id", None)
-        if isinstance(traj, dict):
-            return traj.get("query_id")
-        return None
+    def _get_query_id(traj: Node) -> str | None:
+        """Extract query_id from Node."""
+        return getattr(traj, "query_id", None)
 
     @staticmethod
-    def _get_seq_len(traj: Any) -> int:
-        """Get sequence length from Node, tensor, or list."""
-        if isinstance(traj, Node):
-            return len(traj.input_ids)
-        input_ids = traj["input_ids"]
-        if isinstance(input_ids, list):
-            return len(input_ids)
-        return input_ids.shape[-1]
+    def _get_seq_len(traj: Node) -> int:
+        """Get sequence length from Node."""
+        return len(traj.input_ids)
 
-    def compute(self, trajectories: list[Any]) -> None:
-        """Replace GAE advantages with tree Q-values. Mutates objects in-place.
+    def compute(self, trajectories: list[Node]) -> None:
+        """Replace GAE advantages with tree Q-values. Mutates Nodes in-place.
 
-        Handles Node objects (sets node.advantages/node.returns via
-        object.__setattr__) and legacy trajectory dicts (sets
-        traj["advantages"]/traj["returns"]).
+        Sets node.advantages/node.returns via object.__setattr__.
 
         After inserting all trajectories, performs per-query GRPO normalization
         of Q-values so that episodes within the same query group have
@@ -78,16 +64,9 @@ class TreeAdvantageComputer:
                 continue
             qset = query_seq_sets.setdefault(query_id, {})
 
-            if isinstance(traj, Node):
-                seq_id = getattr(traj, "node_id", None)
-                if seq_id is not None:
-                    qset[seq_id] = None
-            elif isinstance(traj, dict):
-                if "node_ids" in traj:
-                    for seq_id in traj["node_ids"]:
-                        qset[seq_id] = None
-                elif "node_id" in traj:
-                    qset[traj["node_id"]] = None
+            seq_id = getattr(traj, "node_id", None)
+            if seq_id is not None:
+                qset[seq_id] = None
 
         # Per-query GRPO normalization (deduplicated seq_ids)
         for query_id, seq_id_set in query_seq_sets.items():
@@ -111,28 +90,10 @@ class TreeAdvantageComputer:
             if query_id is None:
                 continue
 
-            if isinstance(traj, Node):
-                seq_id = getattr(traj, "node_id", None)
-                if seq_id is None:
-                    continue
-                seq_len = len(traj.input_ids)
-                advantages = self._compute_single(seq_id, seq_len, query_id)
-                object.__setattr__(traj, "advantages", advantages)
-                object.__setattr__(traj, "returns", advantages.clone())
-            elif isinstance(traj, dict):
-                seq_len = self._get_seq_len(traj)
-                if "node_ids" in traj:
-                    seq_ids = traj["node_ids"]
-                    all_advantages = []
-                    for seq_id in seq_ids:
-                        adv = self._compute_single(seq_id, seq_len, query_id)
-                        all_advantages.append(adv)
-                    advantages = torch.stack(all_advantages, dim=0)
-                elif "node_id" in traj:
-                    seq_id = traj["node_id"]
-                    advantages = self._compute_single(seq_id, seq_len, query_id)
-                    advantages = advantages.unsqueeze(0)
-                else:
-                    continue
-                traj["advantages"] = advantages
-                traj["returns"] = advantages.clone()
+            seq_id = getattr(traj, "node_id", None)
+            if seq_id is None:
+                continue
+            seq_len = len(traj.input_ids)
+            advantages = self._compute_single(seq_id, seq_len, query_id)
+            object.__setattr__(traj, "advantages", advantages)
+            object.__setattr__(traj, "returns", advantages.clone())
