@@ -116,9 +116,15 @@ class _CacheAwareBatchBuilder:
             if not query_id:
                 continue
             nodes = self.tree_store.load_trajectories(query_id, self.n_samples)
+            episode_sizes: dict[str, int] = {}
+            for node in nodes:
+                episode_sizes[node.episode_id] = episode_sizes.get(node.episode_id, 0) + 1
             for node in nodes:
                 traj_dict = _node_to_tensor_dict(
-                    node, query_id, getattr(node, "node_id", 0)
+                    node,
+                    query_id,
+                    node.node_id,
+                    num_turns_in_episode=episode_sizes.get(node.episode_id, 1),
                 )
                 all_trajs.append(traj_dict)
         return all_trajs
@@ -362,10 +368,18 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         # Convert Nodes to tensor dicts for the downstream PPO pipeline.
         converted_trajs: list[dict[str, Any]] = []
+        episode_sizes: dict[str, int] = {}
+        for node in nodes:
+            episode_sizes[node.episode_id] = episode_sizes.get(node.episode_id, 0) + 1
         for node in nodes:
             query_id = node.query_id
             node_id = node.node_id
-            converted_trajs.append(_node_to_tensor_dict(node, query_id, node_id))
+            converted_trajs.append(
+                _node_to_tensor_dict(
+                    node, query_id, node_id,
+                    num_turns_in_episode=episode_sizes.get(node.episode_id, 1),
+                )
+            )
 
         # Inject distillation loss weights into trajectory dicts
         if self.tree_backup_config.loss_mode != LossMode.GRPO:
