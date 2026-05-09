@@ -70,7 +70,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
 
         nodes: list[Node] = []
 
-        for interaction_id, interaction in interactions.items():
+        for turn_idx, (interaction_id, interaction) in enumerate(interactions.items(), start=1):
             assert isinstance(interaction, InteractionWithTokenLogpReward)
             resp = interaction.model_response
             assert resp is not None, "Model response is not set."
@@ -136,6 +136,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                 versions=versions,
                 outcome_reward=outcome_reward,
                 node_id=0,
+                turn_idx=turn_idx,
                 episode_id="",
                 topk_ids=topk_ids if topk_ids else None,
                 topk_logp=topk_logp if topk_logp else None,

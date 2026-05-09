@@ -203,3 +203,39 @@ class TestTurnIdx:
             turn_idx=3,
         )
         assert node.turn_idx == 3
+
+
+class TestTurnIdxInInteractionsToNodes:
+    """proxy_workflow._interactions_to_nodes sets turn_idx 1-based."""
+
+    def test_interactions_to_nodes_sets_turn_idx(self):
+        from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
+        from areal.experimental.openai.types import InteractionWithTokenLogpReward
+        from unittest.mock import MagicMock
+
+        wf = QueryIDProxyWorkflow.__new__(QueryIDProxyWorkflow)
+
+        def make_interaction():
+            inter = MagicMock(spec=InteractionWithTokenLogpReward)
+            inter.chat_template_type = "individual"
+            inter.parent = None
+            inter.reward = 1.0
+            resp = MagicMock()
+            resp.input_tokens = [1, 2]
+            resp.output_tokens = [3, 4]
+            resp.input_ids = [1, 2]
+            resp.output_ids = [3, 4]
+            resp.input_len = 2
+            resp.output_len = 2
+            resp.output_logprobs = [-0.5, -0.3]
+            resp.output_versions = [0, 0]
+            resp.output_top_logprobs = None
+            inter.model_response = resp
+            return inter
+
+        interactions = {"turn_a": make_interaction(), "turn_b": make_interaction()}
+        nodes = wf._interactions_to_nodes(interactions)
+
+        assert len(nodes) == 2
+        assert nodes[0].turn_idx == 1
+        assert nodes[1].turn_idx == 2
