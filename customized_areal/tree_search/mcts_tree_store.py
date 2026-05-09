@@ -107,7 +107,7 @@ def _optional_tensor_field(
         traj[key] = torch.tensor(sliced, dtype=dtype).unsqueeze(0)
 
 
-def _node_to_tensor_dict(node: Node, query_id: str, node_id: int) -> dict[str, Any]:
+def _node_to_tensor_dict(node: Node, query_id: str, node_id: int, num_turns_in_episode: int = 1) -> dict[str, Any]:
     """Convert a single Node to a tensor dict with shape [1, seq_len]."""
     seq_len = len(node.input_ids)
     traj: dict[str, Any] = {
@@ -160,7 +160,7 @@ def _node_to_tensor_dict(node: Node, query_id: str, node_id: int) -> dict[str, A
     traj["_outcome_reward"] = node.outcome_reward
     traj["_episode_idx"] = 0
     traj["_turn_idx_in_episode"] = node.turn_idx
-    traj["_num_turns_in_episode"] = 1
+    traj["_num_turns_in_episode"] = num_turns_in_episode
     return traj
 
 

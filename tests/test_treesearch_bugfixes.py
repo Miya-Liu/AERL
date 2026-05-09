@@ -239,3 +239,25 @@ class TestTurnIdxInInteractionsToNodes:
         assert len(nodes) == 2
         assert nodes[0].turn_idx == 1
         assert nodes[1].turn_idx == 2
+
+
+class TestTurnIdxInTensorDict:
+    """_node_to_tensor_dict uses node.turn_idx and num_turns_in_episode."""
+
+    def test_tensor_dict_uses_turn_idx(self):
+        from customized_areal.tree_search.mcts_tree_store import _node_to_tensor_dict
+
+        node = _make_node()
+        node.turn_idx = 2
+        traj = _node_to_tensor_dict(node, "q1", 1, num_turns_in_episode=3)
+        assert traj["_turn_idx_in_episode"] == 2
+        assert traj["_num_turns_in_episode"] == 3
+
+    def test_tensor_dict_defaults(self):
+        from customized_areal.tree_search.mcts_tree_store import _node_to_tensor_dict
+
+        node = _make_node()
+        # turn_idx=0 (default), num_turns_in_episode defaults to 1
+        traj = _node_to_tensor_dict(node, "q1", 1)
+        assert traj["_turn_idx_in_episode"] == 0
+        assert traj["_num_turns_in_episode"] == 1
