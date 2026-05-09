@@ -1,9 +1,3 @@
-"""Checkpoint save/load for the flat Node store.
-
-Unlike the old TrieNode-based format, MCTS stats are keyed by seq_id (int)
-and serialize directly — no rebuild_mcts_stats() needed after loading.
-Old TrieNode-based checkpoints are incompatible and must be discarded.
-"""
 
 from __future__ import annotations
 
@@ -139,6 +133,7 @@ class TreeCheckpointManager:
             "node_id": node.node_id,
             "parent_node_id": node.parent_node_id,
             "episode_id": node.episode_id,
+            "turn_idx": node.turn_idx,
             "query_id": node.query_id,
         }
         if node.topk_ids is not None:
@@ -162,6 +157,7 @@ class TreeCheckpointManager:
             node_id=data.get("node_id", 0),
             parent_node_id=data.get("parent_node_id"),
             episode_id=data.get("episode_id", ""),
+            turn_idx=data.get("turn_idx", 0),
             query_id=data.get("query_id", ""),
             topk_ids=data.get("topk_ids"),
             topk_logp=data.get("topk_logp"),
