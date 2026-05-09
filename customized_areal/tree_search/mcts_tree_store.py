@@ -42,6 +42,7 @@ class Node:
     node_id: int = 0  # unique sequence ID (assigned by store)
     parent_node_id: int | None = None  # parent sequence ID (None for root)
     episode_id: str = ""  # groups turns into a trajectory path
+    turn_idx: int = 0  # 1-based turn position within episode
     query_id: str = ""  # dataset query identifier
 
     # Reward
@@ -158,7 +159,7 @@ def _node_to_tensor_dict(node: Node, query_id: str, node_id: int) -> dict[str, A
     traj["_turn_reward"] = node.outcome_reward
     traj["_outcome_reward"] = node.outcome_reward
     traj["_episode_idx"] = 0
-    traj["_turn_idx_in_episode"] = 0
+    traj["_turn_idx_in_episode"] = node.turn_idx
     traj["_num_turns_in_episode"] = 1
     return traj
 

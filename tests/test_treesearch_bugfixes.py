@@ -178,3 +178,28 @@ class TestEpisodeIdUniqueness:
             assert len(suffix) == 8 and all(c in "0123456789abcdef" for c in suffix), (
                 f"episode_id should have 8-char hex UUID suffix, got suffix={suffix} in {eid}"
             )
+
+
+class TestTurnIdx:
+    """Feature: turn_idx field on Node for per-episode turn ordering."""
+
+    def test_node_has_turn_idx_default_zero(self):
+        node = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 1, 1],
+            logprobs=[0.0, -0.5, -0.3],
+            versions=[-1, 0, 0],
+            outcome_reward=1.0,
+        )
+        assert node.turn_idx == 0
+
+    def test_node_turn_idx_can_be_set(self):
+        node = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 1, 1],
+            logprobs=[0.0, -0.5, -0.3],
+            versions=[-1, 0, 0],
+            outcome_reward=1.0,
+            turn_idx=3,
+        )
+        assert node.turn_idx == 3
