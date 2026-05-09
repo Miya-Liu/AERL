@@ -4,9 +4,9 @@ from unittest.mock import MagicMock
 
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    CacheMode,
     LossMode,
     TreeBackupConfig,
-    TreeBackupMode,
 )
 from customized_areal.tree_search.patches import TreeSearchPatches
 
@@ -87,7 +87,7 @@ class TestRestoreSafety:
 class TestTreeBackupConfigDefaults:
     def test_default_mode_is_off(self):
         config = TreeBackupConfig()
-        assert config.mode == TreeBackupMode.OFF
+        assert config.mode == CacheMode.OFF
 
     def test_no_assistant_marker_field(self):
         config = TreeBackupConfig()

@@ -27,10 +27,13 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
         self, engine: InferenceEngine, data: dict[str, Any]
     ) -> list | None:
         results = await asyncio.gather(
-            *[self.workflow.arun_episode(engine, data) for _ in range(self.group_size)]
+            *[self.workflow.arun_episode(engine, data) for _ in range(self.group_size)],
+            return_exceptions=True,
         )
 
-        valid_results = [r for r in results if r is not None]
+        valid_results = [
+            r for r in results if not isinstance(r, Exception) and r is not None
+        ]
 
         if not valid_results:
             return None

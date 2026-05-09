@@ -2,10 +2,10 @@ from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    CacheMode,
     LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    TreeBackupMode,
 )
 from customized_areal.tree_search.distill_types import (
     InteractionWithTokenLevelReward,
@@ -27,7 +27,7 @@ __all__ = [
     "RolloutCacheConfig",
     "TreeAdvantageComputer",
     "TreeBackupConfig",
-    "TreeBackupMode",
+    "CacheMode",
     "TreeCheckpointManager",
 ]
 

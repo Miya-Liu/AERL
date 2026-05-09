@@ -60,6 +60,9 @@ class TreeCheckpointManager:
             "normalized_advantages": {
                 str(k): v for k, v in tree_store._normalized_advantages.items()
             },
+            "normalized_returns": {
+                str(k): v for k, v in tree_store._normalized_returns.items()
+            },
             "turn_nodes": tree_store._turn_nodes,
             "query_id_to_file": query_id_to_file,
         }
@@ -100,6 +103,9 @@ class TreeCheckpointManager:
         store._rewards = {int(k): v for k, v in metadata.get("rewards", {}).items()}
         store._normalized_advantages = {
             int(k): v for k, v in metadata.get("normalized_advantages", {}).items()
+        }
+        store._normalized_returns = {
+            int(k): v for k, v in metadata.get("normalized_returns", {}).items()
         }
         store._turn_nodes = metadata.get("turn_nodes", {})
 

@@ -23,10 +23,10 @@ from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    CacheMode,
     LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    CacheMode,
 )
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
@@ -55,7 +55,7 @@ def _mark_batch_trained(tree_store: MCTSTreeStore, trajectories: list[Node]) -> 
 
 
 class _CacheAwareBatchBuilder:
-    """Splits prompts into cached/partially-cached/not-cached groups."""
+    """Splits prompts into cached and needs-generation groups."""
 
     def __init__(self, tree_store: MCTSTreeStore, n_samples: int):
         self.tree_store = tree_store
@@ -66,13 +66,12 @@ class _CacheAwareBatchBuilder:
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Split prompts into cached and needs-generation groups.
 
-        Query ID derivation fallback chain:
-        1. ``prompt["query_id"]`` — dataset-provided string (preferred)
-        2. Empty string (no tree lookup possible)
+        A query is cached only when it has >= n_samples untrained
+        trajectories. Otherwise all n_samples are generated fresh
+        (partial cache is ignored).
 
         Returns:
-            cached: list of dicts with keys: prompt, query_id, cached_count,
-                need_gen_count
+            cached: list of dicts with keys: prompt, query_id, cached_count
             need_gen: list of dicts with keys: prompt, query_id
         """
         cached = []
@@ -90,15 +89,12 @@ class _CacheAwareBatchBuilder:
                 f"(need {self.n_samples})"
             )
 
-            if untrained_count > 0:
-                cached_count = min(untrained_count, self.n_samples)
-                need_gen_count = max(0, self.n_samples - untrained_count)
+            if untrained_count >= self.n_samples:
                 cached.append(
                     {
                         "prompt": prompt,
                         "query_id": query_id,
-                        "cached_count": cached_count,
-                        "need_gen_count": need_gen_count,
+                        "cached_count": self.n_samples,
                     }
                 )
             else:
@@ -116,9 +112,9 @@ class _CacheAwareBatchBuilder:
         all_trajs = []
         for item in cached_prompts:
             query_id = item["query_id"]
-            if not query_id or item["cached_count"] == 0:
+            if not query_id:
                 continue
-            nodes = self.tree_store.load_trajectories(query_id, item["cached_count"])
+            nodes = self.tree_store.load_trajectories(query_id, self.n_samples)
             for node in nodes:
                 traj_dict = _node_to_tensor_dict(
                     node, query_id, getattr(node, "node_id", 0)
@@ -162,10 +158,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         self._patches: TreeSearchPatches | None = None
 
-        if (
-            self.cache_config.enabled
-            and self.tree_backup_config.mode != CacheMode.OFF
-        ):
+        if self.cache_config.enabled and self.tree_backup_config.mode != CacheMode.OFF:
             self._init_tree_components()
             self._patches = TreeSearchPatches(
                 rollout_engine=self.rollout,

@@ -26,9 +26,9 @@ sys.path.insert(0, str(project_root))
 
 from customized_areal.tpfc.tpfc_dataset import get_tpfc_rl_dataset
 from customized_areal.tree_search.config import (
+    CacheMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    TreeBackupMode,
 )
 from customized_areal.tree_search.core.config import OnPolicyDistillConfig
 from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
@@ -104,7 +104,7 @@ def main(args: list[str] | None = None) -> None:
     )
 
     tree_backup_config = TreeBackupConfig(
-        mode=TreeBackupMode.CROSS_TRAINING,
+        mode=CacheMode.CROSS_TRAINING,
         assistant_marker=assistant_marker,
         checkpoint_dir=cache_dir,
     )

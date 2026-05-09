@@ -67,10 +67,10 @@ class TPFCConfig(PPOConfig):
         default="",
         metadata={"help": "Directory for rollout cache storage (tree search)."},
     )
-    tree_backup_mode: str = field(
+    cache_mode: str = field(
         default="cross_training",
         metadata={
-            "help": "Tree backup mode: 'cross_training', 'independent', or 'off'.",
+            "help": "Cache mode: 'cross_training', 'in_training', or 'off'.",
         },
     )
     assistant_marker: str = field(

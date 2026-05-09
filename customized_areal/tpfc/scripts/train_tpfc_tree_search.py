@@ -18,9 +18,9 @@ sys.path.insert(0, str(project_root))
 from customized_areal.tpfc.tpfc_config import TPFCConfig
 from customized_areal.tpfc.tpfc_dataset import get_tpfc_rl_dataset
 from customized_areal.tree_search.config import (
+    CacheMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    TreeBackupMode,
 )
 from customized_areal.tree_search.trainer import CacheAwarePPOTrainer
 
@@ -59,7 +59,7 @@ def main(args: list[str] | None = None) -> None:
     logger.info("Loaded %d validation samples", len(valid_dataset))
 
     # Build cache / tree backup configs from overrides
-    cache_dir = getattr(config, "cache_dir", "")
+    cache_dir = config.cache_dir
     if not cache_dir:
         raise ValueError(
             "cache_dir must be set when using tree search training. "
@@ -68,14 +68,14 @@ def main(args: list[str] | None = None) -> None:
 
     n_samples = config.gconfig.n_samples
 
-    # Allow tree backup mode to be overridden via config; default to CROSS_TRAINING
-    tree_mode_str = getattr(config, "tree_backup_mode", "cross_training")
+    # Cache mode from config (default "cross_training" set in TPFCConfig)
+    tree_mode_str = config.cache_mode
     try:
-        tree_mode = TreeBackupMode(tree_mode_str)
+        tree_mode = CacheMode(tree_mode_str)
     except ValueError:
         raise ValueError(
-            f"Invalid tree_backup_mode={tree_mode_str}. "
-            f"Must be one of: {[m.value for m in TreeBackupMode]}"
+            f"Invalid cache_mode={tree_mode_str}. "
+            f"Must be one of: {[m.value for m in CacheMode]}"
         ) from None
 
     cache_config = RolloutCacheConfig(

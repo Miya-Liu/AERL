@@ -106,7 +106,10 @@ class TestTreeCheckpointManager:
         manager = TreeCheckpointManager(str(tmp_path))
         store = MCTSTreeStore()
         node = _make_node(
-            [1, 2, 3, 4, 5, 6, 7, 8], [0, 0, 1, 1, 0, 0, 1, 1], reward=0.75, query_id="q1"
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            [0, 0, 1, 1, 0, 0, 1, 1],
+            reward=0.75,
+            query_id="q1",
         )
         store.insert_batch([node])
         manager.save(store)
@@ -128,9 +131,21 @@ class TestTreeCheckpointManager:
             outcome_reward=1.0,
             query_id="q1",
             topk_ids=[[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
-            topk_logp=[[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6], [-0.7, -0.8], [-0.9, -1.0]],
+            topk_logp=[
+                [-0.1, -0.2],
+                [-0.3, -0.4],
+                [-0.5, -0.6],
+                [-0.7, -0.8],
+                [-0.9, -1.0],
+            ],
             distill_reward=[[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8], [0.9, 1.0]],
-            teacher_logp=[[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6], [-1.7, -1.8], [-1.9, -2.0]],
+            teacher_logp=[
+                [-1.1, -1.2],
+                [-1.3, -1.4],
+                [-1.5, -1.6],
+                [-1.7, -1.8],
+                [-1.9, -2.0],
+            ],
         )
         store.insert_batch([node])
         manager.save(store)
@@ -165,7 +180,9 @@ class TestTreeCheckpointManager:
         """Query IDs with special chars (/, \\, :) should be safely saved and loaded."""
         manager = TreeCheckpointManager(str(tmp_path))
         store = MCTSTreeStore()
-        node = _make_node([1, 2, 3], [0, 0, 1], reward=1.0, query_id="path/with:special\\chars")
+        node = _make_node(
+            [1, 2, 3], [0, 0, 1], reward=1.0, query_id="path/with:special\\chars"
+        )
         store.insert_batch([node])
         manager.save(store)
 

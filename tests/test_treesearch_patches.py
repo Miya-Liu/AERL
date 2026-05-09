@@ -1,7 +1,10 @@
 from unittest.mock import MagicMock, patch
+
 import pytest
+
 from customized_areal.tree_search.config import AdvantageMode, LossMode
 from customized_areal.tree_search.patches import TreeSearchPatches
+
 from areal.trainer.ppo.actor import PPOActor
 
 
@@ -41,7 +44,9 @@ def mock_engine():
 class TestApplyRestore:
     """Test applying and restoring patches"""
 
-    def test_apply_then_restore_restores_originals(self, mock_engine, saved_ppo_actor_state):
+    def test_apply_then_restore_restores_originals(
+        self, mock_engine, saved_ppo_actor_state
+    ):
         patches = TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4)
         original_compute = PPOActor.compute_advantages
         original_wrap = mock_engine._wrap_openai_agent
@@ -78,13 +83,17 @@ class TestIdempotency:
 class TestContextManager:
     """Test context manager behavior"""
 
-    def test_context_manager_restores_on_normal_exit(self, mock_engine, saved_ppo_actor_state):
+    def test_context_manager_restores_on_normal_exit(
+        self, mock_engine, saved_ppo_actor_state
+    ):
         original_compute = PPOActor.compute_advantages
         with TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4):
             assert PPOActor.compute_advantages != original_compute
         assert PPOActor.compute_advantages == original_compute
 
-    def test_context_manager_restores_on_exception(self, mock_engine, saved_ppo_actor_state):
+    def test_context_manager_restores_on_exception(
+        self, mock_engine, saved_ppo_actor_state
+    ):
         original_compute = PPOActor.compute_advantages
         with pytest.raises(ValueError):
             with TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4):

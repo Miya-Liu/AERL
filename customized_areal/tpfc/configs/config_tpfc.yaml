@@ -183,7 +183,7 @@ recover:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   freq_epochs: 1
-  freq_steps: null
+  freq_steps: 50
   freq_secs: 3600
 
 evaluator:

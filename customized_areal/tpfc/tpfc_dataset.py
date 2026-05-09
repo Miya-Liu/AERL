@@ -9,10 +9,9 @@ The dataset format matches openai/gsm8k RL format:
 - files_path (optional): List of image file paths for multimodal models
 """
 
+import re
 from pathlib import Path
 from typing import Any
-
-import re
 
 import numpy as np
 import pandas as pd

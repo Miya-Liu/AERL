@@ -1,31 +1,42 @@
 # TreeSearchPatches Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Consolidate 6 top-level monkey-patch functions into a single `TreeSearchPatches` class with atomic apply/restore, crash safety, and context manager support.
+**Goal:** Consolidate 6 top-level monkey-patch functions into a single
+`TreeSearchPatches` class with atomic apply/restore, crash safety, and context manager
+support.
 
-**Architecture:** New `TreeSearchPatches` class in `patches.py` replaces the scattered `_patch_*`/`_unpatch_*` functions. Patches are deferred from `__init__` to `train()` and scoped via `try/finally`. A `_saved` undo list and separate `_distill_undo` handle restore.
+**Architecture:** New `TreeSearchPatches` class in `patches.py` replaces the scattered
+`_patch_*`/`_unpatch_*` functions. Patches are deferred from `__init__` to `train()` and
+scoped via `try/finally`. A `_saved` undo list and separate `_distill_undo` handle
+restore.
 
 **Tech Stack:** Python 3.12+, PyTorch, pytest
 
----
+______________________________________________________________________
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|---------------|
-| `customized_areal/tree_search/patches.py` | Create | `TreeSearchPatches` class with `_build_*` methods, `apply()`, `restore()`, context manager |
-| `customized_areal/tree_search/trainer.py` | Modify | Remove 6 top-level functions + `_get_underlying_engine`, refactor `CacheAwarePPOTrainer` to use `TreeSearchPatches` |
-| `customized_areal/tree_search/__init__.py` | No change | `TreeSearchPatches` is an internal implementation detail, not re-exported |
-| `tests/test_treesearch_patches.py` | Create | Unit tests for `TreeSearchPatches` |
+| File                                       | Action    | Responsibility                                                                                                      |
+| ------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------- |
+| `customized_areal/tree_search/patches.py`  | Create    | `TreeSearchPatches` class with `_build_*` methods, `apply()`, `restore()`, context manager                          |
+| `customized_areal/tree_search/trainer.py`  | Modify    | Remove 6 top-level functions + `_get_underlying_engine`, refactor `CacheAwarePPOTrainer` to use `TreeSearchPatches` |
+| `customized_areal/tree_search/__init__.py` | No change | `TreeSearchPatches` is an internal implementation detail, not re-exported                                           |
+| `tests/test_treesearch_patches.py`         | Create    | Unit tests for `TreeSearchPatches`                                                                                  |
 
----
+______________________________________________________________________
 
 ### Task 1: Create `TreeSearchPatches` class in `patches.py`
 
 **Files:**
+
 - Create: `customized_areal/tree_search/patches.py`
-- Reference: `customized_areal/tree_search/trainer.py:70-288` (existing patch functions to port)
+
+- Reference: `customized_areal/tree_search/trainer.py:70-288` (existing patch functions
+  to port)
+
 - Reference: `customized_areal/tree_search/config.py` (enums/types)
 
 - [ ] **Step 1: Create `patches.py` with full `TreeSearchPatches` class**
@@ -358,7 +369,8 @@ class TreeSearchPatches:
 
 - [ ] **Step 2: Verify the file has no syntax errors**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/tree_search/patches.py').read()); print('OK')"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/tree_search/patches.py').read()); print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
@@ -368,27 +380,39 @@ git add customized_areal/tree_search/patches.py
 git commit -m "feat: add TreeSearchPatches class for consolidated monkey-patching"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Refactor `CacheAwarePPOTrainer` to use `TreeSearchPatches`
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/trainer.py`
 
 - [ ] **Step 1: Remove the 7 top-level functions and `_get_underlying_engine`**
 
-Delete lines 70-288 from `trainer.py` (the functions: `_get_underlying_engine`, `_patch_wrap_openai_agent_for_tree_search`, `_unpatch_wrap_openai_agent`, `_patch_workflow_executor`, `_unpatch_workflow_executor`, `patch_ppo_actor_for_tree_backup`, `unpatch_ppo_actor`).
+Delete lines 70-288 from `trainer.py` (the functions: `_get_underlying_engine`,
+`_patch_wrap_openai_agent_for_tree_search`, `_unpatch_wrap_openai_agent`,
+`_patch_workflow_executor`, `_unpatch_workflow_executor`,
+`patch_ppo_actor_for_tree_backup`, `unpatch_ppo_actor`).
 
 Also remove the now-unused imports from `trainer.py`:
+
 - `GroupedRolloutWorkflow` (line 46) — moved to `patches.py`
 - `QueryIDProxyWorkflow` (line 42) — moved to `patches.py`
 - `TreeSearchWorkflowExecutor` (line 43) — moved to `patches.py`
-- `PPOActor` (line 47) — only used in the deleted `patch_ppo_actor_for_tree_backup` / `unpatch_ppo_actor` functions; moved to `patches.py`
+- `PPOActor` (line 47) — only used in the deleted `patch_ppo_actor_for_tree_backup` /
+  `unpatch_ppo_actor` functions; moved to `patches.py`
 
 Keep imports that are still used in `trainer.py`:
-- `TreeSearchGroupedRolloutWorkflow` (line 34-36) — still used in `_CacheAwareBatchBuilder`? No — check. Actually it's only used in the deleted `_patch_wrap_openai_agent_for_tree_search`. Remove it.
+
+- `TreeSearchGroupedRolloutWorkflow` (line 34-36) — still used in
+  `_CacheAwareBatchBuilder`? No — check. Actually it's only used in the deleted
+  `_patch_wrap_openai_agent_for_tree_search`. Remove it.
+
 - `AdvantageMode`, `LossMode` (line 28-33) — still used in `trainer.py` body
-- `TreeAdvantageComputer`, `TreeCheckpointManager`, `MCTSTreeStore`, `Node`, `_node_to_tensor_dict` — still used
+
+- `TreeAdvantageComputer`, `TreeCheckpointManager`, `MCTSTreeStore`, `Node`,
+  `_node_to_tensor_dict` — still used
 
 - [ ] **Step 2: Add import for `TreeSearchPatches`**
 
@@ -398,9 +422,11 @@ At the top of `trainer.py`, add after the existing imports:
 from customized_areal.tree_search.patches import TreeSearchPatches
 ```
 
-- [ ] **Step 3: Replace `_init_patches` with `TreeSearchPatches` instantiation in `__init__`**
+- [ ] **Step 3: Replace `_init_patches` with `TreeSearchPatches` instantiation in
+  `__init__`**
 
-Replace the `_init_patches` method (lines 460-491) and its call in `__init__` (line 405).
+Replace the `_init_patches` method (lines 460-491) and its call in `__init__` (line
+405).
 
 In `__init__`, replace:
 
@@ -419,13 +445,16 @@ with:
             )
 ```
 
-And add `self._patches: TreeSearchPatches | None = None` as an instance attribute (initialized before the conditional block, or inside it — matching the pattern that `_patches` is only set when tree components are initialized).
+And add `self._patches: TreeSearchPatches | None = None` as an instance attribute
+(initialized before the conditional block, or inside it — matching the pattern that
+`_patches` is only set when tree components are initialized).
 
 Delete the entire `_init_patches` method.
 
 - [ ] **Step 4: Refactor `train()` to use `patches.apply()` / `patches.restore()`**
 
-Replace the `train()` method. The `prepare_batch` patch stays as a manual `setattr`/restore alongside `patches.apply()`/`restore()` in the `try/finally`:
+Replace the `train()` method. The `prepare_batch` patch stays as a manual
+`setattr`/restore alongside `patches.apply()`/`restore()` in the `try/finally`:
 
 ```python
     def train(
@@ -495,7 +524,8 @@ Replace the `train()` method. The `prepare_batch` patch stays as a manual `setat
 
 - [ ] **Step 5: Simplify `close()`**
 
-Replace the `close()` method. Since patches are restored in `train()`'s finally block, `close()` only needs a safety-net restore:
+Replace the `close()` method. Since patches are restored in `train()`'s finally block,
+`close()` only needs a safety-net restore:
 
 ```python
     def close(self) -> None:
@@ -508,7 +538,8 @@ Replace the `close()` method. Since patches are restored in `train()`'s finally 
 
 - [ ] **Step 6: Update the class docstring**
 
-Remove references to `patch_ppo_actor_for_tree_backup` / `unpatch_ppo_actor` from the `CacheAwarePPOTrainer` class docstring. Update to mention `TreeSearchPatches`:
+Remove references to `patch_ppo_actor_for_tree_backup` / `unpatch_ppo_actor` from the
+`CacheAwarePPOTrainer` class docstring. Update to mention `TreeSearchPatches`:
 
 ```python
     """PPOTrainer with rollout caching and tree backup.
@@ -534,7 +565,8 @@ Remove references to `patch_ppo_actor_for_tree_backup` / `unpatch_ppo_actor` fro
 
 - [ ] **Step 7: Verify no syntax errors**
 
-Run: `python -c "import ast; ast.parse(open('customized_areal/tree_search/trainer.py').read()); print('OK')"`
+Run:
+`python -c "import ast; ast.parse(open('customized_areal/tree_search/trainer.py').read()); print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 8: Commit**
@@ -544,23 +576,25 @@ git add customized_areal/tree_search/trainer.py
 git commit -m "refactor: replace scattered patch functions with TreeSearchPatches"
 ```
 
----
+______________________________________________________________________
 
 ### Task 3: Write unit tests for `TreeSearchPatches`
 
 **Files:**
+
 - Create: `tests/test_treesearch_patches.py`
 
 - [ ] **Step 1: Write tests**
 
-The tests need to work without real GPU/engine infrastructure, so we use mock objects to stand in for the engine and PPOActor. The key behaviors to test:
+The tests need to work without real GPU/engine infrastructure, so we use mock objects to
+stand in for the engine and PPOActor. The key behaviors to test:
 
 1. `apply()` / `restore()` cycle restores all original values
-2. Double-apply is idempotent
-3. Context manager restores on exception
-4. `_build_tree_search_wrap` raises `RuntimeError` on missing config
-5. `restore()` is safe to call multiple times
-6. Partial rollback on `apply()` failure
+1. Double-apply is idempotent
+1. Context manager restores on exception
+1. `_build_tree_search_wrap` raises `RuntimeError` on missing config
+1. `restore()` is safe to call multiple times
+1. Partial rollback on `apply()` failure
 
 ```python
 """Tests for TreeSearchPatches."""
@@ -768,10 +802,15 @@ class TestRestoreSafety:
 
 - [ ] **Step 2: Run the tests**
 
-Run: `python -m pytest tests/test_treesearch_patches.py -v --no-header -x 2>&1 | head -50`
+Run:
+`python -m pytest tests/test_treesearch_patches.py -v --no-header -x 2>&1 | head -50`
 Expected: All tests PASS
 
-Note: If imports fail due to missing dependencies (GPU, distributed), the tests may need to be adjusted to mock those imports. The tests above use `MagicMock` for the engine, so they should work without GPU. However, importing `PPOActor` may pull in PyTorch/distributed dependencies. If so, add `@pytest.mark.skipif` guards or mock the imports.
+Note: If imports fail due to missing dependencies (GPU, distributed), the tests may need
+to be adjusted to mock those imports. The tests above use `MagicMock` for the engine, so
+they should work without GPU. However, importing `PPOActor` may pull in
+PyTorch/distributed dependencies. If so, add `@pytest.mark.skipif` guards or mock the
+imports.
 
 - [ ] **Step 3: Commit**
 
@@ -780,48 +819,54 @@ git add tests/test_treesearch_patches.py
 git commit -m "test: add unit tests for TreeSearchPatches"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Verify no regressions in existing imports
 
 **Files:**
+
 - Verify: `customized_areal/tree_search/__init__.py`
+
 - Verify: Any files that import from `trainer.py`
 
 - [ ] **Step 1: Check for external consumers of removed functions**
 
-Run: `grep -r 'patch_ppo_actor_for_tree_backup\|unpatch_ppo_actor\|_patch_wrap_openai_agent\|_unpatch_wrap_openai_agent\|_patch_workflow_executor\|_unpatch_workflow_executor\|_get_underlying_engine' --include='*.py' customized_areal/ | grep -v 'patches.py' | grep -v 'trainer.py'`
+Run:
+`grep -r 'patch_ppo_actor_for_tree_backup\|unpatch_ppo_actor\|_patch_wrap_openai_agent\|_unpatch_wrap_openai_agent\|_patch_workflow_executor\|_unpatch_workflow_executor\|_get_underlying_engine' --include='*.py' customized_areal/ | grep -v 'patches.py' | grep -v 'trainer.py'`
 
 Expected: No results (all consumers are within `trainer.py` itself).
 
-If any external file imports these, update the import to use `TreeSearchPatches` instead.
+If any external file imports these, update the import to use `TreeSearchPatches`
+instead.
 
 - [ ] **Step 2: Verify `__init__.py` does not re-export the removed functions**
 
-The `__init__.py` imports `CacheAwarePPOTrainer` from `trainer.py`. The removed top-level functions were never in `__init__.py`'s `__all__`, so no change needed.
+The `__init__.py` imports `CacheAwarePPOTrainer` from `trainer.py`. The removed
+top-level functions were never in `__init__.py`'s `__all__`, so no change needed.
 
 - [ ] **Step 3: Verify syntax of all modified files**
 
-Run: `python -c "import ast; [ast.parse(open(f).read()) for f in ['customized_areal/tree_search/patches.py', 'customized_areal/tree_search/trainer.py']]; print('OK')"`
+Run:
+`python -c "import ast; [ast.parse(open(f).read()) for f in ['customized_areal/tree_search/patches.py', 'customized_areal/tree_search/trainer.py']]; print('OK')"`
 Expected: `OK`
 
 - [ ] **Step 4: Commit any import fixes (if needed)**
 
 Only if Step 1 found external consumers.
 
----
+______________________________________________________________________
 
 ### Task 5: Final verification and cleanup
 
 - [ ] **Step 1: Run pre-commit on changed files**
 
-Run: `pre-commit run --files customized_areal/tree_search/patches.py customized_areal/tree_search/trainer.py tests/test_treesearch_patches.py`
+Run:
+`pre-commit run --files customized_areal/tree_search/patches.py customized_areal/tree_search/trainer.py tests/test_treesearch_patches.py`
 Expected: All checks pass
 
 - [ ] **Step 2: Run the unit tests one more time**
 
-Run: `python -m pytest tests/test_treesearch_patches.py -v`
-Expected: All tests PASS
+Run: `python -m pytest tests/test_treesearch_patches.py -v` Expected: All tests PASS
 
 - [ ] **Step 3: Final commit if any formatting fixes were needed**
 

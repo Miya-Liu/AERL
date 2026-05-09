@@ -1,15 +1,15 @@
-from customized_areal.tree_search.config import TreeBackupConfig, TreeBackupMode
+from customized_areal.tree_search.config import CacheMode, TreeBackupConfig
 
 
-class TestTreeBackupMode:
+class TestCacheMode:
     def test_off_is_default(self):
         config = TreeBackupConfig()
-        assert config.mode == TreeBackupMode.OFF
+        assert config.mode == CacheMode.OFF
 
     def test_enum_values(self):
-        assert TreeBackupMode.OFF == "off"
-        assert TreeBackupMode.IN_TRAINING == "in_training"
-        assert TreeBackupMode.CROSS_TRAINING == "cross_training"
+        assert CacheMode.OFF == "off"
+        assert CacheMode.IN_TRAINING == "in_training"
+        assert CacheMode.CROSS_TRAINING == "cross_training"
 
     def test_default_checkpoint_dir_empty(self):
         config = TreeBackupConfig()
@@ -17,8 +17,8 @@ class TestTreeBackupMode:
 
     def test_custom_values(self):
         config = TreeBackupConfig(
-            mode=TreeBackupMode.CROSS_TRAINING,
+            mode=CacheMode.CROSS_TRAINING,
             checkpoint_dir="/tmp/mcts",
         )
-        assert config.mode == TreeBackupMode.CROSS_TRAINING
+        assert config.mode == CacheMode.CROSS_TRAINING
         assert config.checkpoint_dir == "/tmp/mcts"

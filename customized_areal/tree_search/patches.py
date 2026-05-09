@@ -232,8 +232,7 @@ class TreeSearchPatches:
             if not hasattr(PPOActor, "_original_compute_advantages"):
                 PPOActor._original_compute_advantages = PPOActor.compute_advantages
             self._saved.append(
-                (PPOActor, "compute_advantages",
-                 PPOActor._original_compute_advantages)
+                (PPOActor, "compute_advantages", PPOActor._original_compute_advantages)
             )
             PPOActor.compute_advantages = new_compute_adv
 
@@ -274,6 +273,7 @@ class TreeSearchPatches:
                     patch_ppo_actor_class_to_use_distill_loss,
                     unpatch_ppo_actor_distill_loss,
                 )
+
                 patch_ppo_actor_class_to_use_distill_loss()
                 self._distill_undo = unpatch_ppo_actor_distill_loss
 

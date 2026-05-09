@@ -123,10 +123,18 @@ def _node_to_tensor_dict(node: Node, query_id: str, node_id: int) -> dict[str, A
     }
     # Response-only fields: extract response portion from full sequence
     resp_start, resp_end = _response_span(node.loss_mask)
-    _optional_tensor_field(traj, "topk_ids", node.topk_ids, torch.int32, resp_start, resp_end)
-    _optional_tensor_field(traj, "topk_logp", node.topk_logp, torch.float32, resp_start, resp_end)
-    _optional_tensor_field(traj, "distill_reward", node.distill_reward, torch.float32, resp_start, resp_end)
-    _optional_tensor_field(traj, "teacher_logp", node.teacher_logp, torch.float32, resp_start, resp_end)
+    _optional_tensor_field(
+        traj, "topk_ids", node.topk_ids, torch.int32, resp_start, resp_end
+    )
+    _optional_tensor_field(
+        traj, "topk_logp", node.topk_logp, torch.float32, resp_start, resp_end
+    )
+    _optional_tensor_field(
+        traj, "distill_reward", node.distill_reward, torch.float32, resp_start, resp_end
+    )
+    _optional_tensor_field(
+        traj, "teacher_logp", node.teacher_logp, torch.float32, resp_start, resp_end
+    )
     # Derived from logprobs for response tokens
     if resp_end > resp_start:
         traj["logp"] = torch.tensor(
@@ -179,6 +187,7 @@ class MCTSTreeStore:
         # Tree-search episode metadata
         self._turn_nodes: dict[str, int] = {}  # turn_id → node_id
         self._normalized_advantages: dict[int, float] = {}
+        self._normalized_returns: dict[int, float] = {}
 
     def _backup(self, node_id: int, reward: float) -> None:
         """Update MCTS stats for a single trajectory."""
@@ -257,6 +266,15 @@ class MCTSTreeStore:
     def get_normalized_advantage(self, node_id: int, default: float = 0.0) -> float:
         return self._normalized_advantages.get(node_id, default)
 
+    def has_normalized_advantage(self, node_id: int) -> bool:
+        return node_id in self._normalized_advantages
+
+    def set_normalized_return(self, node_id: int, value: float) -> None:
+        self._normalized_returns[node_id] = value
+
+    def get_normalized_return(self, node_id: int, default: float = 0.0) -> float:
+        return self._normalized_returns.get(node_id, default)
+
     def get_untrained_count(self, query_id: str) -> int:
         if query_id not in self._query_node_ids:
             return 0
@@ -315,3 +333,4 @@ class MCTSTreeStore:
         self._rewards.clear()
         self._turn_nodes.clear()
         self._normalized_advantages.clear()
+        self._normalized_returns.clear()

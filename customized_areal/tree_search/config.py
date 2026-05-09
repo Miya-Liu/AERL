@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-class TreeBackupMode(str, Enum):
+class CacheMode(str, Enum):
     OFF = "off"
     IN_TRAINING = "in_training"
     CROSS_TRAINING = "cross_training"
@@ -21,7 +21,7 @@ class LossMode(str, Enum):
 
 @dataclass
 class TreeBackupConfig:
-    mode: TreeBackupMode = TreeBackupMode.OFF
+    mode: CacheMode = CacheMode.OFF
     checkpoint_dir: str = ""
     advantage_mode: AdvantageMode = AdvantageMode.TREE
     loss_mode: LossMode = LossMode.GRPO

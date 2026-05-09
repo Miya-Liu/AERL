@@ -6,7 +6,7 @@ enable_offload: true
 
 # Tree search / cache configuration
 cache_dir: customized_areal/tpfc/data/tree_cache
-tree_backup_mode: cross_training
+cache_mode: cross_training
 total_train_epochs: 10
 tokenizer_path: ${actor.path}
 
@@ -73,7 +73,7 @@ actor:
   backend: fsdp:d2
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  attn_impl: flash_attention_2
+  attn_impl: sdpa
   fsdp:
     offload_params: true
   # path: /dfs/share-groups/letrain/zhoujie/Qwen3-1.7B
@@ -199,7 +199,7 @@ recover:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   freq_epochs: 1
-  freq_steps: null
+  freq_steps: 50
   freq_secs: 3600
 
 evaluator:

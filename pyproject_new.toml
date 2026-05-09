@@ -7,7 +7,7 @@ name = "areal"
 description = "AReaL: A Large-Scale Asynchronous Reinforcement Learning System"
 readme = "README.md"
 license = {text = "Apache-2.0"}
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.11,<3.13"
 version = "1.0.4"
 authors = [
     {name = "AReaL Team"},
@@ -34,6 +34,7 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Distributed Computing",
@@ -46,13 +47,6 @@ dependencies = [
     "torchaudio",
     "torchvision",
     "torchdata",
-    # Transitive deps of torch that we want to install from local wheels
-    "triton==3.5.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-cusparselt-cu12==0.7.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-nccl-cu12==2.27.5; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-nvshmem-cu12==3.3.20; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "sglang-kernel==0.4.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "flashinfer-cubin==0.6.7.post3",
     "huggingface_hub",
     "datasets>=3.0.0",
     "transformers>=5.0.0,<=5.3.0",
@@ -66,10 +60,12 @@ dependencies = [
     "openhands",
     "langchain",
     "langchain-openai",
+
     # Visualization
     "pandas",
     "matplotlib",
     "seaborn",
+
     # Utilities and data processing
     "pillow>=12.1.1",
     "pylatexenc",
@@ -121,6 +117,7 @@ dependencies = [
     "colorlog",
     "swanboard==0.1.9b1",
     "swanlab[dashboard]==0.6.12",
+
     # Distributed computing
     "ray[default]",
     "redis",
@@ -132,18 +129,13 @@ dependencies = [
     "uvloop>=0.21.0",
     "flask",
     "tenacity",
+
     # Build and packaging tools
     "build>=1.2.1",
     "wheel>=0.43.0",
     "cookiecutter>2.1.1",
     "distro-info>=1.0",
     "python-debian>=0.1.49",
-    "scipy>=1.17.1",
-    "supabase>=2.28.3",
-    "sglang[tracing]==0.5.10.post1",
-    "daytona>=0.166.0",
-    "pipx>=1.11.1",
-    "claude-code>=0.0.1",
 ]
 
 [project.optional-dependencies]
@@ -230,6 +222,9 @@ module-root = ""
 # This prevents uv from failing when CUDA-only packages don't have wheels for macOS
 environments = [
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
 override-dependencies = [
     # litellm[proxy] conflicts with sglang's exact pins:
@@ -265,15 +260,10 @@ url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 [tool.uv.sources]
-# Local wheels
-torch = { path = "wheels/torch-2.9.1+cu129-cp312-cp312-manylinux_2_28_x86_64.whl" }
-triton = { path = "wheels/triton-3.5.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl" }
-nvidia-cudnn-cu12 = { path = "wheels/nvidia_cudnn_cu12-9.16.0.29-py3-none-manylinux_2_27_x86_64.whl" }
-nvidia-cusparselt-cu12 = { path = "wheels/nvidia_cusparselt_cu12-0.7.1-py3-none-manylinux2014_x86_64.whl" }
-nvidia-nccl-cu12 = { path = "wheels/nvidia_nccl_cu12-2.27.5-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
-nvidia-nvshmem-cu12 = { path = "wheels/nvidia_nvshmem_cu12-3.3.20-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl" }
-sglang-kernel = { path = "wheels/sglang_kernel-0.4.1-cp310-abi3-manylinux2014_x86_64.whl" }
-flashinfer-cubin = { path = "wheels/flashinfer_cubin-0.6.7.post3-py3-none-any.whl" }
+torch = [
+    { index = "pytorch-cu129", extra = "sglang" },
+    { index = "pytorch-cu129", extra = "cuda" },
+]
 torchaudio = [
     { index = "pytorch-cu129", extra = "sglang" },
     { index = "pytorch-cu129", extra = "cuda" },

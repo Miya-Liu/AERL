@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from typing import Any
 
 import torch
 
@@ -119,8 +118,12 @@ def _make_traj(
     # Convert lists to tensors as expected by Node
     input_ids_tensor = torch.tensor(input_ids, dtype=torch.int32)
     loss_mask_tensor = torch.tensor(loss_mask, dtype=torch.int32)
-    logprobs_tensor = torch.tensor(logprobs, dtype=torch.float32) if logprobs is not None else None
-    versions_tensor = torch.tensor(versions, dtype=torch.int32) if versions is not None else None
+    logprobs_tensor = (
+        torch.tensor(logprobs, dtype=torch.float32) if logprobs is not None else None
+    )
+    versions_tensor = (
+        torch.tensor(versions, dtype=torch.int32) if versions is not None else None
+    )
 
     node = Node(
         input_ids=input_ids_tensor,
@@ -465,7 +468,13 @@ class TestNodeToTensorDict:
             query_id="q1",
             node_id=1,
             topk_ids=[[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
-            topk_logp=[[-1.0, -2.0], [-3.0, -4.0], [-5.0, -6.0], [-7.0, -8.0], [-9.0, -10.0]],
+            topk_logp=[
+                [-1.0, -2.0],
+                [-3.0, -4.0],
+                [-5.0, -6.0],
+                [-7.0, -8.0],
+                [-9.0, -10.0],
+            ],
             distill_reward=[[0.1], [0.2], [0.3], [0.4], [0.5]],
             teacher_logp=[[-0.1], [-0.2], [-0.3], [-0.4], [-0.5]],
         )
