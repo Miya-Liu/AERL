@@ -38,6 +38,7 @@ from customized_areal.tree_search.patches import TreeSearchPatches
 from areal import PPOTrainer
 from areal.utils import logging
 from areal.utils.environ import is_single_controller
+from areal.utils.saver import Saver
 
 logger = logging.getLogger("TreeBackupPPOTrainer")
 
@@ -214,8 +215,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
 
         # Restore trained flags from recover checkpoint, or reset for fresh run
-        from areal.utils.saver import Saver
-
         recover_dir = Saver.get_recover_checkpoint_path(
             self.config.experiment_name,
             self.config.trial_name,
@@ -247,6 +246,14 @@ class CacheAwarePPOTrainer(PPOTrainer):
         ):
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.info("Saved MCTS tree checkpoint with rollout cache")
+
+            # Save trained episode IDs to recover checkpoint directory
+            recover_dir = Saver.get_recover_checkpoint_path(
+                self.config.experiment_name,
+                self.config.trial_name,
+                self.config.cluster.fileroot,
+            )
+            TreeCheckpointManager.save_trained_episodes(recover_dir, self.tree_store)
 
     def _cache_aware_prepare_batch(
         self,
