@@ -277,3 +277,100 @@ class TestTreeCheckpointManager:
         assert loaded is not None
         assert "ep_alpha" in loaded
         assert "ep_beta" not in loaded
+
+
+class TestTrainedEpisodesRestoreIntegration:
+    def test_save_restore_cycle(self, tmp_path):
+        """Full save → load → mark_episodes_trained cycle."""
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_1",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_2",
+            outcome_reward=0.5,
+            query_id="q2",
+        )
+        store.insert_batch([n1, n2])
+        store.set_trained(n1.node_id, True)
+
+        # Save trained episodes
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        TreeCheckpointManager.save_trained_episodes(recover_dir, store)
+
+        # Simulate a fresh store (as if loaded from tree checkpoint)
+        fresh_store = MCTSTreeStore()
+        fresh_n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_1",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        fresh_n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_2",
+            outcome_reward=0.5,
+            query_id="q2",
+        )
+        fresh_store.insert_batch([fresh_n1, fresh_n2])
+
+        # Restore trained flags from sidecar
+        trained_episodes = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert trained_episodes is not None
+        fresh_store.mark_episodes_trained(trained_episodes)
+
+        assert fresh_store.is_trained(fresh_n1.node_id) is True
+        assert fresh_store.is_trained(fresh_n2.node_id) is False
+
+    def test_no_sidecar_falls_back_to_reset(self, tmp_path):
+        """When no trained_episodes.json exists, None is returned — caller should reset_trained_flags."""
+        recover_dir = str(tmp_path / "nonexistent")
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded is None
+
+    def test_untrained_nodes_not_in_saved_episodes(self, tmp_path):
+        """Only trained nodes' episode_ids appear in the saved file."""
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_trained",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_untrained",
+            outcome_reward=0.5,
+            query_id="q1",
+        )
+        store.insert_batch([n1, n2])
+        # n1 is trained, n2 is not
+        store.set_trained(n1.node_id, True)
+
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        TreeCheckpointManager.save_trained_episodes(recover_dir, store)
+
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded == {"ep_trained"}

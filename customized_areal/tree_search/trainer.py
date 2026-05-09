@@ -213,8 +213,23 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 self.tree_store = self.tree_checkpoint_manager.load()
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
 
-        # Reset trained flags for a fresh training run
-        self.tree_store.reset_trained_flags()
+        # Restore trained flags from recover checkpoint, or reset for fresh run
+        from areal.utils.saver import Saver
+
+        recover_dir = Saver.get_recover_checkpoint_path(
+            self.config.experiment_name,
+            self.config.trial_name,
+            self.config.cluster.fileroot,
+        )
+        trained_episodes = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        if trained_episodes is not None:
+            self.tree_store.mark_episodes_trained(trained_episodes)
+            logger.info(
+                f"Restored trained flags for {len(trained_episodes)} episodes "
+                f"from recover checkpoint"
+            )
+        else:
+            self.tree_store.reset_trained_flags()
 
         self._batch_builder = _CacheAwareBatchBuilder(
             self.tree_store, self.cache_config.n_samples
