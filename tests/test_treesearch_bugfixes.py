@@ -261,3 +261,61 @@ class TestTurnIdxInTensorDict:
         traj = _node_to_tensor_dict(node, "q1", 1)
         assert traj["_turn_idx_in_episode"] == 0
         assert traj["_num_turns_in_episode"] == 1
+
+
+class TestTurnIdxInGroupedWorkflow:
+    """grouped_workflow sets turn_idx 1-based per episode."""
+
+    def test_grouped_workflow_sets_turn_idx(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from customized_areal.tree_search.grouped_workflow import (
+            TreeSearchGroupedRolloutWorkflow,
+        )
+
+        node_a = _make_node()
+        node_b = _make_node()
+        node_c = _make_node()
+        node_d = _make_node()
+
+        inner = MagicMock()
+        inner.arun_episode = AsyncMock(
+            side_effect=[
+                [node_a, node_b],
+                [node_c, node_d],
+            ]
+        )
+
+        wf = TreeSearchGroupedRolloutWorkflow(
+            workflow=inner, group_size=2, logger=MagicMock()
+        )
+        result = asyncio.run(wf.arun_episode(MagicMock(), {"query_id": "q1"}))
+
+        # Group 0: turn_idx 1 and 2
+        assert result[0].turn_idx == 1
+        assert result[1].turn_idx == 2
+        # Group 1: turn_idx 1 and 2 (different episode, restarts)
+        assert result[2].turn_idx == 1
+        assert result[3].turn_idx == 2
+
+
+class TestTurnIdxCheckpoint:
+    """turn_idx survives checkpoint save/load."""
+
+    def test_turn_idx_survives_save_load(self, tmp_path):
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+
+        store = MCTSTreeStore()
+        node = _make_node()
+        node.query_id = "q1"
+        node.turn_idx = 3
+        store.insert_batch([node])
+
+        manager = TreeCheckpointManager(str(tmp_path))
+        manager.save(store)
+
+        loaded = manager.load()
+        loaded_nodes = loaded.trajectories.get("q1", [])
+        assert len(loaded_nodes) == 1
+        assert loaded_nodes[0].turn_idx == 3
