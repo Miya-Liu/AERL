@@ -71,7 +71,9 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
 
         nodes: list[Node] = []
 
-        for turn_idx, (interaction_id, interaction) in enumerate(interactions.items(), start=1):
+        for turn_idx, (interaction_id, interaction) in enumerate(
+            interactions.items(), start=1
+        ):
             assert isinstance(interaction, InteractionWithTokenLogpReward)
             resp = interaction.model_response
             assert resp is not None, "Model response is not set."
@@ -106,6 +108,12 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                         + resp.output_versions
                     )
                 else:
+                    logger.error(
+                        "concat mode: resp.input_len (%d) <= parent_len (%d) — "
+                        "expected monotonic growth. Zero-filling prompt context.",
+                        resp.input_len,
+                        parent_len,
+                    )
                     logprobs = [0.0] * resp.input_len + resp.output_logprobs
                     loss_mask = [0] * resp.input_len + [1] * resp.output_len
                     versions = [-1] * resp.input_len + resp.output_versions

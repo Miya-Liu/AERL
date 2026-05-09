@@ -209,9 +209,11 @@ class TestTurnIdxInInteractionsToNodes:
     """proxy_workflow._interactions_to_nodes sets turn_idx 1-based."""
 
     def test_interactions_to_nodes_sets_turn_idx(self):
-        from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
-        from areal.experimental.openai.types import InteractionWithTokenLogpReward
         from unittest.mock import MagicMock
+
+        from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
+
+        from areal.experimental.openai.types import InteractionWithTokenLogpReward
 
         wf = QueryIDProxyWorkflow.__new__(QueryIDProxyWorkflow)
 

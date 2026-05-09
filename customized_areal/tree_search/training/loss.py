@@ -191,7 +191,7 @@ def _resolve_proximal_logp(
         return old_logp
 
     if versions is not None and current_version is not None:
-        logprobs = logprobs[versions == current_version]
+        return logprobs[versions == current_version]
 
     return old_logp
 
@@ -287,15 +287,13 @@ def _compute_position_level_grpo_loss(
         position = pr.position + pl
         if position >= logprobs.shape[0]:
             logger.warning(
-                "Position %d + prompt_len=%d = %d exceeds logprobs length %d, "
-                "clamping to last position. This may indicate incorrect "
-                "prompt_len computation.",
+                "Skipping position %d + prompt_len=%d = %d: exceeds logprobs length %d",
                 pr.position,
                 pl,
                 position,
                 logprobs.shape[0],
             )
-            position = logprobs.shape[0] - 1
+            continue
         if position < 0:
             continue
         num_candidates = min(len(pr.rewards), max_candidates)
@@ -370,8 +368,7 @@ def _compute_position_level_grpo_loss(
     )
 
     # Pad or truncate to match loss_mask output length
-    # Bug 4 fix: avoid .item() GPU-CPU sync by keeping computation on GPU
-    output_len = loss_mask.sum()
+    output_len = int(loss_mask.sum().item())
     n_loss = loss_per_position.shape[0]
     if n_loss < output_len:
         padding = torch.zeros((output_len - n_loss), dtype=torch.float32, device=device)

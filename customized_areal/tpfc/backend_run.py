@@ -44,7 +44,7 @@ except ImportError:
 
     logger = logging.getLogger("BackendRun")
 
-DEFAULT_REFRESH_TOKEN = os.environ.get("TPFC_REFRESH_TOKEN", "")
+DEFAULT_REFRESH_TOKEN = os.environ.get("REFRESH_TOKEN", "")
 DEFAULT_AGENT_ID = os.environ.get("TPFC_AGENT_ID", "")
 
 DEFAULT_USER_ID = os.environ.get("TPFC_USER_ID", "")

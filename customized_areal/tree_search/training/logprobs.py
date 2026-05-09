@@ -169,7 +169,7 @@ def _vocab_parallel_logprobs_entropy_multi_candidates(
     else:
         raise ValueError(f"labels must be 1D or 2D, got {labels.dim()}D")
 
-    log_probs_labels[labels_mask] = float("-inf")
+    log_probs_labels[labels_mask] = 0.0
     dist.all_reduce(log_probs_labels, op=dist.ReduceOp.SUM, group=tp_group)
 
     return log_probs_labels, entropy

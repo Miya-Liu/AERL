@@ -218,7 +218,7 @@ class MultiCandidateFSDPEngine(FSDPEngine):
         if loss_mask is not None:
             lm_flat = loss_mask.squeeze(0) if loss_mask.dim() > 1 else loss_mask
             for i in range(lm_flat.shape[0]):
-                if lm_flat[i]:
+                if lm_flat[i].item():
                     prompt_len = i
                     break
 
@@ -230,9 +230,11 @@ class MultiCandidateFSDPEngine(FSDPEngine):
             for pr in position_rewards
         )
 
-        # Create 2D labels tensor filled with padding token (0)
+        # Create 2D labels tensor filled with ignore_index (-100)
         device = model_inputs.get("input_ids", torch.tensor([])).device
-        labels = torch.zeros((seq_len, max_candidates), dtype=torch.long, device=device)
+        labels = torch.full(
+            (seq_len, max_candidates), -100, dtype=torch.long, device=device
+        )
 
         # Fill in candidate token IDs for each position
         for pr in position_rewards:

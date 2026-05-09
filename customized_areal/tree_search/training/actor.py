@@ -137,7 +137,7 @@ def _distribute_position_rewards(mb_inputs, position_rewards: list) -> None:
     for i, mb in enumerate(mb_inputs.mbs):
         mb_bs = mb["attention_mask"].shape[0]
         for j in range(mb_bs):
-            orig_idx = forward_indices[offset + j]
+            orig_idx = int(forward_indices[offset + j])
             mb_assignment[orig_idx] = i
         offset += mb_bs
 

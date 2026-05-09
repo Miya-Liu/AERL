@@ -231,13 +231,8 @@ class OnPolicyDistillAgent:
                 reward,
             )
 
-            if completion_id is not None and position_rewards:
-                return {
-                    completion_id: {
-                        "position_rewards": position_rewards,
-                        "scalar_reward": reward,
-                    }
-                }
+            if completion_id is not None:
+                return {completion_id: reward}
             return reward
 
         except Exception as e:

@@ -103,6 +103,7 @@ dependencies = [
     "aiofiles",
     "aiohttp>=3.13.3,<4",
     "httpx>=0.28.1",
+    "certifi",
     "pyzmq",
     "regex",
     "python_dateutil",
@@ -119,8 +120,8 @@ dependencies = [
     "trackio",
     "colorama",
     "colorlog",
-    "swanboard==0.1.9b1",
-    "swanlab[dashboard]==0.6.12",
+    "swanboard==0.1.9b3",
+    "swanlab[dashboard]==0.7.17",
     # Distributed computing
     "ray[default]",
     "redis",

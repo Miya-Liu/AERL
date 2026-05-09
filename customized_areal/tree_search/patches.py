@@ -274,8 +274,8 @@ class TreeSearchPatches:
                     unpatch_ppo_actor_distill_loss,
                 )
 
-                patch_ppo_actor_class_to_use_distill_loss()
                 self._distill_undo = unpatch_ppo_actor_distill_loss
+                patch_ppo_actor_class_to_use_distill_loss()
 
             self._applied = True
             logger.info(

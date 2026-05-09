@@ -103,31 +103,22 @@ class _CacheAwareBatchBuilder:
 
         return cached, need_gen
 
-    def load_cached_trajectories(
-        self, cached_prompts: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def load_cached_trajectories(self, cached_prompts: list[dict[str, Any]]) -> list:
         """Load cached trajectories for prompts with available rollouts.
 
-        Returns: flat list of trajectory dicts (shape [1, seq_len] each)
+        Returns: flat list of Node objects. Conversion to tensor dicts is
+        deferred to _cache_aware_prepare_batch so that tree operations
+        (insert_batch, advantage compute, mark trained) can work with
+        Node attributes directly.
         """
-        all_trajs = []
+        all_nodes = []
         for item in cached_prompts:
             query_id = item["query_id"]
             if not query_id:
                 continue
             nodes = self.tree_store.load_trajectories(query_id, self.n_samples)
-            episode_sizes: dict[str, int] = {}
-            for node in nodes:
-                episode_sizes[node.episode_id] = episode_sizes.get(node.episode_id, 0) + 1
-            for node in nodes:
-                traj_dict = _node_to_tensor_dict(
-                    node,
-                    query_id,
-                    node.node_id,
-                    num_turns_in_episode=episode_sizes.get(node.episode_id, 1),
-                )
-                all_trajs.append(traj_dict)
-        return all_trajs
+            all_nodes.extend(nodes)
+        return all_nodes
 
 
 class CacheAwarePPOTrainer(PPOTrainer):
@@ -208,8 +199,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
     def _init_tree_components(self) -> None:
         """Create tree store, advantage computer, and checkpoint manager."""
-        self.tree_store = MCTSTreeStore()
-        self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
         self.tree_checkpoint_manager = TreeCheckpointManager(
             self.cache_config.cache_dir or self.tree_backup_config.checkpoint_dir
         )
@@ -219,6 +208,16 @@ class CacheAwarePPOTrainer(PPOTrainer):
             if self.tree_checkpoint_manager.exists():
                 self.tree_store = self.tree_checkpoint_manager.load()
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
+            else:
+                self.tree_store = MCTSTreeStore()
+        else:
+            self.tree_store = MCTSTreeStore()
+
+        # Create components AFTER checkpoint load so they reference the correct store
+        self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
+        self._batch_builder = _CacheAwareBatchBuilder(
+            self.tree_store, self.cache_config.n_samples
+        )
 
         # Restore trained flags from recover checkpoint, or reset for fresh run
         recover_dir = Saver.get_recover_checkpoint_path(
@@ -235,10 +234,6 @@ class CacheAwarePPOTrainer(PPOTrainer):
             )
         else:
             self.tree_store.reset_trained_flags()
-
-        self._batch_builder = _CacheAwareBatchBuilder(
-            self.tree_store, self.cache_config.n_samples
-        )
 
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
@@ -325,6 +320,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 workflow=workflow,
                 workflow_kwargs=workflow_kwargs,
                 group_size=group_size,
+                should_accept_fn=should_accept_fn,
             )
             if new_trajs:
                 generated_nodes = new_trajs
@@ -376,7 +372,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
             node_id = node.node_id
             converted_trajs.append(
                 _node_to_tensor_dict(
-                    node, query_id, node_id,
+                    node,
+                    query_id,
+                    node_id,
                     num_turns_in_episode=episode_sizes.get(node.episode_id, 1),
                 )
             )

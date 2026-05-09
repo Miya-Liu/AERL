@@ -58,7 +58,7 @@ class TreeAdvantageComputer:
         # Per-query GRPO normalization of Q-values for advantages
         for query_id, node_id_set in query_node_sets.items():
             node_ids = list(node_id_set)
-            q_values = [self.tree_store.get_reward(nid) for nid in node_ids]
+            q_values = [self.tree_store.get_q_value(nid) for nid in node_ids]
             if len(q_values) < 2:
                 logger.warning(
                     "Only %d sample(s) for query_id=%s — GRPO normalization "
@@ -72,7 +72,7 @@ class TreeAdvantageComputer:
                     self.tree_store.set_normalized_return(nid, 0.0)
                 continue
             mean_q = sum(q_values) / len(q_values)
-            var_q = sum((q - mean_q) ** 2 for q in q_values) / max(len(q_values) - 1, 1)
+            var_q = sum((q - mean_q) ** 2 for q in q_values) / max(len(q_values), 1)
             std_q = var_q**0.5
             for nid, q in zip(node_ids, q_values):
                 self.tree_store.set_normalized_advantage(

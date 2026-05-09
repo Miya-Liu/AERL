@@ -266,6 +266,7 @@ dependencies = [
     { name = "awex", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "blosc", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "build", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "certifi", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "claude-agent-sdk", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "claude-code", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "colorama", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -435,6 +436,7 @@ requires-dist = [
     { name = "awex", specifier = "==0.7.0" },
     { name = "blosc" },
     { name = "build", specifier = ">=1.2.1" },
+    { name = "certifi" },
     { name = "claude-agent-sdk" },
     { name = "claude-code", specifier = ">=0.0.1" },
     { name = "colorama" },
@@ -511,8 +513,8 @@ requires-dist = [
     { name = "sglang", extras = ["tracing"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'sglang'", specifier = "==0.5.10.post1" },
     { name = "sglang-kernel", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", path = "wheels/sglang_kernel-0.4.1-cp310-abi3-manylinux2014_x86_64.whl" },
     { name = "supabase", specifier = ">=2.28.3" },
-    { name = "swanboard", specifier = "==0.1.9b1" },
-    { name = "swanlab", extras = ["dashboard"], specifier = "==0.6.12" },
+    { name = "swanboard", specifier = "==0.1.9b3" },
+    { name = "swanlab", extras = ["dashboard"], specifier = "==0.7.17" },
     { name = "tabulate" },
     { name = "tenacity" },
     { name = "tensorboardx" },
@@ -4014,11 +4016,11 @@ wheels = [
 
 [[package]]
 name = "peewee"
-version = "4.0.4"
+version = "3.19.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ad/8e/8fe6b93914ed40b9cb5162e45e1be4f8bb8cf7f5a49333aa1a2d383e4870/peewee-4.0.4.tar.gz", hash = "sha256:70e07c14a10bec8d663514bda5854e44ef15d5b03974b41f7218066b6fd3a065", size = 718021, upload-time = "2026-04-02T13:52:25.73Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/b0/79462b42e89764998756e0557f2b58a15610a5b4512fbbcccae58fba7237/peewee-3.19.0.tar.gz", hash = "sha256:f88292a6f0d7b906cb26bca9c8599b8f4d8920ebd36124400d0cbaaaf915511f", size = 974035, upload-time = "2026-01-07T17:24:59.597Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/9b/bee274b72adc7c692bf7cb8d6b0cd4071acf2957e82dace45d3f2770470e/peewee-4.0.4-py3-none-any.whl", hash = "sha256:37ccd3f89e523c7b42eed023cd90b48d088753ddff1d74e854a9c6445e7bd797", size = 144487, upload-time = "2026-04-02T13:52:24.099Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/41/19c65578ef9a54b3083253c68a607f099642747168fe00f3a2bceb7c3a34/peewee-3.19.0-py3-none-any.whl", hash = "sha256:de220b94766e6008c466e00ce4ba5299b9a832117d9eb36d45d0062f3cfd7417", size = 411885, upload-time = "2026-01-07T17:24:58.33Z" },
 ]
 
 [[package]]
@@ -5688,7 +5690,7 @@ wheels = [
 
 [[package]]
 name = "swanboard"
-version = "0.1.9b1"
+version = "0.1.9b3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -5699,18 +5701,16 @@ dependencies = [
     { name = "ujson", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "uvicorn", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/df/d9019fdc9d5133423a561412f3e6d10c3e0138d9089ebfcd77ec0c951c24/swanboard-0.1.9b1.tar.gz", hash = "sha256:4502c2ca83d696f50e2be8af1f5b1c4aeecc919a91e8ef3735c23d4ffd235c6e", size = 1181675, upload-time = "2025-10-10T14:50:10.656Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/6f/dbdf80756b2263e9c0d52ac835f8f112b890a020ce3ce70c99e3e0fdfbb6/swanboard-0.1.9b3.tar.gz", hash = "sha256:df12e54773ac361c685e042c7b9850e21ca70ad5759e0a094cf52e646fcfb853", size = 1166670, upload-time = "2026-02-27T15:50:07.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/30/8598b8fb70e0e73514481e180f34937282fd9703508b66c8967f7ec18281/swanboard-0.1.9b1-py3-none-any.whl", hash = "sha256:3cb1e1a2d1592676c62f71c8af994474f9a1985b8f372247975cc283faaed748", size = 750402, upload-time = "2025-10-10T14:50:09.133Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/67/50d80015211437a2e3f1183fa9c6c0f10196360454af79245f7a7f9ae06b/swanboard-0.1.9b3-py3-none-any.whl", hash = "sha256:39461f2f0884d0cf7ef2e6cc30640c1b2cb2e1ec0d1db5feff3e0433b8d051fd", size = 751749, upload-time = "2026-02-27T15:50:05.982Z" },
 ]
 
 [[package]]
 name = "swanlab"
-version = "0.6.12"
+version = "0.7.17"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "boto3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "botocore", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "click", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-ml-py", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "platformdirs", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -5725,9 +5725,9 @@ dependencies = [
     { name = "urllib3", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "wrapt", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/49/14/4ce092270a9d5c4cabf8badb400c96e2bf740de8f668d4a9d6d56ac15130/swanlab-0.6.12.tar.gz", hash = "sha256:76faf7f8e7aa5fb9a1f5af6360b57a558425cbe4d5a2b588cc7322b7b5e8723c", size = 438210, upload-time = "2025-10-17T05:27:34.244Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3b/b0/ea0e75907ed4734ffa32f37eed88453802f119f9cda9a9f497a762dea812/swanlab-0.7.17.tar.gz", hash = "sha256:77daaa763ec26104895a3ad3c59cd59b0c1a7e2485a67cd23065540f2a1e6601", size = 503307, upload-time = "2026-05-06T04:55:35.456Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/cc/f05935e7e7fbe555552b66e6a4478b093f8d8a4472cac0fcf549efa42a9b/swanlab-0.6.12-py3-none-any.whl", hash = "sha256:193dbdf8b25a48cc84e00b131d3650e3b00cc0d8d48d374a7890208be4cb5db0", size = 305777, upload-time = "2025-10-17T05:27:32.572Z" },
+    { url = "https://files.pythonhosted.org/packages/02/4d/003f656656e080b71025065b15771cc6dabbb0509e756955f9a08cc2e2d4/swanlab-0.7.17-py3-none-any.whl", hash = "sha256:f8f1af3a582fcc4435f6b490e6e7d67e705ea80dd2b56d65ed5e976a6cf0c5b0", size = 371254, upload-time = "2026-05-06T04:55:33.823Z" },
 ]
 
 [package.optional-dependencies]

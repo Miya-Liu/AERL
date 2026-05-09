@@ -7,6 +7,7 @@ Old TrieNode-based checkpoints are incompatible and must be discarded.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -15,8 +16,12 @@ from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore, Node
 
 
 def _sanitize_filename(query_id: str) -> str:
-    """Replace characters unsafe for filenames with underscores."""
-    return re.sub(r"[^\w\-.]", "_", query_id)
+    """Replace characters unsafe for filenames with underscores and append a
+    hash of the original query_id to guarantee uniqueness.
+    """
+    sanitized = re.sub(r"[^\w\-.]", "_", query_id)
+    query_hash = hashlib.md5(query_id.encode()).hexdigest()[:8]
+    return f"{sanitized}_{query_hash}"
 
 
 class TreeCheckpointManager:

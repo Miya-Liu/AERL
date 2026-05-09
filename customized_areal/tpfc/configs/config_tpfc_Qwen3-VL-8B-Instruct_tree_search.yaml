@@ -219,7 +219,7 @@ stats_logger:
   swanlab:
     project: tpfc-grpo
     mode: cloud
-    api_key: ${oc.env:SWANLAB_API_KEY,}
+    api_key: WVB9KhdtDjWVAozYQgHu5
 
 perf_tracer:
   experiment_name: ${experiment_name}

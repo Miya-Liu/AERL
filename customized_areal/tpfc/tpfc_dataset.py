@@ -154,6 +154,9 @@ def get_tpfc_rl_dataset(
                     query = re.sub(
                         r"^\s*<context>.*?</context>\s*", "", query, flags=re.DOTALL
                     )
+                    query = re.sub(
+                        r"^\s*<context>.*?<context>\s*", "", query, flags=re.DOTALL
+                    )
                 break
 
         result = {

@@ -79,9 +79,14 @@ async def _compute_token_rewards(
         return []
 
     # Build candidate_token_ids from student top-k, truncated to *top_k*.
+    # The chosen (actually-generated) token is always placed at index 0 so
+    # that logprobs[:, 0] in the standard GRPO loss path uses the correct token.
     candidate_token_ids: list[list[int]] = []
-    for pos_logprobs in student_top_k_logprobs:
-        candidates = [tid for tid, _ in pos_logprobs[:top_k]]
+    for i, pos_logprobs in enumerate(student_top_k_logprobs):
+        chosen_tid = student_output_ids[i]
+        candidates = [chosen_tid] + [
+            tid for tid, _ in pos_logprobs[:top_k] if tid != chosen_tid
+        ]
         candidate_token_ids.append(candidates)
 
     # Query the teacher for logprobs of the candidate tokens.
