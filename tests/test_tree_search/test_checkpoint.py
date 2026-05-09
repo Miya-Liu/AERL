@@ -201,3 +201,79 @@ class TestTreeCheckpointManager:
         mcts_dir = os.path.join(str(tmp_path), "mcts_trees")
         tmp_files = [f for f in os.listdir(mcts_dir) if f.endswith(".tmp")]
         assert len(tmp_files) == 0
+
+    def test_save_and_load_trained_episodes(self, tmp_path):
+        manager = TreeCheckpointManager(str(tmp_path))
+        store = _make_store_with_data()
+        node_ids = store._query_node_ids["q1"]
+        store.set_trained(node_ids[0], True)
+
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        TreeCheckpointManager.save_trained_episodes(recover_dir, store)
+
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded is not None
+        # The node for q1 has episode_id="" (default), so that's what was saved
+        assert "" in loaded
+
+    def test_load_trained_episodes_missing_file(self, tmp_path):
+        recover_dir = str(tmp_path / "nonexistent")
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded is None
+
+    def test_load_trained_episodes_corrupt_file(self, tmp_path):
+        import os
+
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        os.makedirs(recover_dir, exist_ok=True)
+        filepath = os.path.join(recover_dir, "trained_episodes.json")
+        with open(filepath, "w") as f:
+            f.write("{invalid json")
+
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded is None
+
+    def test_save_trained_episodes_atomic(self, tmp_path):
+        """Verify no .tmp files remain after successful save."""
+        import os
+
+        manager = TreeCheckpointManager(str(tmp_path))
+        store = _make_store_with_data()
+
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        TreeCheckpointManager.save_trained_episodes(recover_dir, store)
+
+        tmp_files = [f for f in os.listdir(recover_dir) if f.endswith(".tmp")]
+        assert len(tmp_files) == 0
+
+    def test_save_trained_episodes_with_episode_ids(self, tmp_path):
+        """Nodes with explicit episode_id should be tracked correctly."""
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_alpha",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_beta",
+            outcome_reward=0.5,
+            query_id="q1",
+        )
+        store.insert_batch([n1, n2])
+        store.set_trained(n1.node_id, True)
+
+        recover_dir = str(tmp_path / "recover_checkpoint")
+        TreeCheckpointManager.save_trained_episodes(recover_dir, store)
+
+        loaded = TreeCheckpointManager.load_trained_episodes(recover_dir)
+        assert loaded is not None
+        assert "ep_alpha" in loaded
+        assert "ep_beta" not in loaded

@@ -168,3 +168,42 @@ class TreeCheckpointManager:
             distill_reward=data.get("distill_reward"),
             teacher_logp=data.get("teacher_logp"),
         )
+
+    @staticmethod
+    def save_trained_episodes(
+        recover_checkpoint_dir: str, tree_store: MCTSTreeStore
+    ) -> None:
+        """Save trained episode IDs to the recover checkpoint directory."""
+        trained_ids: set[str] = set()
+        for query_id, records in tree_store.trajectories.items():
+            for node in records:
+                if tree_store.is_trained(node.node_id):
+                    trained_ids.add(node.episode_id)
+        data = {"trained_episode_ids": sorted(trained_ids)}
+        os.makedirs(recover_checkpoint_dir, exist_ok=True)
+        filepath = os.path.join(recover_checkpoint_dir, "trained_episodes.json")
+        tmp_path = filepath + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+
+    @staticmethod
+    def load_trained_episodes(
+        recover_checkpoint_dir: str,
+    ) -> set[str] | None:
+        """Load trained episode IDs from the recover checkpoint directory.
+
+        Returns the set of trained episode IDs, or None if the file does
+        not exist or is corrupt.
+        """
+        filepath = os.path.join(recover_checkpoint_dir, "trained_episodes.json")
+        if not os.path.isfile(filepath):
+            return None
+        try:
+            with open(filepath) as f:
+                data = json.load(f)
+            return set(data["trained_episode_ids"])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
