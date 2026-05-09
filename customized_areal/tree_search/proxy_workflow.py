@@ -23,7 +23,6 @@ If ``agent`` is provided directly (as a kwarg), ``agent_path`` is ignored.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 from customized_areal.tree_search.mcts_tree_store import Node
@@ -162,10 +161,9 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
             isinstance(v, InteractionWithTokenLogpReward) for v in result.values()
         ):
             nodes = self._interactions_to_nodes(result)
-            episode_id = uuid.uuid4().hex
-            for turn_idx, node in enumerate(nodes, start=1):
-                node.episode_id = episode_id
-                node.turn_idx = turn_idx
+            if query_id:
+                for node in nodes:
+                    node.episode_id = query_id
             return nodes
 
         return None

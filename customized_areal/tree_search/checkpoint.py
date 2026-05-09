@@ -1,3 +1,9 @@
+"""Checkpoint save/load for the flat Node store.
+
+Unlike the old TrieNode-based format, MCTS stats are keyed by seq_id (int)
+and serialize directly — no rebuild_mcts_stats() needed after loading.
+Old TrieNode-based checkpoints are incompatible and must be discarded.
+"""
 
 from __future__ import annotations
 
