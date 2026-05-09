@@ -320,6 +320,20 @@ class MCTSTreeStore:
         for key in self._trained:
             self._trained[key] = False
 
+    def mark_episodes_trained(self, episode_ids: set[str]) -> None:
+        """Set trained flags based on episode IDs.
+
+        Nodes whose episode_id is in the given set are marked trained.
+        All other nodes are marked untrained. Episode IDs not present
+        in the store are silently ignored.
+        """
+        for node_id in self._trained:
+            self._trained[node_id] = False
+        for query_id, records in self.trajectories.items():
+            for node in records:
+                if node.episode_id in episode_ids:
+                    self._trained[node.node_id] = True
+
     def clear(self) -> None:
         """Reset all trajectories, stats, and indices."""
         self.trajectories.clear()

@@ -336,6 +336,100 @@ class TestMCTSTreeStoreTrainedFlag:
         store.reset_trained_flags()
         assert store.is_trained(traj.node_id) is False
 
+    def test_mark_episodes_trained(self):
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_a",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_b",
+            outcome_reward=0.5,
+            query_id="q1",
+        )
+        n3 = Node(
+            input_ids=[7, 8, 9],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.3],
+            versions=[0, 0, 0],
+            episode_id="ep_a",
+            outcome_reward=0.3,
+            query_id="q1",
+        )
+        store.insert_batch([n1, n2, n3])
+        store.mark_episodes_trained({"ep_a"})
+        assert store.is_trained(n1.node_id) is True
+        assert store.is_trained(n2.node_id) is False
+        assert store.is_trained(n3.node_id) is True
+
+    def test_mark_episodes_trained_resets_others(self):
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_a",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        n2 = Node(
+            input_ids=[4, 5, 6],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.2],
+            versions=[0, 0, 0],
+            episode_id="ep_b",
+            outcome_reward=0.5,
+            query_id="q1",
+        )
+        store.insert_batch([n1, n2])
+        store.set_trained(n1.node_id, True)
+        store.set_trained(n2.node_id, True)
+        store.mark_episodes_trained({"ep_b"})
+        assert store.is_trained(n1.node_id) is False
+        assert store.is_trained(n2.node_id) is True
+
+    def test_mark_episodes_trained_empty_set(self):
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_a",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        store.insert_batch([n1])
+        store.set_trained(n1.node_id, True)
+        store.mark_episodes_trained(set())
+        assert store.is_trained(n1.node_id) is False
+
+    def test_mark_episodes_trained_unknown_episode(self):
+        """Episode IDs not in the store are silently ignored."""
+        store = MCTSTreeStore()
+        n1 = Node(
+            input_ids=[1, 2, 3],
+            loss_mask=[0, 0, 1],
+            logprobs=[0.0, 0.0, -0.1],
+            versions=[0, 0, 0],
+            episode_id="ep_a",
+            outcome_reward=1.0,
+            query_id="q1",
+        )
+        store.insert_batch([n1])
+        store.mark_episodes_trained({"nonexistent_episode"})
+        assert store.is_trained(n1.node_id) is False
+
     def test_get_reward(self):
         store = MCTSTreeStore()
         t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
