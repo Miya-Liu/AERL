@@ -135,13 +135,9 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                 logprobs=logprobs,
                 versions=versions,
                 outcome_reward=outcome_reward,
-                node_id=0,
                 turn_idx=turn_idx,
-                episode_id="",
                 topk_ids=topk_ids if topk_ids else None,
                 topk_logp=topk_logp if topk_logp else None,
-                distill_reward=None,
-                teacher_logp=None,
             )
 
             nodes.append(node)
