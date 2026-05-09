@@ -50,14 +50,11 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
             query_id = data.get("query_id") or ""
             all_nodes: list[Node] = []
             for group_idx, result in enumerate(valid_results):
-                episode_id = (
-                    f"{query_id}_{group_idx}_{uuid.uuid4().hex[:8]}"
-                    if query_id
-                    else f"{group_idx}_{uuid.uuid4().hex[:8]}"
-                )
-                for node in result:
+                episode_id = f"{query_id}_{group_idx}_{uuid.uuid4().hex}"
+                for turn_idx, node in enumerate(result, start=1):
                     node.episode_id = episode_id
                     node.query_id = query_id
+                    node.turn_idx = turn_idx
                 all_nodes.extend(result)
             return all_nodes if all_nodes else None
 
