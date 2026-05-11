@@ -11,14 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from customized_areal.tree_search.config import AdvantageMode, LossMode
-from customized_areal.tree_search.grouped_workflow import (
-    TreeSearchGroupedRolloutWorkflow,
-)
 from customized_areal.tree_search.proxy_workflow import QueryIDProxyWorkflow
-from customized_areal.tree_search.workflow_executor import TreeSearchWorkflowExecutor
 
-from areal.infra.remote_inf_engine import GroupedRolloutWorkflow
-from areal.trainer.ppo.actor import PPOActor
 from areal.utils import logging
 
 logger = logging.getLogger("TreeSearchPatches")
@@ -56,11 +50,15 @@ class TreeSearchPatches:
         advantage_mode: AdvantageMode,
         loss_mode: LossMode,
         group_size: int,
+        tree_store: Any | None = None,
+        advantage_computer: Any | None = None,
     ):
         self._engine = self._unwrap_engine(rollout_engine)
         self._advantage_mode = advantage_mode
         self._loss_mode = loss_mode
         self._group_size = group_size
+        self._tree_store = tree_store
+        self._advantage_computer = advantage_computer
 
         # (target_obj, attr_name, original_value) for every setattr patch
         self._saved: list[tuple[Any, str, Any]] = []
@@ -98,55 +96,16 @@ class TreeSearchPatches:
         self._saved.append((obj, attr, original))
         setattr(obj, attr, new_value)
 
-    def _save_and_set_method(self, obj: Any, attr: str, new_method: Any) -> None:
-        """Save and replace a method (binds new_method to obj)."""
-        original = getattr(obj, attr)
-        self._saved.append((obj, attr, original))
-        setattr(obj, attr, new_method.__get__(obj, type(obj)))
-
     # ------------------------------------------------------------------
     # Individual patch builders
     # ------------------------------------------------------------------
 
-    def _build_tree_backup_compute_advantages(self):
-        """Build patched compute_advantages that restores tree advantages."""
-        if hasattr(PPOActor, "_original_compute_advantages"):
-            original = PPOActor._original_compute_advantages
-        else:
-            original = PPOActor.compute_advantages
-        advantage_mode = self._advantage_mode
-
-        def _patched(self_actor, data):
-            if advantage_mode == AdvantageMode.TREE:
-                saved_adv = [traj.get("advantages") for traj in data]
-                saved_ret = [traj.get("returns") for traj in data]
-            result = original(self_actor, data)
-            if advantage_mode == AdvantageMode.TREE:
-                restored = 0
-                for i, traj in enumerate(result):
-                    if saved_adv[i] is not None:
-                        traj["advantages"] = saved_adv[i]
-                        traj["returns"] = saved_ret[i]
-                        restored += 1
-                if restored < len(result):
-                    logger.warning(
-                        f"Tree advantages missing for "
-                        f"{len(result) - restored}/{len(result)} "
-                        f"trajectories in TREE mode — fell back to GAE"
-                    )
-                elif restored:
-                    logger.debug(
-                        f"Restored tree advantages for {restored} "
-                        f"trajectories (mode=TREE)"
-                    )
-            return result
-
-        return _patched
-
     def _build_tree_search_wrap(self):
-        """Build patched _wrap_openai_agent returning
-        TreeSearchGroupedRolloutWorkflow."""
+        """Build patched _wrap_openai_agent returning QueryIDProxyWorkflow."""
         engine = self._engine
+        tree_store = self._tree_store
+        advantage_computer = self._advantage_computer
+        advantage_mode = self._advantage_mode
         group_size = self._group_size
 
         def _tree_search_wrap(agent, proxy_addr):
@@ -156,7 +115,7 @@ class TreeSearchPatches:
                     "config.agent is None; tree search workflow requires "
                     "agent configuration. Set agent.mode in the config."
                 )
-            inner = QueryIDProxyWorkflow(
+            return QueryIDProxyWorkflow(
                 mode=agent_cfg.mode,
                 agent=agent,
                 proxy_addr=proxy_addr,
@@ -165,63 +124,13 @@ class TreeSearchPatches:
                 export_style=agent_cfg.export_style,
                 subproc_max_workers=agent_cfg.subproc_max_workers,
                 proxy_gateway_addr=getattr(engine, "_proxy_gateway_addr", None),
-            )
-            return TreeSearchGroupedRolloutWorkflow(
-                workflow=inner,
                 group_size=group_size,
-                logger=logger,
+                tree_store=tree_store,
+                advantage_computer=advantage_computer,
+                advantage_mode=advantage_mode,
             )
 
         return _tree_search_wrap
-
-    def _build_patched_resolve(self):
-        """Build patched _resolve_workflow that strips outer
-        GroupedRolloutWorkflow when the inner workflow is already
-        TreeSearchGroupedRolloutWorkflow.
-
-        The upstream _resolve_workflow unconditionally wraps with
-        GroupedRolloutWorkflow when group_size > 1
-        (remote_inf_engine.py:698-700), but
-        TreeSearchGroupedRolloutWorkflow already handles grouping
-        internally.
-        """
-        engine = self._engine
-        original_resolve = engine._resolve_workflow
-
-        def _patched_resolve(self_engine, wf, wf_kwargs=None, gs=1):
-            resolved = original_resolve(wf, wf_kwargs, gs)
-            if isinstance(resolved, GroupedRolloutWorkflow) and isinstance(
-                resolved.workflow, TreeSearchGroupedRolloutWorkflow
-            ):
-                logger.debug(
-                    "Skipping outer GroupedRolloutWorkflow wrapper "
-                    "(TreeSearchGroupedRolloutWorkflow already handles grouping)"
-                )
-                return resolved.workflow
-            return resolved
-
-        return _patched_resolve
-
-    def _build_tree_search_executor(self):
-        """Build a TreeSearchWorkflowExecutor replacing the original."""
-        engine = self._engine
-        original = engine.workflow_executor
-
-        new_executor = TreeSearchWorkflowExecutor(
-            config=engine.config,
-            inference_engine=engine,
-        )
-
-        # Copy all internal state from the original executor.
-        for attr, value in vars(original).items():
-            if attr.startswith("__"):
-                continue
-            if attr in ("config", "inference_engine"):
-                continue
-            setattr(new_executor, attr, value)
-        new_executor._initialized = True
-
-        return new_executor
 
     # ------------------------------------------------------------------
     # Apply / Restore
@@ -234,37 +143,20 @@ class TreeSearchPatches:
             return
 
         try:
-            # Patch 1: PPOActor.compute_advantages (class-level)
-            new_compute_adv = self._build_tree_backup_compute_advantages()
-            if not hasattr(PPOActor, "_original_compute_advantages"):
-                PPOActor._original_compute_advantages = PPOActor.compute_advantages
-            self._saved.append(
-                (PPOActor, "compute_advantages", PPOActor._original_compute_advantages)
-            )
-            PPOActor.compute_advantages = new_compute_adv
-
-            # Detect RolloutController (single-controller mode).
-            # The actual _wrap_openai_agent / workflow_executor live on the
-            # worker-side RemoteInfEngine and cannot be patched from here.
-            # Trainer-side _tensor_dicts_to_nodes handles dict→Node conversion.
             _is_controller = hasattr(self._engine, "inf_engine")
 
             logger.warning(
                 "PATCH_VERIFICATION: TreeSearchPatches.apply — "
                 "engine_type=%s, has_inf_engine=%s, is_controller=%s, "
-                "has_wrap_openai_agent=%s, has_resolve_workflow=%s, "
-                "has_workflow_executor=%s",
+                "has_wrap_openai_agent=%s",
                 type(self._engine).__name__,
                 hasattr(self._engine, "inf_engine"),
                 _is_controller,
                 hasattr(self._engine, "_wrap_openai_agent"),
-                hasattr(self._engine, "_resolve_workflow"),
-                hasattr(self._engine, "workflow_executor"),
             )
 
             if not _is_controller:
-                # Direct engine mode: patch in-process
-                # Patch 2: engine._wrap_openai_agent
+                # Patch: engine._wrap_openai_agent
                 if hasattr(self._engine, "_wrap_openai_agent"):
                     self._save_and_set(
                         self._engine,
@@ -280,34 +172,6 @@ class TreeSearchPatches:
                         "Engine has no _wrap_openai_agent method; "
                         "tree search workflow will not be available"
                     )
-
-                # Patch 2b: engine._resolve_workflow (double-wrapping prevention)
-                if hasattr(self._engine, "_resolve_workflow"):
-                    self._save_and_set_method(
-                        self._engine,
-                        "_resolve_workflow",
-                        self._build_patched_resolve(),
-                    )
-                    logger.warning(
-                        "PATCH_VERIFICATION: _resolve_workflow patched on %s",
-                        type(self._engine).__name__,
-                    )
-
-                # Patch 3: engine.workflow_executor
-                if hasattr(self._engine, "workflow_executor"):
-                    new_executor = self._build_tree_search_executor()
-                    self._save_and_set(self._engine, "workflow_executor", new_executor)
-                    logger.warning(
-                        "PATCH_VERIFICATION: workflow_executor patched on %s, "
-                        "new_executor_type=%s",
-                        type(self._engine).__name__,
-                        type(new_executor).__name__,
-                    )
-                else:
-                    logger.warning(
-                        "Engine has no workflow_executor attribute; "
-                        "tree search workflow executor will not be available"
-                    )
             else:
                 logger.info(
                     "Engine is a RolloutController; skipping worker-side "
@@ -315,7 +179,7 @@ class TreeSearchPatches:
                     "_tensor_dicts_to_nodes will convert tensor dicts to Nodes."
                 )
 
-            # Patch 4 (conditional): PPOActor._ppo_update distill loss
+            # Patch: distill loss (conditional)
             if self._loss_mode != LossMode.GRPO:
                 from customized_areal.tree_search.training.actor import (
                     patch_ppo_actor_class_to_use_distill_loss,
@@ -350,10 +214,6 @@ class TreeSearchPatches:
         # Restore in reverse order (LIFO)
         for obj, attr, original in reversed(self._saved):
             setattr(obj, attr, original)
-
-        # Clean up idempotency marker
-        if hasattr(PPOActor, "_original_compute_advantages"):
-            del PPOActor._original_compute_advantages
 
         self._saved.clear()
         self._applied = False
