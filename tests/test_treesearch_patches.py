@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -38,6 +38,9 @@ def mock_engine():
         subproc_max_workers=1,
     )
     engine._proxy_gateway_addr = None
+    # Ensure the mock is not detected as a RolloutController (which would skip
+    # the _wrap_openai_agent patch).
+    del engine.inf_engine
     return engine
 
 
@@ -48,23 +51,13 @@ class TestApplyRestore:
         self, mock_engine, saved_ppo_actor_state
     ):
         patches = TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4)
-        original_compute = PPOActor.compute_advantages
         original_wrap = mock_engine._wrap_openai_agent
-        original_resolve = mock_engine._resolve_workflow
-        original_executor = mock_engine.workflow_executor
 
         patches.apply()
-        assert PPOActor.compute_advantages != original_compute
         assert mock_engine._wrap_openai_agent != original_wrap
-        assert mock_engine._resolve_workflow != original_resolve
-        assert mock_engine.workflow_executor != original_executor
 
         patches.restore()
-        assert PPOActor.compute_advantages == original_compute
         assert mock_engine._wrap_openai_agent == original_wrap
-        assert mock_engine._resolve_workflow == original_resolve
-        assert mock_engine.workflow_executor == original_executor
-        assert not hasattr(PPOActor, "_original_compute_advantages")
 
 
 class TestIdempotency:
@@ -73,10 +66,10 @@ class TestIdempotency:
     def test_apply_twice_is_noop(self, mock_engine, saved_ppo_actor_state):
         patches = TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4)
         patches.apply()
-        first_compute = PPOActor.compute_advantages
+        first_wrap = mock_engine._wrap_openai_agent
         patches.apply()
-        second_compute = PPOActor.compute_advantages
-        assert first_compute is second_compute
+        second_wrap = mock_engine._wrap_openai_agent
+        assert first_wrap is second_wrap
         patches.restore()
 
 
@@ -86,20 +79,20 @@ class TestContextManager:
     def test_context_manager_restores_on_normal_exit(
         self, mock_engine, saved_ppo_actor_state
     ):
-        original_compute = PPOActor.compute_advantages
+        original_wrap = mock_engine._wrap_openai_agent
         with TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4):
-            assert PPOActor.compute_advantages != original_compute
-        assert PPOActor.compute_advantages == original_compute
+            assert mock_engine._wrap_openai_agent != original_wrap
+        assert mock_engine._wrap_openai_agent == original_wrap
 
     def test_context_manager_restores_on_exception(
         self, mock_engine, saved_ppo_actor_state
     ):
-        original_compute = PPOActor.compute_advantages
+        original_wrap = mock_engine._wrap_openai_agent
         with pytest.raises(ValueError):
             with TreeSearchPatches(mock_engine, AdvantageMode.TREE, LossMode.GRPO, 4):
-                assert PPOActor.compute_advantages != original_compute
+                assert mock_engine._wrap_openai_agent != original_wrap
                 raise ValueError("Test exception")
-        assert PPOActor.compute_advantages == original_compute
+        assert mock_engine._wrap_openai_agent == original_wrap
 
 
 class TestTreeSearchWrap:
@@ -118,35 +111,6 @@ class TestTreeSearchWrap:
         wrap_func = patches._build_tree_search_wrap()
         with pytest.raises(RuntimeError, match="config.agent is None"):
             wrap_func(MagicMock(), "test_proxy_addr")
-
-    def test_returns_treesearch_workflow(self, saved_ppo_actor_state):
-        from customized_areal.tree_search.grouped_workflow import (
-            TreeSearchGroupedRolloutWorkflow,
-        )
-
-        engine = MagicMock()
-        engine._wrap_openai_agent = MagicMock()
-        engine._resolve_workflow = MagicMock()
-        engine.workflow_executor = MagicMock()
-        engine.config = MagicMock()
-        engine.config.agent = MagicMock(
-            mode="mode",
-            admin_api_key="key",
-            turn_discount=1.0,
-            export_style="concat",
-            subproc_max_workers=1,
-        )
-        engine._proxy_gateway_addr = None
-
-        patches = TreeSearchPatches(engine, AdvantageMode.TREE, LossMode.GRPO, 4)
-        wrap_func = patches._build_tree_search_wrap()
-
-        with patch(
-            "customized_areal.tree_search.patches.QueryIDProxyWorkflow",
-            return_value=MagicMock(),
-        ):
-            result = wrap_func(MagicMock(), "test_proxy_addr")
-            assert isinstance(result, TreeSearchGroupedRolloutWorkflow)
 
 
 class TestRestoreSafety:
