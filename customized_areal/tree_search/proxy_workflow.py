@@ -156,6 +156,36 @@ def interactions_dict_to_nodes(interactions: dict[str, Any]) -> list[Node]:
     return nodes
 
 
+def _nodes_to_batched_tensor_dict(nodes: list[Node]) -> dict[str, Any] | None:
+    """Convert list[Node] to a batched tensor dict with metadata.
+
+    Each Node is converted to a [1, seq_len] tensor dict via
+    _node_to_tensor_dict, then all are concatenated via
+    concat_padded_tensors into a single [N, seq_len] batched dict.
+
+    Metadata (query_id, node_id, episode_id, turn_idx) is stored as
+    single-element lists in each per-Node dict so that concat_padded_tensors
+    flat-concatenates them across nodes.
+
+    Returns None if nodes is empty.
+    """
+    if not nodes:
+        return None
+
+    from areal.utils.data import concat_padded_tensors
+    from customized_areal.tree_search.mcts_tree_store import _node_to_tensor_dict
+
+    tensor_dicts = [
+        _node_to_tensor_dict(
+            node,
+            query_id=node.query_id or "",
+            node_id=node.node_id,
+        )
+        for node in nodes
+    ]
+    return concat_padded_tensors(tensor_dicts)
+
+
 class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
     """OpenAIProxyWorkflow that preserves dataset query_id in trajectories.
 
