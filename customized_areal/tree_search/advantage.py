@@ -37,8 +37,8 @@ class TreeAdvantageComputer:
         outcome_reward, broadcast across response positions via prompt mask.
         """
         # Collect unique (query_id → set of node_ids) and reward_per_node
-        query_node_sets: dict[str, set[int]] = {}
-        node_rewards: dict[int, float] = {}
+        query_node_sets: dict[str, set[str]] = {}
+        node_rewards: dict[str, float] = {}
 
         for traj in trajectories:
             query_id = self._get_query_id(traj)
