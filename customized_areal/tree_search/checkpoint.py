@@ -1,7 +1,7 @@
 """Checkpoint save/load for the flat Node store.
 
-Unlike the old TrieNode-based format, MCTS stats are keyed by seq_id (int)
-and serialize directly — no rebuild_mcts_stats() needed after loading.
+MCTS stats are keyed by node_id (string interaction IDs) and serialize
+directly — no rebuild_mcts_stats() needed after loading.
 Old TrieNode-based checkpoints are incompatible and must be discarded.
 """
 
@@ -52,21 +52,20 @@ class TreeCheckpointManager:
 
         # Save metadata (atomic)
         metadata = {
-            "next_node_id": tree_store._next_node_id,
             "node_id_to_key": {
-                str(k): [v[0], v[1]] for k, v in tree_store._node_id_to_key.items()
+                k: [v[0], v[1]] for k, v in tree_store._node_id_to_key.items()
             },
             "query_node_ids": {k: v for k, v in tree_store._query_node_ids.items()},
-            "visit_counts": {str(k): v for k, v in tree_store._visit_counts.items()},
-            "total_values": {str(k): v for k, v in tree_store._total_values.items()},
-            "q_values": {str(k): v for k, v in tree_store._q_values.items()},
-            "trained": {str(k): v for k, v in tree_store._trained.items()},
-            "rewards": {str(k): v for k, v in tree_store._rewards.items()},
+            "visit_counts": {k: v for k, v in tree_store._visit_counts.items()},
+            "total_values": {k: v for k, v in tree_store._total_values.items()},
+            "q_values": {k: v for k, v in tree_store._q_values.items()},
+            "trained": {k: v for k, v in tree_store._trained.items()},
+            "rewards": {k: v for k, v in tree_store._rewards.items()},
             "normalized_advantages": {
-                str(k): v for k, v in tree_store._normalized_advantages.items()
+                k: v for k, v in tree_store._normalized_advantages.items()
             },
             "normalized_returns": {
-                str(k): v for k, v in tree_store._normalized_returns.items()
+                k: v for k, v in tree_store._normalized_returns.items()
             },
             "turn_nodes": tree_store._turn_nodes,
             "query_id_to_file": query_id_to_file,
@@ -85,32 +84,29 @@ class TreeCheckpointManager:
         with open(os.path.join(self.save_dir, "metadata.json")) as f:
             metadata = json.load(f)
 
-        store._next_node_id = metadata.get(
-            "next_node_id", metadata.get("next_seq_id", 1)
-        )
         node_id_to_key_raw = metadata.get(
             "node_id_to_key", metadata.get("seq_id_to_key", {})
         )
         store._node_id_to_key = {
-            int(k): (v[0], v[1]) for k, v in node_id_to_key_raw.items()
+            k: (v[0], v[1]) for k, v in node_id_to_key_raw.items()
         }
         store._query_node_ids = metadata.get(
             "query_node_ids", metadata.get("query_seq_ids", {})
         )
         store._visit_counts = {
-            int(k): v for k, v in metadata.get("visit_counts", {}).items()
+            k: v for k, v in metadata.get("visit_counts", {}).items()
         }
         store._total_values = {
-            int(k): v for k, v in metadata.get("total_values", {}).items()
+            k: v for k, v in metadata.get("total_values", {}).items()
         }
-        store._q_values = {int(k): v for k, v in metadata.get("q_values", {}).items()}
-        store._trained = {int(k): v for k, v in metadata.get("trained", {}).items()}
-        store._rewards = {int(k): v for k, v in metadata.get("rewards", {}).items()}
+        store._q_values = {k: v for k, v in metadata.get("q_values", {}).items()}
+        store._trained = {k: v for k, v in metadata.get("trained", {}).items()}
+        store._rewards = {k: v for k, v in metadata.get("rewards", {}).items()}
         store._normalized_advantages = {
-            int(k): v for k, v in metadata.get("normalized_advantages", {}).items()
+            k: v for k, v in metadata.get("normalized_advantages", {}).items()
         }
         store._normalized_returns = {
-            int(k): v for k, v in metadata.get("normalized_returns", {}).items()
+            k: v for k, v in metadata.get("normalized_returns", {}).items()
         }
         store._turn_nodes = metadata.get("turn_nodes", {})
 
@@ -165,7 +161,7 @@ class TreeCheckpointManager:
             logprobs=data["logprobs"],
             versions=data["versions"],
             outcome_reward=data.get("outcome_reward", data.get("reward", 0.0)),
-            node_id=data.get("node_id", 0),
+            node_id=data.get("node_id", ""),
             parent_node_id=data.get("parent_node_id"),
             episode_id=data.get("episode_id", ""),
             turn_idx=data.get("turn_idx", 0),
