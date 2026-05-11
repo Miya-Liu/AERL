@@ -171,29 +171,29 @@ class MCTSTreeStore:
     """Flat trajectory store with MCTS statistics.
 
     Manages multiple trajectories per query, tracks MCTS statistics
-    (visit counts, Q-values) per trajectory, and provides cache-aware
-    loading of untrained trajectories.
+    (visit counts, Q-values) per trajectory (keyed by node_id, a string
+    interaction ID), and provides cache-aware loading of untrained
+    trajectories.
     """
 
     def __init__(self) -> None:
         self.trajectories: dict[str, list[Node]] = {}
-        self._node_id_to_key: dict[int, tuple[str, int]] = {}
-        self._query_node_ids: dict[str, list[int]] = {}
-        self._next_node_id: int = 1
+        self._node_id_to_key: dict[str, tuple[str, int]] = {}
+        self._query_node_ids: dict[str, list[str]] = {}
 
-        self._visit_counts: dict[int, int] = {}
-        self._total_values: dict[int, float] = {}
-        self._q_values: dict[int, float] = {}
+        self._visit_counts: dict[str, int] = {}
+        self._total_values: dict[str, float] = {}
+        self._q_values: dict[str, float] = {}
 
-        self._trained: dict[int, bool] = {}
-        self._rewards: dict[int, float] = {}
+        self._trained: dict[str, bool] = {}
+        self._rewards: dict[str, float] = {}
 
         # Tree-search episode metadata
-        self._turn_nodes: dict[str, int] = {}  # turn_id → node_id
-        self._normalized_advantages: dict[int, float] = {}
-        self._normalized_returns: dict[int, float] = {}
+        self._turn_nodes: dict[str, str] = {}  # turn_id → node_id
+        self._normalized_advantages: dict[str, float] = {}
+        self._normalized_returns: dict[str, float] = {}
 
-    def _backup(self, node_id: int, reward: float) -> None:
+    def _backup(self, node_id: str, reward: float) -> None:
         """Update MCTS stats for a single trajectory."""
         self._visit_counts[node_id] = self._visit_counts.get(node_id, 0) + 1
         self._total_values[node_id] = self._total_values.get(node_id, 0.0) + reward
@@ -201,15 +201,18 @@ class MCTSTreeStore:
             self._total_values[node_id] / self._visit_counts[node_id]
         )
 
-    def _insert_single(self, query_id: str, node: Node) -> int:
-        """Insert a single Node and assign a node_id.
+    def _insert_single(self, query_id: str, node: Node) -> str:
+        """Insert a single Node, reading node_id from the node itself.
 
         Supports both Node dataclass instances and plain dicts (the
         latter arriving when tree search patches aren't active on the
         remote engine and _convert_trajs_to_nodes hasn't converted yet).
         """
-        node_id = self._next_node_id
-        self._next_node_id += 1
+        node_id = node.node_id if isinstance(node, Node) else node.get("node_id", "")
+        if not node_id:
+            raise ValueError(
+                "Node must have a non-empty node_id (interaction_id) before insert"
+            )
 
         idx = len(self.trajectories.setdefault(query_id, []))
         self.trajectories[query_id].append(node)
@@ -238,8 +241,8 @@ class MCTSTreeStore:
         node_id assigned (loaded from cache) are skipped.
         """
         for node in trajectories:
-            existing_id = getattr(node, "node_id", 0)
-            if existing_id != 0 and existing_id in self._node_id_to_key:
+            existing_id = getattr(node, "node_id", "")
+            if existing_id != "" and existing_id in self._node_id_to_key:
                 continue
             query_id = (
                 node.get("query_id", "")
@@ -248,7 +251,7 @@ class MCTSTreeStore:
             )
             self._insert_single(query_id, node)
 
-    def get_advantages(self, query_id: str, node_id: int) -> torch.Tensor:
+    def get_advantages(self, query_id: str, node_id: str) -> torch.Tensor:
         """Return per-token advantages: Q-value on response tokens, 0 on prompt."""
         qid, idx = self._node_id_to_key[node_id]
         node = self.trajectories[qid][idx]
@@ -260,37 +263,37 @@ class MCTSTreeStore:
             advantages[start:end] = q_val
         return advantages
 
-    def get_prompt_mask(self, query_id: str, node_id: int) -> torch.Tensor:
+    def get_prompt_mask(self, query_id: str, node_id: str) -> torch.Tensor:
         """Return boolean mask: True for response tokens, False for prompt."""
         qid, idx = self._node_id_to_key[node_id]
         node = self.trajectories[qid][idx]
         return torch.tensor(node.loss_mask, dtype=torch.bool)
 
-    def set_trained(self, node_id: int, trained: bool = True) -> None:
+    def set_trained(self, node_id: str, trained: bool = True) -> None:
         self._trained[node_id] = trained
 
-    def is_trained(self, node_id: int) -> bool:
+    def is_trained(self, node_id: str) -> bool:
         return self._trained.get(node_id, False)
 
-    def get_reward(self, node_id: int) -> float:
+    def get_reward(self, node_id: str) -> float:
         return self._rewards.get(node_id, 0.0)
 
-    def get_q_value(self, node_id: int) -> float:
+    def get_q_value(self, node_id: str) -> float:
         return self._q_values.get(node_id, 0.0)
 
-    def set_normalized_advantage(self, node_id: int, value: float) -> None:
+    def set_normalized_advantage(self, node_id: str, value: float) -> None:
         self._normalized_advantages[node_id] = value
 
-    def get_normalized_advantage(self, node_id: int, default: float = 0.0) -> float:
+    def get_normalized_advantage(self, node_id: str, default: float = 0.0) -> float:
         return self._normalized_advantages.get(node_id, default)
 
-    def has_normalized_advantage(self, node_id: int) -> bool:
+    def has_normalized_advantage(self, node_id: str) -> bool:
         return node_id in self._normalized_advantages
 
-    def set_normalized_return(self, node_id: int, value: float) -> None:
+    def set_normalized_return(self, node_id: str, value: float) -> None:
         self._normalized_returns[node_id] = value
 
-    def get_normalized_return(self, node_id: int, default: float = 0.0) -> float:
+    def get_normalized_return(self, node_id: str, default: float = 0.0) -> float:
         return self._normalized_returns.get(node_id, default)
 
     def get_untrained_count(self, query_id: str) -> int:
@@ -302,10 +305,10 @@ class MCTSTreeStore:
             if not self._trained.get(node_id, False)
         )
 
-    def get_untrained_node_ids(self, query_id: str, n_samples: int) -> list[int]:
+    def get_untrained_node_ids(self, query_id: str, n_samples: int) -> list[str]:
         if query_id not in self._query_node_ids:
             return []
-        result: list[int] = []
+        result: list[str] = []
         for node_id in self._query_node_ids[query_id]:
             if not self._trained.get(node_id, False):
                 result.append(node_id)
@@ -357,7 +360,6 @@ class MCTSTreeStore:
         self.trajectories.clear()
         self._node_id_to_key.clear()
         self._query_node_ids.clear()
-        self._next_node_id = 1
         self._visit_counts.clear()
         self._total_values.clear()
         self._q_values.clear()
