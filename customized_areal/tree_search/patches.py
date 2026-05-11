@@ -236,12 +236,25 @@ class TreeSearchPatches:
             )
             PPOActor.compute_advantages = new_compute_adv
 
+            # Detect RolloutController (single-controller mode) where the
+            # actual engine lives on a remote worker and cannot be patched
+            # from the main process.  The trainer-side fallback paths
+            # (e.g. _convert_trajs_to_nodes) handle dict trajectories in
+            # this case.
+            _is_controller = hasattr(self._engine, "inf_engine")
+
             # Patch 2: engine._wrap_openai_agent
             if hasattr(self._engine, "_wrap_openai_agent"):
                 self._save_and_set(
                     self._engine,
                     "_wrap_openai_agent",
                     self._build_tree_search_wrap(),
+                )
+            elif _is_controller:
+                logger.info(
+                    "Engine is a RolloutController; skipping _wrap_openai_agent "
+                    "patch (remote engine). Trainer fallback paths will convert "
+                    "dict trajectories to Nodes."
                 )
             else:
                 logger.warning(
@@ -261,6 +274,11 @@ class TreeSearchPatches:
             if hasattr(self._engine, "workflow_executor"):
                 new_executor = self._build_tree_search_executor()
                 self._save_and_set(self._engine, "workflow_executor", new_executor)
+            elif _is_controller:
+                logger.info(
+                    "Engine is a RolloutController; skipping workflow_executor "
+                    "patch (remote engine)."
+                )
             else:
                 logger.warning(
                     "Engine has no workflow_executor attribute; "
