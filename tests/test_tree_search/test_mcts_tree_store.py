@@ -198,7 +198,9 @@ class TestMCTSTreeStoreInsertBatch:
 
     def test_insert_single_trajectory(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1")
+        traj = _make_traj(
+            [1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1"
+        )
         store.insert_batch([traj])
         assert hasattr(traj, "node_id")
         assert traj.query_id == "q1"
@@ -259,7 +261,9 @@ class TestMCTSTreeStoreInsertBatch:
         assert len(node.logprobs) == 5
         for expected, actual in zip([-0.1, -0.2, -0.3, -0.4, -0.5], node.logprobs):
             assert abs(expected - actual) < 1e-6
-        assert torch.equal(node.versions, torch.tensor([0, 0, 1, 1, 1], dtype=torch.int32))
+        assert torch.equal(
+            node.versions, torch.tensor([0, 0, 1, 1, 1], dtype=torch.int32)
+        )
 
     def test_insert_node_objects(self):
         """Insert a list of Node objects directly (new workflow pipeline)."""
@@ -284,7 +288,9 @@ class TestMCTSTreeStoreInsertBatch:
 class TestMCTSTreeStoreAdvantages:
     def test_get_advantages_single_turn(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1")
+        traj = _make_traj(
+            [1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1"
+        )
         store.insert_batch([traj])
         seq_id = traj.node_id
         adv = store.get_advantages("q1", seq_id)
@@ -513,7 +519,9 @@ class TestMCTSTreeStoreLoadTrajectories:
 
     def test_load_trajectories_basic(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=1.0, query_id="q1", node_id="t1")
+        traj = _make_traj(
+            [1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=1.0, query_id="q1", node_id="t1"
+        )
         store.insert_batch([traj])
         loaded = store.load_trajectories("q1", n_samples=1)
         assert len(loaded) == 1
@@ -600,6 +608,11 @@ class TestNodeToTensorDict:
         assert result["topk_logp"].shape == (1, 3, 2)
         assert result["distill_reward"].shape == (1, 3, 1)
         assert result["teacher_logp"].shape == (1, 3, 1)
+        # Metadata fields are single-element lists
+        assert result["query_id"] == ["q1"]
+        assert result["node_id"] == ["t1"]
+        assert result["episode_id"] == [""]  # default: node.episode_id is empty
+        assert result["turn_idx"] == [0]  # default: node.turn_idx is 0
 
     def test_logp_already_sliced(self):
         """logp is already correctly sliced — verify it stays that way."""
@@ -619,3 +632,5 @@ class TestNodeToTensorDict:
         )
         result = _node_to_tensor_dict(node, "q1", "t1")
         assert result["logp"].shape == (1, 3)
+        assert result["query_id"] == ["q1"]
+        assert result["node_id"] == ["t1"]

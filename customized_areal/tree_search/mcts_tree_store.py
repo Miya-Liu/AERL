@@ -122,8 +122,10 @@ def _node_to_tensor_dict(
         "rewards": torch.tensor([node.outcome_reward], dtype=torch.float32).unsqueeze(
             0
         ),
-        "query_id": query_id,
-        "node_id": node_id,
+        "query_id": [query_id],
+        "node_id": [node_id],
+        "episode_id": [node.episode_id or ""],
+        "turn_idx": [node.turn_idx or 0],
     }
     # Response-only fields: extract response portion from full sequence
     resp_start, resp_end = _response_span(node.loss_mask)
