@@ -74,7 +74,16 @@ class TreeSearchPatches:
 
     @staticmethod
     def _unwrap_engine(engine: Any) -> Any:
-        """Unwrap decorators (e.g. RemoteSGLangEngine) to RemoteInfEngine."""
+        """Unwrap decorators (e.g. RemoteSGLangEngine) to RemoteInfEngine.
+
+        In single-controller mode the ``rollout_engine`` passed in is a
+        ``RolloutController`` (which manages remote workers).  Its
+        ``_wrap_openai_agent`` / ``workflow_executor`` live on the
+        *worker-side* ``RemoteInfEngine`` instances and cannot be
+        monkey-patched from the main process.  Trainer-side fallback
+        paths (``_convert_trajs_to_nodes``) handle the dict-to-Node
+        conversion for this case.
+        """
         if not hasattr(engine, "_wrap_openai_agent") and hasattr(engine, "_engine"):
             return engine._engine
         return engine
@@ -236,11 +245,10 @@ class TreeSearchPatches:
             )
             PPOActor.compute_advantages = new_compute_adv
 
-            # Detect RolloutController (single-controller mode) where the
-            # actual engine lives on a remote worker and cannot be patched
-            # from the main process.  The trainer-side fallback paths
-            # (e.g. _convert_trajs_to_nodes) handle dict trajectories in
-            # this case.
+            # Detect RolloutController (single-controller mode).
+            # The actual _wrap_openai_agent / workflow_executor live on the
+            # worker-side RemoteInfEngine and cannot be patched from here.
+            # Trainer-side _convert_trajs_to_nodes handles dict→Node conversion.
             _is_controller = hasattr(self._engine, "inf_engine")
 
             # Patch 2: engine._wrap_openai_agent
@@ -253,8 +261,8 @@ class TreeSearchPatches:
             elif _is_controller:
                 logger.info(
                     "Engine is a RolloutController; skipping _wrap_openai_agent "
-                    "patch (remote engine). Trainer fallback paths will convert "
-                    "dict trajectories to Nodes."
+                    "patch (remote engine). Trainer fallback will convert dict "
+                    "trajectories to Nodes."
                 )
             else:
                 logger.warning(

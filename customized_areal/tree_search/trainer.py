@@ -34,6 +34,7 @@ from customized_areal.tree_search.mcts_tree_store import (
     _node_to_tensor_dict,
 )
 from customized_areal.tree_search.patches import TreeSearchPatches
+from customized_areal.tree_search.proxy_workflow import interactions_dict_to_nodes
 
 from areal import PPOTrainer
 from areal.utils import logging
@@ -256,6 +257,50 @@ class CacheAwarePPOTrainer(PPOTrainer):
             )
             TreeCheckpointManager.save_trained_episodes(recover_dir, self.tree_store)
 
+    def _convert_trajs_to_nodes(
+        self,
+        new_trajs: list,
+        need_gen_items: list[dict[str, Any]],
+    ) -> list[Node]:
+        """Convert trajectory results from rollout_batch to Node objects.
+
+        Handles three cases:
+        1. Node objects (tree search patches applied) — keep as-is
+        2. list of Node objects — extend (flattened by workflow executor)
+        3. dict of InteractionWithTokenLogpReward — convert via
+           interactions_dict_to_nodes and inject metadata
+
+        Metadata (query_id, episode_id) is injected from need_gen_items,
+        matched positionally (results are assumed to be in submission order).
+        """
+        import uuid
+
+        nodes: list[Node] = []
+
+        for idx, item in enumerate(new_trajs):
+            if item is None:
+                continue
+            if isinstance(item, Node):
+                nodes.append(item)
+            elif isinstance(item, list) and item and isinstance(item[0], Node):
+                nodes.extend(item)
+            elif isinstance(item, dict):
+                # Standard workflow path: dict[str, InteractionWithTokenLogpReward]
+                item_nodes = interactions_dict_to_nodes(item)
+                query_id = need_gen_items[idx].get("query_id", "") if idx < len(need_gen_items) else ""
+                episode_id = uuid.uuid4().hex
+                for node in item_nodes:
+                    node.episode_id = episode_id
+                    node.query_id = query_id
+                nodes.extend(item_nodes)
+            else:
+                logger.warning(
+                    "Unexpected trajectory type in rollout_batch: %s — skipping",
+                    type(item).__name__,
+                )
+
+        return nodes
+
     def _cache_aware_prepare_batch(
         self,
         dataloader,
@@ -323,7 +368,9 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 should_accept_fn=should_accept_fn,
             )
             if new_trajs:
-                generated_nodes = new_trajs
+                generated_nodes = self._convert_trajs_to_nodes(
+                    new_trajs, need_gen_items
+                )
 
         nodes = cached_nodes + generated_nodes
         logger.info(

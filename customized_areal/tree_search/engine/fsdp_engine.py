@@ -274,7 +274,7 @@ class MultiCandidateFSDPEngine(FSDPEngine):
             )
 
         if not self.config.is_critic:
-            if self.enable_tree_training:
+            if not self.enable_tree_training:
                 return super()._compute_logprobs_and_loss(
                     logits,
                     ctx,

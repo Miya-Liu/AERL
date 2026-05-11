@@ -201,7 +201,12 @@ class MCTSTreeStore:
         )
 
     def _insert_single(self, query_id: str, node: Node) -> int:
-        """Insert a single Node and assign a node_id."""
+        """Insert a single Node and assign a node_id.
+
+        Supports both Node dataclass instances and plain dicts (the
+        latter arriving when tree search patches aren't active on the
+        remote engine and _convert_trajs_to_nodes hasn't converted yet).
+        """
         node_id = self._next_node_id
         self._next_node_id += 1
 
@@ -210,13 +215,18 @@ class MCTSTreeStore:
         self._node_id_to_key[node_id] = (query_id, idx)
         self._query_node_ids.setdefault(query_id, []).append(node_id)
 
-        # Assign node_id and query_id
-        node.node_id = node_id
-        node.query_id = query_id
+        if isinstance(node, dict):
+            node["node_id"] = node_id
+            node["query_id"] = query_id
+            outcome_reward = node.get("outcome_reward", node.get("reward", 0.0))
+        else:
+            node.node_id = node_id
+            node.query_id = query_id
+            outcome_reward = node.outcome_reward
 
-        self._backup(node_id, node.outcome_reward)
+        self._backup(node_id, outcome_reward)
         self._trained[node_id] = False
-        self._rewards[node_id] = node.outcome_reward
+        self._rewards[node_id] = outcome_reward
 
         return node_id
 
@@ -230,7 +240,11 @@ class MCTSTreeStore:
             existing_id = getattr(node, "node_id", 0)
             if existing_id != 0 and existing_id in self._node_id_to_key:
                 continue
-            query_id = node.query_id or ""
+            query_id = (
+                node.get("query_id", "")
+                if isinstance(node, dict)
+                else (node.query_id or "")
+            )
             self._insert_single(query_id, node)
 
     def get_advantages(self, query_id: str, node_id: int) -> torch.Tensor:

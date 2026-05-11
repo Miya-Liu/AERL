@@ -126,7 +126,12 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
     def wait(
         self, count: int, timeout: float | None = None, raise_timeout: bool = True
     ) -> list[Any | None]:
-        """Wait for the completion of `count` workflows and extract trajectories."""
+        """Wait for the completion of `count` workflows and extract trajectories.
+
+        Note: A single submission may produce multiple trajectories (e.g.
+        _TreeSearchRolloutResult contains a list of Nodes). This method
+        flattens them, so the returned list may be longer than `count`.
+        """
         results = self.dispatcher.wait_results(count, timeout, raise_timeout)
 
         # Log and trace
@@ -149,7 +154,12 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
         data: list[dict[str, Any]],
         workflow: RolloutWorkflow,
     ) -> list[Any]:
-        """Submit a batch of requests and wait for results."""
+        """Submit a batch of requests and wait for results.
+
+        Note: The returned list may contain more items than the input batch
+        because a single workflow can produce multiple trajectories (e.g. via
+        group_size > 1 or _TreeSearchRolloutResult). Nones are filtered out.
+        """
         perf_tracer.instant(
             "workflow_executor.rollout_batch",
             category="scheduler",

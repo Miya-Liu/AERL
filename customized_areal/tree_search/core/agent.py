@@ -120,7 +120,7 @@ class OnPolicyDistillAgent:
         self,
         data: dict[str, Any],
         **extra_kwargs,
-    ) -> float:
+    ) -> float | dict[str, float]:
         """Execute a single agent run and return the reward.
 
         This method is compatible with AReaL's OpenAIProxyWorkflow interface.

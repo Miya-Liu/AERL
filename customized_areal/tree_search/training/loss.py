@@ -368,7 +368,7 @@ def _compute_position_level_grpo_loss(
     )
 
     # Pad or truncate to match loss_mask output length
-    output_len = int(loss_mask.sum().item())
+    output_len = loss_mask.sum().int()
     n_loss = loss_per_position.shape[0]
     if n_loss < output_len:
         padding = torch.zeros((output_len - n_loss), dtype=torch.float32, device=device)
