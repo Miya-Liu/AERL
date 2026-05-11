@@ -113,6 +113,7 @@ def _make_traj(
     logprobs: list[float] | None = None,
     versions: list[int] | None = None,
     query_id: str | None = None,
+    node_id: str = "",
 ) -> Node:
     seq_len = len(input_ids)
     # Convert lists to tensors as expected by Node
@@ -131,6 +132,7 @@ def _make_traj(
         logprobs=logprobs_tensor,
         versions=versions_tensor,
         outcome_reward=reward,
+        node_id=node_id,
     )
 
     if query_id is not None:
@@ -147,6 +149,7 @@ class TestMCTSTreeStoreInsertBatch:
             "loss_mask": [0, 0, 1, 1, 1],
             "reward": 1.0,
             "attention_mask": [1, 1, 1, 1, 1],
+            "node_id": "test-dict-basic",
         }
         store.insert_batch([traj])
         assert "node_id" in traj
@@ -155,8 +158,8 @@ class TestMCTSTreeStoreInsertBatch:
         query_id = traj["query_id"]
         assert len(store.trajectories[query_id]) == 1
         node = store.trajectories[query_id][0]
-        assert node.input_ids == [1, 2, 3, 4, 5]
-        assert node.loss_mask == [0, 0, 1, 1, 1]
+        assert node["input_ids"] == [1, 2, 3, 4, 5]
+        assert node["loss_mask"] == [0, 0, 1, 1, 1]
 
     def test_insert_list_dict_with_new_fields(self):
         store = MCTSTreeStore()
@@ -165,6 +168,7 @@ class TestMCTSTreeStoreInsertBatch:
             "loss_mask": [0, 0, 1],
             "reward": 1.0,
             "attention_mask": [1, 1, 1],
+            "node_id": "test-dict-fields",
             "topk_ids": [[10, 20], [30, 40], [50, 60]],
             "topk_logp": [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]],
             "distill_reward": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
@@ -173,10 +177,10 @@ class TestMCTSTreeStoreInsertBatch:
         store.insert_batch([traj])
         query_id = traj["query_id"]
         node = store.trajectories[query_id][0]
-        assert node.topk_ids == [[10, 20], [30, 40], [50, 60]]
-        assert node.topk_logp == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]]
-        assert node.distill_reward == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
-        assert node.teacher_logp == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]]
+        assert node["topk_ids"] == [[10, 20], [30, 40], [50, 60]]
+        assert node["topk_logp"] == [[-0.1, -0.2], [-0.3, -0.4], [-0.5, -0.6]]
+        assert node["distill_reward"] == [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+        assert node["teacher_logp"] == [[-1.1, -1.2], [-1.3, -1.4], [-1.5, -1.6]]
 
     def test_insert_list_dict_with_query_id(self):
         store = MCTSTreeStore()
@@ -186,6 +190,7 @@ class TestMCTSTreeStoreInsertBatch:
             "reward": 1.0,
             "attention_mask": [1, 1, 1, 1, 1],
             "query_id": "custom_query_id",
+            "node_id": "test-dict-qid",
         }
         store.insert_batch([traj])
         assert traj["query_id"] == "custom_query_id"
@@ -193,21 +198,23 @@ class TestMCTSTreeStoreInsertBatch:
 
     def test_insert_single_trajectory(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
+        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1")
         store.insert_batch([traj])
-        assert "node_id" in traj
-        assert traj["query_id"] == "q1"
+        assert hasattr(traj, "node_id")
+        assert traj.query_id == "q1"
         assert len(store.trajectories["q1"]) == 1
 
     def test_insert_two_trajectories_same_query(self):
         store = MCTSTreeStore()
-        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
-        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1")
+        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1", node_id="t1")
+        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1", node_id="t2")
         store.insert_batch([t1, t2])
         assert len(store.trajectories["q1"]) == 2
-        assert t1["node_id"] != t2["node_id"]
+        assert t1.node_id != t2.node_id
 
     def test_insert_grouped_trajectory(self):
+        """Grouped (batched) trajectory dicts are stored as-is and receive a
+        node_id during insertion."""
         store = MCTSTreeStore()
         traj = {
             "input_ids": torch.tensor([[1, 2, 3, 4], [5, 6, 7, 0]], dtype=torch.int32),
@@ -217,16 +224,20 @@ class TestMCTSTreeStoreInsertBatch:
                 [[1, 1, 1, 1], [1, 1, 1, 0]], dtype=torch.bool
             ),
             "query_id": "q1",
+            "node_id": "test-grouped",
         }
         store.insert_batch([traj])
-        assert "node_ids" in traj
-        assert len(traj["node_ids"]) == 2
-        node1 = store.trajectories["q1"][1]
-        assert len(node1.input_ids) == 3
+        assert "node_id" in traj
+        assert traj["node_id"] == "test-grouped"
+        node = store.trajectories["q1"][0]
+        assert torch.equal(
+            node["input_ids"],
+            torch.tensor([[1, 2, 3, 4], [5, 6, 7, 0]], dtype=torch.int32),
+        )
 
     def test_insert_skips_already_inserted(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         seq_id_1 = traj.node_id
         store.insert_batch([traj])
@@ -241,13 +252,14 @@ class TestMCTSTreeStoreInsertBatch:
             logprobs=[-0.1, -0.2, -0.3, -0.4, -0.5],
             versions=[0, 0, 1, 1, 1],
             query_id="q1",
+            node_id="t1",
         )
         store.insert_batch([traj])
         node = store.trajectories["q1"][0]
         assert len(node.logprobs) == 5
         for expected, actual in zip([-0.1, -0.2, -0.3, -0.4, -0.5], node.logprobs):
             assert abs(expected - actual) < 1e-6
-        assert node.versions == [0, 0, 1, 1, 1]
+        assert torch.equal(node.versions, torch.tensor([0, 0, 1, 1, 1], dtype=torch.int32))
 
     def test_insert_node_objects(self):
         """Insert a list of Node objects directly (new workflow pipeline)."""
@@ -272,7 +284,7 @@ class TestMCTSTreeStoreInsertBatch:
 class TestMCTSTreeStoreAdvantages:
     def test_get_advantages_single_turn(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1")
+        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=2.0, query_id="q1", node_id="t1")
         store.insert_batch([traj])
         seq_id = traj.node_id
         adv = store.get_advantages("q1", seq_id)
@@ -287,6 +299,7 @@ class TestMCTSTreeStoreAdvantages:
             [0, 0, 1, 1, 0, 0, 1, 1],
             reward=0.75,
             query_id="q1",
+            node_id="t1",
         )
         store.insert_batch([traj])
         seq_id = traj.node_id
@@ -298,7 +311,7 @@ class TestMCTSTreeStoreAdvantages:
 
     def test_get_prompt_mask(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         mask = store.get_prompt_mask("q1", traj.node_id)
         assert mask.tolist() == [False, False, True, True, True]
@@ -307,22 +320,22 @@ class TestMCTSTreeStoreAdvantages:
 class TestMCTSTreeStoreTrainedFlag:
     def test_trained_flag_default_false(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         assert store.is_trained(traj.node_id) is False
 
     def test_set_trained(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         store.set_trained(traj.node_id, True)
         assert store.is_trained(traj.node_id) is True
 
     def test_get_untrained_count(self):
         store = MCTSTreeStore()
-        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
-        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1")
-        t3 = _make_traj([7, 8, 9], [0, 0, 1], reward=0.3, query_id="q1")
+        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1", node_id="t1")
+        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1", node_id="t2")
+        t3 = _make_traj([7, 8, 9], [0, 0, 1], reward=0.3, query_id="q1", node_id="t3")
         store.insert_batch([t1, t2, t3])
         assert store.get_untrained_count("q1") == 3
         store.set_trained(t1.node_id, True)
@@ -330,7 +343,7 @@ class TestMCTSTreeStoreTrainedFlag:
 
     def test_reset_trained_flags(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         store.set_trained(traj.node_id, True)
         store.reset_trained_flags()
@@ -343,6 +356,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.1],
             versions=[0, 0, 0],
+            node_id="ep_a_1",
             episode_id="ep_a",
             outcome_reward=1.0,
             query_id="q1",
@@ -352,6 +366,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.2],
             versions=[0, 0, 0],
+            node_id="ep_b_1",
             episode_id="ep_b",
             outcome_reward=0.5,
             query_id="q1",
@@ -361,6 +376,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.3],
             versions=[0, 0, 0],
+            node_id="ep_a_2",
             episode_id="ep_a",
             outcome_reward=0.3,
             query_id="q1",
@@ -378,6 +394,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.1],
             versions=[0, 0, 0],
+            node_id="ep_a_1",
             episode_id="ep_a",
             outcome_reward=1.0,
             query_id="q1",
@@ -387,6 +404,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.2],
             versions=[0, 0, 0],
+            node_id="ep_b_1",
             episode_id="ep_b",
             outcome_reward=0.5,
             query_id="q1",
@@ -405,6 +423,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.1],
             versions=[0, 0, 0],
+            node_id="ep_a_1",
             episode_id="ep_a",
             outcome_reward=1.0,
             query_id="q1",
@@ -422,6 +441,7 @@ class TestMCTSTreeStoreTrainedFlag:
             loss_mask=[0, 0, 1],
             logprobs=[0.0, 0.0, -0.1],
             versions=[0, 0, 0],
+            node_id="ep_a_1",
             episode_id="ep_a",
             outcome_reward=1.0,
             query_id="q1",
@@ -432,8 +452,8 @@ class TestMCTSTreeStoreTrainedFlag:
 
     def test_get_reward(self):
         store = MCTSTreeStore()
-        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
-        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1")
+        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1", node_id="t1")
+        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1", node_id="t2")
         store.insert_batch([t1, t2])
         assert store.get_reward(t1.node_id) == 1.0
         assert store.get_reward(t2.node_id) == 0.5
@@ -449,6 +469,7 @@ class TestMCTSTreeStoreLoadTrajectories:
             "versions": [0, 0, 0, 0, 0],
             "reward": 1.0,
             "attention_mask": [1, 1, 1, 1, 1],
+            "node_id": "test-load-dict",
             "topk_ids": [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
             "topk_logp": [
                 [-0.1, -0.2],
@@ -476,23 +497,23 @@ class TestMCTSTreeStoreLoadTrajectories:
         loaded = store.load_trajectories(traj["query_id"], n_samples=1)
         assert len(loaded) == 1
         node = loaded[0]
-        assert isinstance(node, Node)
-        assert node.input_ids == [1, 2, 3, 4, 5]
-        assert node.outcome_reward == 1.0
-        assert node.topk_ids == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
-        assert node.teacher_logp == [
+        assert isinstance(node, dict)
+        assert node["input_ids"] == [1, 2, 3, 4, 5]
+        assert node["reward"] == 1.0
+        assert node["topk_ids"] == [[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]]
+        assert node["teacher_logp"] == [
             [-1.1, -1.2],
             [-1.3, -1.4],
             [-1.5, -1.6],
             [-1.7, -1.8],
             [-1.9, -2.0],
         ]
-        assert hasattr(node, "query_id")
-        assert hasattr(node, "node_id")
+        assert "query_id" in node
+        assert "node_id" in node
 
     def test_load_trajectories_basic(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=1.0, query_id="q1")
+        traj = _make_traj([1, 2, 3, 4, 5], [0, 0, 1, 1, 1], reward=1.0, query_id="q1", node_id="t1")
         store.insert_batch([traj])
         loaded = store.load_trajectories("q1", n_samples=1)
         assert len(loaded) == 1
@@ -503,8 +524,8 @@ class TestMCTSTreeStoreLoadTrajectories:
 
     def test_load_trajectories_only_untrained(self):
         store = MCTSTreeStore()
-        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
-        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1")
+        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1", node_id="t1")
+        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.5, query_id="q1", node_id="t2")
         store.insert_batch([t1, t2])
         store.set_trained(t1.node_id, True)
         loaded = store.load_trajectories("q1", n_samples=2)
@@ -519,11 +540,12 @@ class TestMCTSTreeStoreLoadTrajectories:
 class TestMCTSTreeStoreClear:
     def test_clear(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], query_id="q1", node_id="t1")
         store.insert_batch([traj])
         store.clear()
         assert len(store.trajectories) == 0
-        assert store._next_node_id == 1
+        assert len(store._node_id_to_key) == 0
+        assert len(store._query_node_ids) == 0
         assert len(store._visit_counts) == 0
         assert len(store._q_values) == 0
 
@@ -531,7 +553,7 @@ class TestMCTSTreeStoreClear:
 class TestMCTSTreeStoreMCTSStats:
     def test_backup_updates_stats(self):
         store = MCTSTreeStore()
-        traj = _make_traj([1, 2, 3], [0, 0, 1], reward=2.0, query_id="q1")
+        traj = _make_traj([1, 2, 3], [0, 0, 1], reward=2.0, query_id="q1", node_id="t1")
         store.insert_batch([traj])
         seq_id = traj.node_id
         assert store._visit_counts[seq_id] == 1
@@ -539,8 +561,8 @@ class TestMCTSTreeStoreMCTSStats:
 
     def test_two_trajectories_separate_q_values(self):
         store = MCTSTreeStore()
-        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1")
-        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.0, query_id="q1")
+        t1 = _make_traj([1, 2, 3], [0, 0, 1], reward=1.0, query_id="q1", node_id="t1")
+        t2 = _make_traj([4, 5, 6], [0, 0, 1], reward=0.0, query_id="q1", node_id="t2")
         store.insert_batch([t1, t2])
         assert store._q_values[t1.node_id] == 1.0
         assert store._q_values[t2.node_id] == 0.0
@@ -560,7 +582,7 @@ class TestNodeToTensorDict:
             versions=[-1, -1, 1, 1, 1],
             outcome_reward=1.0,
             query_id="q1",
-            node_id=1,
+            node_id="t1",
             topk_ids=[[10, 20], [30, 40], [50, 60], [70, 80], [90, 100]],
             topk_logp=[
                 [-1.0, -2.0],
@@ -572,7 +594,7 @@ class TestNodeToTensorDict:
             distill_reward=[[0.1], [0.2], [0.3], [0.4], [0.5]],
             teacher_logp=[[-0.1], [-0.2], [-0.3], [-0.4], [-0.5]],
         )
-        result = _node_to_tensor_dict(node, "q1", 1)
+        result = _node_to_tensor_dict(node, "q1", "t1")
         # Response portion is positions 2:5 (loss_mask==1)
         assert result["topk_ids"].shape == (1, 3, 2)  # [1, resp_len, topk]
         assert result["topk_logp"].shape == (1, 3, 2)
@@ -593,7 +615,7 @@ class TestNodeToTensorDict:
             versions=[-1, -1, 1, 1, 1],
             outcome_reward=1.0,
             query_id="q1",
-            node_id=1,
+            node_id="t1",
         )
-        result = _node_to_tensor_dict(node, "q1", 1)
+        result = _node_to_tensor_dict(node, "q1", "t1")
         assert result["logp"].shape == (1, 3)
