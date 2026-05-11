@@ -124,6 +124,11 @@ def interactions_dict_to_nodes(interactions: dict[str, Any]) -> list[Node]:
                 topk_ids.append(ids)
                 topk_logp.append(logps)
 
+        # Derive parent node_id from parent interaction when available
+        pn_id: str | None = None
+        if interaction.parent is not None:
+            pn_id = interaction.parent.interaction_id
+
         node = Node(
             input_ids=seq_tokens,
             loss_mask=loss_mask,
@@ -131,6 +136,8 @@ def interactions_dict_to_nodes(interactions: dict[str, Any]) -> list[Node]:
             versions=versions,
             outcome_reward=outcome_reward,
             turn_idx=turn_idx,
+            node_id=interaction_id,
+            parent_node_id=pn_id,
             topk_ids=topk_ids if topk_ids else None,
             topk_logp=topk_logp if topk_logp else None,
         )
