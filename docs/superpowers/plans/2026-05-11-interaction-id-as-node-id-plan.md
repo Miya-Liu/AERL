@@ -1,18 +1,27 @@
 # Use interaction_id as node_id — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or superpowers:executing-plans
+> to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the monotonically increasing `int` `node_id` with the globally unique `str` `interaction_id` (UUID from inference engine) throughout Node, MCTSTreeStore, and all consumers.
+**Goal:** Replace the monotonically increasing `int` `node_id` with the globally unique
+`str` `interaction_id` (UUID from inference engine) throughout Node, MCTSTreeStore, and
+all consumers.
 
-**Architecture:** `node_id` changes from `int = 0` to `str = ""` on the Node dataclass. `MCTSTreeStore` drops its `_next_node_id` counter — the interaction_id is set at Node construction time and read by `_insert_single`. All internal dicts change key type `int` → `str`. Checkpoint serialization drops the `int(k)` conversion since keys are already strings.
+**Architecture:** `node_id` changes from `int = 0` to `str = ""` on the Node dataclass.
+`MCTSTreeStore` drops its `_next_node_id` counter — the interaction_id is set at Node
+construction time and read by `_insert_single`. All internal dicts change key type `int`
+→ `str`. Checkpoint serialization drops the `int(k)` conversion since keys are already
+strings.
 
 **Tech Stack:** Python 3.12+, dataclasses, torch
 
----
+______________________________________________________________________
 
 ### Task 1: Change Node dataclass field types
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:22-59`
 
 - [ ] **Step 1: Update node_id and parent_node_id types**
@@ -66,16 +75,18 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor: change Node.node_id type from int to str for interaction_id"
 ```
 
----
+______________________________________________________________________
 
 ### Task 2: Set node_id and parent_node_id in interactions_dict_to_nodes
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/proxy_workflow.py:127-136`
 
 - [ ] **Step 1: Pass node_id and parent_node_id to Node constructor**
 
-Change the Node construction at line 127 to include `node_id=interaction_id` and derive `parent_node_id` from `interaction.parent`:
+Change the Node construction at line 127 to include `node_id=interaction_id` and derive
+`parent_node_id` from `interaction.parent`:
 
 ```python
         # Derive parent node_id from parent interaction when available
@@ -104,11 +115,12 @@ git add customized_areal/tree_search/proxy_workflow.py
 git commit -m "feat: set node_id=interaction_id and parent_node_id from parent interaction"
 ```
 
----
+______________________________________________________________________
 
-### Task 3: Update _node_to_tensor_dict parameter type
+### Task 3: Update \_node_to_tensor_dict parameter type
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:110-112`
 
 - [ ] **Step 1: Change node_id parameter from int to str**
@@ -121,7 +133,9 @@ def _node_to_tensor_dict(
 ) -> dict[str, Any]:
 ```
 
-The body is unchanged — `traj["node_id"] = node_id` and `traj["_turn_id"] = node.node_id` now store strings, and `traj["_parent_turn_id"] = node.parent_node_id` stores `str | None`.
+The body is unchanged — `traj["node_id"] = node_id` and
+`traj["_turn_id"] = node.node_id` now store strings, and
+`traj["_parent_turn_id"] = node.parent_node_id` stores `str | None`.
 
 - [ ] **Step 2: Commit**
 
@@ -130,14 +144,15 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor: change _node_to_tensor_dict node_id param from int to str"
 ```
 
----
+______________________________________________________________________
 
 ### Task 4: Update MCTSTreeStore — remove counter, change all dict key types
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/mcts_tree_store.py:169-367`
 
-- [ ] **Step 1: Rewrite __init__ — remove _next_node_id, change dict types**
+- [ ] **Step 1: Rewrite __init__ — remove \_next_node_id, change dict types**
 
 ```python
     def __init__(self) -> None:
@@ -158,7 +173,7 @@ git commit -m "refactor: change _node_to_tensor_dict node_id param from int to s
         self._normalized_returns: dict[str, float] = {}
 ```
 
-- [ ] **Step 2: Rewrite _backup — change node_id param type**
+- [ ] **Step 2: Rewrite \_backup — change node_id param type**
 
 ```python
     def _backup(self, node_id: str, reward: float) -> None:
@@ -170,7 +185,7 @@ git commit -m "refactor: change _node_to_tensor_dict node_id param from int to s
         )
 ```
 
-- [ ] **Step 3: Rewrite _insert_single — read node_id, no counter**
+- [ ] **Step 3: Rewrite \_insert_single — read node_id, no counter**
 
 ```python
     def _insert_single(self, query_id: str, node: Node) -> str:
@@ -301,7 +316,8 @@ Every method taking or returning `node_id` changes type:
         return result
 ```
 
-The `get_untrained_count` method body is unchanged (returns `int`, not parameterized by `node_id` type).
+The `get_untrained_count` method body is unchanged (returns `int`, not parameterized by
+`node_id` type).
 
 - [ ] **Step 6: Update reset_trained_flags and mark_episodes_trained**
 
@@ -327,7 +343,7 @@ The `get_untrained_count` method body is unchanged (returns `int`, not parameter
 
 (Bodies unchanged — only dict key types changed. `node.node_id` is now `str`.)
 
-- [ ] **Step 7: Update clear() — remove _next_node_id**
+- [ ] **Step 7: Update clear() — remove \_next_node_id**
 
 ```python
     def clear(self) -> None:
@@ -352,11 +368,12 @@ git add customized_areal/tree_search/mcts_tree_store.py
 git commit -m "refactor: change MCTSTreeStore node_id dict keys from int to str, remove counter"
 ```
 
----
+______________________________________________________________________
 
 ### Task 5: Update advantage.py type annotations
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/advantage.py:40-41`
 
 - [ ] **Step 1: Change dict key/set types from int to str**
@@ -414,7 +431,8 @@ git commit -m "refactor: change MCTSTreeStore node_id dict keys from int to str,
             traj.returns = mask.float() * norm_return
 ```
 
-The only substantive changes are `set[int]` → `set[str]` and `dict[int, float]` → `dict[str, float]`. The `getattr(traj, "node_id", None)` now returns `str | None`.
+The only substantive changes are `set[int]` → `set[str]` and `dict[int, float]` →
+`dict[str, float]`. The `getattr(traj, "node_id", None)` now returns `str | None`.
 
 - [ ] **Step 2: Commit**
 
@@ -423,16 +441,19 @@ git add customized_areal/tree_search/advantage.py
 git commit -m "refactor: change advantage dict key/set types from int to str for string node_id"
 ```
 
----
+______________________________________________________________________
 
-### Task 6: Update checkpoint.py — drop _next_node_id, stop int(k) conversion
+### Task 6: Update checkpoint.py — drop \_next_node_id, stop int(k) conversion
 
 **Files:**
+
 - Modify: `customized_areal/tree_search/checkpoint.py:36-131,136-177`
 
 - [ ] **Step 1: Update save() — remove next_node_id, stop str(k) conversion**
 
-The metadata dict keys are already strings from `node_id` (now `str`), but checkpoint currently converts them via `str(k)` — this is now the natural type, so the conversion becomes a no-op. Remove `next_node_id`:
+The metadata dict keys are already strings from `node_id` (now `str`), but checkpoint
+currently converts them via `str(k)` — this is now the natural type, so the conversion
+becomes a no-op. Remove `next_node_id`:
 
 ```python
     def save(self, tree_store: MCTSTreeStore) -> None:
@@ -481,7 +502,8 @@ The metadata dict keys are already strings from `node_id` (now `str`), but check
         os.replace(tmp_meta, meta_path)
 ```
 
-Key changes: removed `"next_node_id": tree_store._next_node_id`, removed all `str(k)` conversions (keys are already `str`).
+Key changes: removed `"next_node_id": tree_store._next_node_id`, removed all `str(k)`
+conversions (keys are already `str`).
 
 - [ ] **Step 2: Update load() — remove next_node_id, stop int(k) conversion**
 
@@ -538,7 +560,9 @@ Key changes: removed `"next_node_id": tree_store._next_node_id`, removed all `st
         return store
 ```
 
-Key changes: removed `store._next_node_id = metadata.get("next_node_id", ...)`, removed all `int(k)` conversions, fallback key `"seq_id_to_key"` and `"query_seq_ids"` still work (they map to the same types).
+Key changes: removed `store._next_node_id = metadata.get("next_node_id", ...)`, removed
+all `int(k)` conversions, fallback key `"seq_id_to_key"` and `"query_seq_ids"` still
+work (they map to the same types).
 
 - [ ] **Step 3: Update docstring — remove stale int mention**
 
@@ -553,7 +577,7 @@ Old TrieNode-based checkpoints are incompatible and must be discarded.
 """
 ```
 
-- [ ] **Step 4: Update _deserialize_record — node_id default from 0 to ""**
+- [ ] **Step 4: Update \_deserialize_record — node_id default from 0 to ""**
 
 ```python
     @staticmethod
@@ -585,31 +609,39 @@ git add customized_areal/tree_search/checkpoint.py
 git commit -m "refactor: remove _next_node_id from checkpoint, stop int(k) conversion"
 ```
 
----
+______________________________________________________________________
 
 ### Task 7: Verify trainer.py needs no changes
 
 **Files:**
+
 - Verify: `customized_areal/tree_search/trainer.py`
 
 - [ ] **Step 1: Read and verify trainer.py type compatibility**
 
 Run: `grep -n "node_id" customized_areal/tree_search/trainer.py`
 
-All usages in trainer.py access `node.node_id` or `getattr(traj, "node_id", None)` and pass it directly to `tree_store` methods. The type flows from Node → local variable → store method — no explicit `int` annotations, so no changes needed:
+All usages in trainer.py access `node.node_id` or `getattr(traj, "node_id", None)` and
+pass it directly to `tree_store` methods. The type flows from Node → local variable →
+store method — no explicit `int` annotations, so no changes needed:
 
 - Line 51: `node_id = getattr(traj, "node_id", None)` → now `str | None`
+
 - Line 53: `tree_store.set_trained(node_id, True)` → accepts `str`
+
 - Line 419: `node_id = node.node_id` → now `str`
-- Line 424: passed to `_node_to_tensor_dict(node, query_id, node_id, ...)` → accepts `str`
+
+- Line 424: passed to `_node_to_tensor_dict(node, query_id, node_id, ...)` → accepts
+  `str`
 
 - [ ] **Step 2: Commit** (if needed — skip if no changes)
 
----
+______________________________________________________________________
 
 ### Task 8: Run pre-commit and verify
 
 **Files:**
+
 - All modified files
 
 - [ ] **Step 1: Run pre-commit hooks**
@@ -620,7 +652,8 @@ pre-commit run --all-files
 
 Expected: all hooks pass (formatting, linting).
 
-- [ ] **Step 2: Verify no remaining `int` references to node_id in the tree_search module**
+- [ ] **Step 2: Verify no remaining `int` references to node_id in the tree_search
+  module**
 
 ```bash
 grep -rn "node_id.*int\|int.*node_id" customized_areal/tree_search/

@@ -87,9 +87,7 @@ class TreeCheckpointManager:
         node_id_to_key_raw = metadata.get(
             "node_id_to_key", metadata.get("seq_id_to_key", {})
         )
-        store._node_id_to_key = {
-            k: (v[0], v[1]) for k, v in node_id_to_key_raw.items()
-        }
+        store._node_id_to_key = {k: (v[0], v[1]) for k, v in node_id_to_key_raw.items()}
         store._query_node_ids = metadata.get(
             "query_node_ids", metadata.get("query_seq_ids", {})
         )

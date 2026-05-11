@@ -287,7 +287,11 @@ class CacheAwarePPOTrainer(PPOTrainer):
             elif isinstance(item, dict):
                 # Standard workflow path: dict[str, InteractionWithTokenLogpReward]
                 item_nodes = interactions_dict_to_nodes(item)
-                query_id = need_gen_items[idx].get("query_id", "") if idx < len(need_gen_items) else ""
+                query_id = (
+                    need_gen_items[idx].get("query_id", "")
+                    if idx < len(need_gen_items)
+                    else ""
+                )
                 episode_id = uuid.uuid4().hex
                 for node in item_nodes:
                     node.episode_id = episode_id
