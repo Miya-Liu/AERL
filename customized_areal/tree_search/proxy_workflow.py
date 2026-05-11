@@ -26,6 +26,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from customized_areal.tree_search.config import AdvantageMode
 from customized_areal.tree_search.mcts_tree_store import Node
 
 from areal.experimental.openai.proxy.workflow import OpenAIProxyWorkflow
@@ -216,14 +217,21 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
     """
 
     def __init__(
-        self, agent_path: str | None = None, group_size: int = 1, **kwargs: Any
+        self,
+        agent_path: str | None = None,
+        group_size: int = 1,
+        tree_store: Any | None = None,
+        advantage_computer: Any | None = None,
+        advantage_mode: Any | None = None,
+        **kwargs: Any,
     ) -> None:
-        # Resolve agent_path to an agent instance if agent not explicitly given
         if "agent" not in kwargs and agent_path is not None:
             agent_cls = import_from_string(agent_path)
             kwargs["agent"] = agent_cls()
         self.group_size = group_size
-        # Remove group_size from kwargs before passing to super (it's not an OpenAIProxyWorkflow param)
+        self.tree_store = tree_store
+        self.advantage_computer = advantage_computer
+        self.advantage_mode = advantage_mode
         kwargs.pop("group_size", None)
         logger.warning(
             "PATCH_VERIFICATION: QueryIDProxyWorkflow.__init__ CALLED — "
@@ -243,18 +251,25 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
         """
         return interactions_dict_to_nodes(interactions)
 
-    def _single_episode(self, engine, data: dict, query_id: str) -> list[Node] | None:
-        """Run a single episode and convert to list[Node].
-
-        This is the synchronous version used by arun_episode internally.
-        """
-        # This will be called from arun_episode which is async
-        raise NotImplementedError("Use _async_single_episode instead")
+    def _post_rollout_tree_ops(self, nodes: list[Node]) -> None:
+        """Insert nodes into tree, compute advantages, mark trained."""
+        if self.tree_store is None:
+            return
+        self.tree_store.insert_batch(nodes)
+        if (
+            self.advantage_computer is not None
+            and self.advantage_mode is not None
+            and self.advantage_mode == AdvantageMode.TREE
+        ):
+            self.advantage_computer.compute(nodes)
+        for node in nodes:
+            if node.node_id:
+                self.tree_store.set_trained(node.node_id, True)
 
     async def _async_single_episode(
         self, engine, data: dict, query_id: str
-    ) -> list[Node] | None:
-        """Run a single episode via super().arun_episode and convert to Nodes."""
+    ) -> dict[str, Any] | None:
+        """Run a single episode, do tree ops, return batched tensor dict."""
         result = await super().arun_episode(engine, data)
 
         if result is None:
@@ -270,9 +285,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
             for node in nodes:
                 node.episode_id = episode_id
                 node.query_id = query_id
-            return nodes
-
-        if isinstance(result, list):
+        elif isinstance(result, list):
             logger.warning(
                 "QueryIDProxyWorkflow: super().arun_episode returned list "
                 "instead of dict; attempting dict conversion"
@@ -284,17 +297,20 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
                 for node in nodes:
                     node.episode_id = episode_id
                     node.query_id = query_id
-                return nodes
+            else:
+                return None
+        else:
+            if result is not None:
+                logger.warning(
+                    "QueryIDProxyWorkflow: unexpected result type %s",
+                    type(result).__name__,
+                )
+            return None
 
-        if result is not None:
-            logger.warning(
-                "QueryIDProxyWorkflow: unexpected result type %s",
-                type(result).__name__,
-            )
+        self._post_rollout_tree_ops(nodes)
+        return _nodes_to_batched_tensor_dict(nodes)
 
-        return None
-
-    async def arun_episode(self, engine, data: dict) -> list[Node] | None:
+    async def arun_episode(self, engine, data: dict) -> dict[str, Any] | None:
         query_id = data.get("query_id") or ""
 
         logger.warning(
@@ -309,44 +325,51 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
         if self.group_size <= 1:
             return await self._async_single_episode(engine, data, query_id)
 
-        # group_size > 1: run multiple episodes and collect all Nodes
         import asyncio
 
+        from areal.experimental.openai.types import InteractionWithTokenLogpReward
+
+        # Run group_size episodes, each returns dict[str, InteractionWithTokenLogpReward]
         results = await asyncio.gather(
             *[
-                self._async_single_episode(engine, data, query_id)
+                super().arun_episode(engine, data)
                 for _ in range(self.group_size)
             ],
             return_exceptions=True,
         )
 
-        valid_results = [
-            r for r in results if not isinstance(r, Exception) and r is not None
-        ]
-
-        if not valid_results:
-            return None
-
-        if len(valid_results) < len(results):
-            logger.warning(
-                "QueryIDProxyWorkflow: %d/%d episodes returned None or failed",
-                len(results) - len(valid_results),
-                len(results),
-            )
-
-        # Assign distinct episode_ids per group and flatten
         all_nodes: list[Node] = []
-        for group_idx, episode_nodes in enumerate(valid_results):
+        for group_idx, result in enumerate(results):
+            if isinstance(result, Exception) or result is None:
+                continue
+            if isinstance(result, dict) and all(
+                isinstance(v, InteractionWithTokenLogpReward) for v in result.values()
+            ):
+                nodes = self._interactions_to_nodes(result)
+            elif (
+                isinstance(result, list)
+                and result
+                and isinstance(result[0], InteractionWithTokenLogpReward)
+            ):
+                converted = {str(i): v for i, v in enumerate(result)}
+                nodes = self._interactions_to_nodes(converted)
+            else:
+                continue
+
             episode_id = (
                 f"{query_id}_{group_idx}_{uuid.uuid4().hex[:8]}"
                 if query_id
                 else f"{group_idx}_{uuid.uuid4().hex[:8]}"
             )
-            for turn_idx, node in enumerate(episode_nodes, start=1):
+            for turn_idx, node in enumerate(nodes, start=1):
                 node.episode_id = episode_id
                 node.query_id = query_id
                 if not node.turn_idx:
                     node.turn_idx = turn_idx
-            all_nodes.extend(episode_nodes)
+            all_nodes.extend(nodes)
 
-        return all_nodes if all_nodes else None
+        if not all_nodes:
+            return None
+
+        self._post_rollout_tree_ops(all_nodes)
+        return _nodes_to_batched_tensor_dict(all_nodes)
