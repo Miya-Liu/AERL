@@ -172,6 +172,8 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 advantage_mode=self.tree_backup_config.advantage_mode,
                 loss_mode=self.tree_backup_config.loss_mode,
                 group_size=self.cache_config.n_samples,
+                tree_store=self.tree_store,
+                advantage_computer=self.tree_advantage_computer,
             )
             logger.info(
                 f"Cache-aware training enabled "
@@ -364,10 +366,23 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
             trajs = new_trajs if new_trajs else []
 
-            # When using RolloutController (remote engine), rollout_batch
-            # returns tensor dicts, not Node objects.  Convert them to Nodes
-            # so that tree_store.insert_batch can use node_id / query_id.
-            if trajs and not isinstance(trajs[0], Node):
+            # Tree ops (insert, advantage, mark-trained) happen inside
+            # QueryIDProxyWorkflow when the _wrap_openai_agent patch is
+            # active (direct engine mode). In single-controller mode the
+            # patch can't reach the remote engine, so we fall back to
+            # trainer-side conversion and tree ops.
+            if trajs and isinstance(trajs[0], dict):
+                has_metadata = isinstance(trajs[0].get("query_id"), list)
+                if not has_metadata:
+                    trajs = self._tensor_dicts_to_nodes(trajs, all_prompts)
+                    self.tree_store.insert_batch(trajs)
+                    if (
+                        self.tree_backup_config.advantage_mode
+                        == AdvantageMode.TREE
+                    ):
+                        self.tree_advantage_computer.compute(trajs)
+                    _mark_batch_trained(self.tree_store, trajs)
+            elif trajs and not isinstance(trajs[0], Node):
                 trajs = self._tensor_dicts_to_nodes(trajs, all_prompts)
 
             logger.info(f"Cache-aware rollout: 0 cached, {len(trajs)} newly generated")
@@ -378,36 +393,24 @@ class CacheAwarePPOTrainer(PPOTrainer):
             )
             return []
 
-        # --- Tree operations (while query_id / node_id are available) ---
+        # --- Checkpoint save (after trajectories are generated) ---
 
-        # Insert trajectories into the MCTS tree
-        self.tree_store.insert_batch(trajs)
-        logger.debug(f"Inserted {len(trajs)} trajectories into tree")
-
-        # Compute tree advantages (stashed on Node fields, flow through to tensors)
-        if self.tree_backup_config.advantage_mode == AdvantageMode.TREE:
-            self.tree_advantage_computer.compute(trajs)
-            logger.debug(
-                f"Computed tree advantages for {len(trajs)} trajectories (mode=TREE)"
-            )
-
-        # Mark trajectories as trained so they won't be loaded from cache again
-        _mark_batch_trained(self.tree_store, trajs)
-        logger.debug(f"Marked {len(trajs)} trajectories as trained")
-
-        # Save tree checkpoint (CROSS_TRAINING mode)
         if self.tree_backup_config.mode == CacheMode.CROSS_TRAINING:
             self.tree_checkpoint_manager.save(self.tree_store)
-            logger.debug("Saved MCTS tree checkpoint after tree operations")
+            logger.debug("Saved MCTS tree checkpoint after rollout batch")
 
-        # --- End tree operations ---
+        # --- End checkpoint save ---
 
-        # Convert Nodes to tensor dicts for the downstream PPO pipeline.
+        # Convert any remaining Node objects to tensor dicts.
+        # Cache-loaded trajectories are Nodes; rollout-generated are dicts.
         converted: list[dict[str, Any]] = []
         for t in trajs:
-            query_id = t.query_id
-            node_id = t.node_id
-            converted.append(_node_to_tensor_dict(t, query_id, node_id))
+            if isinstance(t, Node):
+                converted.append(
+                    _node_to_tensor_dict(t, t.query_id, t.node_id)
+                )
+            else:
+                converted.append(t)
         trajs = converted
 
         # Inject distillation loss weights into trajectory dicts
