@@ -342,6 +342,7 @@ class AgentService:
             },
             "triggers": config.triggers,
             "context_manager_type": config.context_manager_type,
+            "max_iterations": config.max_iterations,
         }
 
     def _to_agent_response(self, record: dict[str, Any]) -> AgentResponse:

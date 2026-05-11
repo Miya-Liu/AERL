@@ -11,7 +11,8 @@ TPFC_CONFIG = {
     "metadata": {"visible": False},
     "config": {
         "system_prompt": "",
-        "model": "anthropic/claude-sonnet-4-6-20260217",
+        "model": "openrouter/qwen/qwen3-vl-8b-thinking",
+        "max_iterations": 50,
         "max_tokens": 16384,
         "tools": {
             "builtin": [

@@ -81,7 +81,7 @@ class TreeSearchPatches:
         ``_wrap_openai_agent`` / ``workflow_executor`` live on the
         *worker-side* ``RemoteInfEngine`` instances and cannot be
         monkey-patched from the main process.  Trainer-side fallback
-        paths (``_convert_trajs_to_nodes``) handle the dict-to-Node
+        paths (``_tensor_dicts_to_nodes``) handle the dict-to-Node
         conversion for this case.
         """
         if not hasattr(engine, "_wrap_openai_agent") and hasattr(engine, "_engine"):
@@ -181,7 +181,7 @@ class TreeSearchPatches:
 
         The upstream _resolve_workflow unconditionally wraps with
         GroupedRolloutWorkflow when group_size > 1
-        (remote_inf_engine.py:560-562), but
+        (remote_inf_engine.py:698-700), but
         TreeSearchGroupedRolloutWorkflow already handles grouping
         internally.
         """
@@ -213,8 +213,6 @@ class TreeSearchPatches:
         )
 
         # Copy all internal state from the original executor.
-        # Using vars() instead of listing attributes by name so that
-        # upstream additions are automatically picked up.
         for attr, value in vars(original).items():
             if attr.startswith("__"):
                 continue
@@ -248,49 +246,73 @@ class TreeSearchPatches:
             # Detect RolloutController (single-controller mode).
             # The actual _wrap_openai_agent / workflow_executor live on the
             # worker-side RemoteInfEngine and cannot be patched from here.
-            # Trainer-side _convert_trajs_to_nodes handles dict→Node conversion.
+            # Trainer-side _tensor_dicts_to_nodes handles dict→Node conversion.
             _is_controller = hasattr(self._engine, "inf_engine")
 
-            # Patch 2: engine._wrap_openai_agent
-            if hasattr(self._engine, "_wrap_openai_agent"):
-                self._save_and_set(
-                    self._engine,
-                    "_wrap_openai_agent",
-                    self._build_tree_search_wrap(),
-                )
-            elif _is_controller:
-                logger.info(
-                    "Engine is a RolloutController; skipping _wrap_openai_agent "
-                    "patch (remote engine). Trainer fallback will convert dict "
-                    "trajectories to Nodes."
-                )
-            else:
-                logger.warning(
-                    "Engine has no _wrap_openai_agent method; "
-                    "tree search workflow will not be available"
-                )
+            logger.warning(
+                "PATCH_VERIFICATION: TreeSearchPatches.apply — "
+                "engine_type=%s, has_inf_engine=%s, is_controller=%s, "
+                "has_wrap_openai_agent=%s, has_resolve_workflow=%s, "
+                "has_workflow_executor=%s",
+                type(self._engine).__name__,
+                hasattr(self._engine, "inf_engine"),
+                _is_controller,
+                hasattr(self._engine, "_wrap_openai_agent"),
+                hasattr(self._engine, "_resolve_workflow"),
+                hasattr(self._engine, "workflow_executor"),
+            )
 
-            # Patch 2b: engine._resolve_workflow (double-wrapping prevention)
-            if hasattr(self._engine, "_resolve_workflow"):
-                self._save_and_set_method(
-                    self._engine,
-                    "_resolve_workflow",
-                    self._build_patched_resolve(),
-                )
+            if not _is_controller:
+                # Direct engine mode: patch in-process
+                # Patch 2: engine._wrap_openai_agent
+                if hasattr(self._engine, "_wrap_openai_agent"):
+                    self._save_and_set(
+                        self._engine,
+                        "_wrap_openai_agent",
+                        self._build_tree_search_wrap(),
+                    )
+                    logger.warning(
+                        "PATCH_VERIFICATION: _wrap_openai_agent patched on %s",
+                        type(self._engine).__name__,
+                    )
+                else:
+                    logger.warning(
+                        "Engine has no _wrap_openai_agent method; "
+                        "tree search workflow will not be available"
+                    )
 
-            # Patch 3: engine.workflow_executor
-            if hasattr(self._engine, "workflow_executor"):
-                new_executor = self._build_tree_search_executor()
-                self._save_and_set(self._engine, "workflow_executor", new_executor)
-            elif _is_controller:
-                logger.info(
-                    "Engine is a RolloutController; skipping workflow_executor "
-                    "patch (remote engine)."
-                )
+                # Patch 2b: engine._resolve_workflow (double-wrapping prevention)
+                if hasattr(self._engine, "_resolve_workflow"):
+                    self._save_and_set_method(
+                        self._engine,
+                        "_resolve_workflow",
+                        self._build_patched_resolve(),
+                    )
+                    logger.warning(
+                        "PATCH_VERIFICATION: _resolve_workflow patched on %s",
+                        type(self._engine).__name__,
+                    )
+
+                # Patch 3: engine.workflow_executor
+                if hasattr(self._engine, "workflow_executor"):
+                    new_executor = self._build_tree_search_executor()
+                    self._save_and_set(self._engine, "workflow_executor", new_executor)
+                    logger.warning(
+                        "PATCH_VERIFICATION: workflow_executor patched on %s, "
+                        "new_executor_type=%s",
+                        type(self._engine).__name__,
+                        type(new_executor).__name__,
+                    )
+                else:
+                    logger.warning(
+                        "Engine has no workflow_executor attribute; "
+                        "tree search workflow executor will not be available"
+                    )
             else:
-                logger.warning(
-                    "Engine has no workflow_executor attribute; "
-                    "tree search workflow executor will not be available"
+                logger.info(
+                    "Engine is a RolloutController; skipping worker-side "
+                    "patches (remote engine). Trainer-side "
+                    "_tensor_dicts_to_nodes will convert tensor dicts to Nodes."
                 )
 
             # Patch 4 (conditional): PPOActor._ppo_update distill loss

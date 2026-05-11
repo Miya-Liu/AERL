@@ -26,6 +26,15 @@ class TreeSearchGroupedRolloutWorkflow(GroupedRolloutWorkflow):
     async def arun_episode(
         self, engine: InferenceEngine, data: dict[str, Any]
     ) -> list | None:
+        logger.warning(
+            "PATCH_VERIFICATION: TreeSearchGroupedRolloutWorkflow.arun_episode CALLED — "
+            "class=%s, group_size=%d, inner_workflow_type=%s, query_id=%s",
+            type(self).__name__,
+            self.group_size,
+            type(self.workflow).__name__,
+            data.get("query_id", ""),
+        )
+
         results = await asyncio.gather(
             *[self.workflow.arun_episode(engine, data) for _ in range(self.group_size)],
             return_exceptions=True,

@@ -22,6 +22,7 @@ class AgentConfig(BaseModel):
     tools: AgentToolsConfig = Field(default_factory=AgentToolsConfig)
     triggers: list[dict[str, Any]] = Field(default_factory=list)
     context_manager_type: str | None = "vanilla"
+    max_iterations: int | None = None
 
 
 class AgentCreateRequest(BaseModel):

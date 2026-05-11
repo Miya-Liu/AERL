@@ -32,6 +32,15 @@ class TreeSearchWorkflowExecutor(WorkflowExecutor):
             """Execute workflow.arun_episode and handle list[Node] returns."""
             task_id = pending_task.task_id
 
+            # PATCH_VERIFICATION: confirm TreeSearchWorkflowExecutor is active
+            self.logger.warning(
+                "PATCH_VERIFICATION: TreeSearchWorkflowExecutor._execute_workflow CALLED — "
+                "executor_class=%s, workflow_type=%s, task_id=%s",
+                type(self).__name__,
+                type(pending_task.workflow).__name__,
+                task_id,
+            )
+
             # Set task_id in ContextVar before entering arun_episode
             perf_tracer.set_task_id(task_id)
 

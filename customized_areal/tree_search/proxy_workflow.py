@@ -48,6 +48,15 @@ def interactions_dict_to_nodes(interactions: dict[str, Any]) -> list[Node]:
 
     nodes: list[Node] = []
 
+    # DEBUG: log input dict structure
+    logger.warning(
+        "DEBUG interactions_dict_to_nodes: dict has %d keys, "
+        "key_samples=%s, value_type_samples=%s",
+        len(interactions),
+        list(interactions.keys())[:3],
+        [type(v).__name__ for v in list(interactions.values())[:3]],
+    )
+
     for turn_idx, (interaction_id, interaction) in enumerate(
         interactions.items(), start=1
     ):
@@ -156,6 +165,11 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
     ``concat_padded_tensors``, which drops non-tensor keys. This subclass
     performs the conversion early and adds the query_id before returning.
 
+    When ``group_size > 1``, this workflow runs multiple episodes internally
+    and collects all per-turn Nodes into a flat ``list[Node]``, replacing the
+    need for the base ``GroupedRolloutWorkflow`` wrapper (which doesn't
+    understand ``list[Node]`` returns).
+
     Parameters
     ----------
     agent_path : str, optional
@@ -163,15 +177,32 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
         ``"customized_areal.tpfc.tpfc_agent.TPFCAgent"``). The class is
         imported and instantiated with no arguments. Ignored if ``agent``
         is also provided.
+    group_size : int, optional
+        Number of rollout episodes to run per input. When > 1, this workflow
+        handles grouping internally, so the caller (e.g. RemoteInfEngine)
+        should set its own ``group_size=1`` to avoid double-wrapping.
     **kwargs
         All other kwargs are forwarded to ``OpenAIProxyWorkflow.__init__``.
     """
 
-    def __init__(self, agent_path: str | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, agent_path: str | None = None, group_size: int = 1, **kwargs: Any
+    ) -> None:
         # Resolve agent_path to an agent instance if agent not explicitly given
         if "agent" not in kwargs and agent_path is not None:
             agent_cls = import_from_string(agent_path)
             kwargs["agent"] = agent_cls()
+        self.group_size = group_size
+        # Remove group_size from kwargs before passing to super (it's not an OpenAIProxyWorkflow param)
+        kwargs.pop("group_size", None)
+        logger.warning(
+            "PATCH_VERIFICATION: QueryIDProxyWorkflow.__init__ CALLED — "
+            "mode=%s, agent_path=%s, group_size=%d, proxy_addr=%s",
+            kwargs.get("mode", "?"),
+            agent_path,
+            group_size,
+            kwargs.get("proxy_addr", "?")[:40] if kwargs.get("proxy_addr") else "?",
+        )
         super().__init__(**kwargs)
 
     def _interactions_to_nodes(self, interactions: dict[str, Any]) -> list[Node]:
@@ -182,9 +213,18 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
         """
         return interactions_dict_to_nodes(interactions)
 
-    async def arun_episode(self, engine, data: dict) -> list[Node] | None:
-        query_id = data.get("query_id") or ""
+    def _single_episode(self, engine, data: dict, query_id: str) -> list[Node] | None:
+        """Run a single episode and convert to list[Node].
 
+        This is the synchronous version used by arun_episode internally.
+        """
+        # This will be called from arun_episode which is async
+        raise NotImplementedError("Use _async_single_episode instead")
+
+    async def _async_single_episode(
+        self, engine, data: dict, query_id: str
+    ) -> list[Node] | None:
+        """Run a single episode via super().arun_episode and convert to Nodes."""
         result = await super().arun_episode(engine, data)
 
         if result is None:
@@ -204,7 +244,7 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
 
         if isinstance(result, list):
             logger.warning(
-                "QueryIDProxyWorkflow.arun_episode received list result "
+                "QueryIDProxyWorkflow: super().arun_episode returned list "
                 "instead of dict; attempting dict conversion"
             )
             if result and isinstance(result[0], InteractionWithTokenLogpReward):
@@ -218,8 +258,65 @@ class QueryIDProxyWorkflow(OpenAIProxyWorkflow):
 
         if result is not None:
             logger.warning(
-                "QueryIDProxyWorkflow.arun_episode received unexpected result type: %s",
+                "QueryIDProxyWorkflow: unexpected result type %s",
                 type(result).__name__,
             )
 
         return None
+
+    async def arun_episode(self, engine, data: dict) -> list[Node] | None:
+        query_id = data.get("query_id") or ""
+
+        logger.warning(
+            "PATCH_VERIFICATION: QueryIDProxyWorkflow.arun_episode CALLED — "
+            "class=%s, query_id=%s, engine_type=%s, group_size=%d",
+            type(self).__name__,
+            query_id,
+            type(engine).__name__,
+            self.group_size,
+        )
+
+        if self.group_size <= 1:
+            return await self._async_single_episode(engine, data, query_id)
+
+        # group_size > 1: run multiple episodes and collect all Nodes
+        import asyncio
+
+        results = await asyncio.gather(
+            *[
+                self._async_single_episode(engine, data, query_id)
+                for _ in range(self.group_size)
+            ],
+            return_exceptions=True,
+        )
+
+        valid_results = [
+            r for r in results if not isinstance(r, Exception) and r is not None
+        ]
+
+        if not valid_results:
+            return None
+
+        if len(valid_results) < len(results):
+            logger.warning(
+                "QueryIDProxyWorkflow: %d/%d episodes returned None or failed",
+                len(results) - len(valid_results),
+                len(results),
+            )
+
+        # Assign distinct episode_ids per group and flatten
+        all_nodes: list[Node] = []
+        for group_idx, episode_nodes in enumerate(valid_results):
+            episode_id = (
+                f"{query_id}_{group_idx}_{uuid.uuid4().hex[:8]}"
+                if query_id
+                else f"{group_idx}_{uuid.uuid4().hex[:8]}"
+            )
+            for turn_idx, node in enumerate(episode_nodes, start=1):
+                node.episode_id = episode_id
+                node.query_id = query_id
+                if not node.turn_idx:
+                    node.turn_idx = turn_idx
+            all_nodes.extend(episode_nodes)
+
+        return all_nodes if all_nodes else None

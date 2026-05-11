@@ -23,10 +23,10 @@ from customized_areal.tree_search.advantage import TreeAdvantageComputer
 from customized_areal.tree_search.checkpoint import TreeCheckpointManager
 from customized_areal.tree_search.config import (
     AdvantageMode,
+    CacheMode,
     LossMode,
     RolloutCacheConfig,
     TreeBackupConfig,
-    TreeBackupMode,
 )
 from customized_areal.tree_search.mcts_tree_store import (
     MCTSTreeStore,
@@ -164,7 +164,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         if (
             self.cache_config.enabled
-            and self.tree_backup_config.mode != TreeBackupMode.OFF
+            and self.tree_backup_config.mode != CacheMode.OFF
         ):
             self._init_tree_components()
             self._patches = TreeSearchPatches(
@@ -215,7 +215,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         )
 
         # Load existing tree checkpoint if available (CROSS_TRAINING mode)
-        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+        if self.tree_backup_config.mode == CacheMode.CROSS_TRAINING:
             if self.tree_checkpoint_manager.exists():
                 self.tree_store = self.tree_checkpoint_manager.load()
                 logger.info("Loaded MCTS tree checkpoint with cached rollouts")
@@ -227,6 +227,65 @@ class CacheAwarePPOTrainer(PPOTrainer):
             self.tree_store, self.cache_config.n_samples
         )
 
+    @staticmethod
+    def _tensor_dicts_to_nodes(
+        tensor_dicts: list[dict], prompts: list[dict]
+    ) -> list[Node]:
+        """Convert tensor dicts (from RPC/remote engine) to Node objects.
+
+        Each tensor dict may contain a batch of grouped trajectories
+        (e.g. group_size=2 means shape [2, seq_len]).  We split them
+        into individual Nodes.
+
+        ``node_id`` is read from the ``node_id`` list key (populated by
+        ``InteractionWithTokenLogpReward.to_tensor_dict``).  ``query_id``
+        is taken from the corresponding prompt dict.
+        """
+        import uuid
+
+        from areal.infra.rpc.rtensor import RTensor
+
+        nodes: list[Node] = []
+
+        for traj_idx, traj in enumerate(tensor_dicts):
+            traj = RTensor.localize(traj)
+            query_id = (
+                prompts[traj_idx].get("query_id", "")
+                if traj_idx < len(prompts)
+                else ""
+            )
+            input_ids = traj["input_ids"]  # [B, seq_len]
+            loss_mask = traj["loss_mask"]
+            logprobs = traj["logprobs"]
+            versions = traj["versions"]
+            rewards = traj["rewards"]  # [B]
+            node_ids = traj.get("node_id", [])  # list[str] or empty
+
+            batch_size = input_ids.shape[0]
+            for b in range(batch_size):
+                nid = node_ids[b] if b < len(node_ids) else uuid.uuid4().hex
+                node = Node(
+                    input_ids=input_ids[b].tolist(),
+                    loss_mask=loss_mask[b].tolist(),
+                    logprobs=logprobs[b].tolist(),
+                    versions=versions[b].tolist(),
+                    node_id=nid,
+                    query_id=str(query_id) if query_id else "",
+                    outcome_reward=(
+                        rewards[b].item()
+                        if rewards.dim() > 0
+                        else float(rewards)
+                    ),
+                    episode_id=(
+                        f"{query_id}_{b}_{uuid.uuid4().hex[:8]}"
+                        if query_id
+                        else uuid.uuid4().hex
+                    ),
+                )
+                nodes.append(node)
+
+        return nodes
+
     def _save_recover_checkpoint(
         self, epoch: int, epoch_step: int, global_step: int
     ) -> None:
@@ -235,7 +294,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 
         if (
             self.cache_config.enabled
-            and self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING
+            and self.tree_backup_config.mode == CacheMode.CROSS_TRAINING
         ):
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.info("Saved MCTS tree checkpoint with rollout cache")
@@ -303,8 +362,13 @@ class CacheAwarePPOTrainer(PPOTrainer):
                 group_size=group_size,
             )
 
-            # TreeSearchWorkflowExecutor already returns flat list of Node objects
             trajs = new_trajs if new_trajs else []
+
+            # When using RolloutController (remote engine), rollout_batch
+            # returns tensor dicts, not Node objects.  Convert them to Nodes
+            # so that tree_store.insert_batch can use node_id / query_id.
+            if trajs and not isinstance(trajs[0], Node):
+                trajs = self._tensor_dicts_to_nodes(trajs, all_prompts)
 
             logger.info(f"Cache-aware rollout: 0 cached, {len(trajs)} newly generated")
 
@@ -332,7 +396,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
         logger.debug(f"Marked {len(trajs)} trajectories as trained")
 
         # Save tree checkpoint (CROSS_TRAINING mode)
-        if self.tree_backup_config.mode == TreeBackupMode.CROSS_TRAINING:
+        if self.tree_backup_config.mode == CacheMode.CROSS_TRAINING:
             self.tree_checkpoint_manager.save(self.tree_store)
             logger.debug("Saved MCTS tree checkpoint after tree operations")
 
