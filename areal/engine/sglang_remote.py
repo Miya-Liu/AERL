@@ -28,6 +28,7 @@ from areal.api.io_struct import (
     HttpGenerationResult,
     HttpRequest,
     WeightUpdateRequests,
+    detect_image_mime,
     get_versioned_lora_name,
 )
 from areal.infra import RemoteInfEngine, RolloutController, WorkflowExecutor
@@ -66,9 +67,21 @@ class SGLangBackend:
         if stop:
             sample_params["stop"] = stop
 
+        # SGLang /generate expects data URIs or file paths for image_data,
+        # but req.image_data contains raw base64 strings (without data URI prefix).
+        # Wrap raw base64 with the correct MIME type, matching what vLLM does.
+        image_data = None
+        if req.image_data:
+            image_data = [
+                img
+                if img.startswith(("data:", "http://", "https://"))
+                else f"data:{detect_image_mime(img)};base64,{img}"
+                for img in req.image_data
+            ]
+
         payload = {
             "input_ids": req.input_ids.copy(),
-            "image_data": req.image_data,  # ImageObject or str
+            "image_data": image_data,
             "sampling_params": sample_params,
             "return_logprob": True,
             "stream": False,

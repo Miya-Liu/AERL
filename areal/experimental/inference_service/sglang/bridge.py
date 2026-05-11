@@ -11,6 +11,7 @@ import numpy as np
 from areal.api.io_struct import (
     HttpGenerationResult,
     HttpRequest,
+    detect_image_mime,
     get_versioned_lora_name,
 )
 
@@ -60,9 +61,21 @@ class SGLangBridgeBackend:
         if gconfig.stop:
             sampling_params["stop"] = gconfig.stop
 
+        # SGLang /generate expects data URIs or file paths for image_data,
+        # but req.image_data contains raw base64 strings (without data URI prefix).
+        # Wrap raw base64 with the correct MIME type, matching what vLLM does.
+        image_data = None
+        if req.image_data:
+            image_data = [
+                img
+                if img.startswith(("data:", "http://", "https://"))
+                else f"data:{detect_image_mime(img)};base64,{img}"
+                for img in req.image_data
+            ]
+
         payload: dict[str, Any] = {
             "input_ids": list(req.input_ids),
-            "image_data": req.image_data,
+            "image_data": image_data,
             "sampling_params": sampling_params,
             "return_logprob": True,
             "stream": False,
