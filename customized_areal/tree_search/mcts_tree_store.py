@@ -28,7 +28,8 @@ class Node:
     this turn's response). Nodes are linked via node_id/parent_node_id and
     grouped into episodes via episode_id.
 
-    node_id is assigned by the tree store after insertion. query_id is
+    node_id is the globally unique interaction ID (UUID string from the
+    inference engine). query_id is
     set as metadata. advantages/returns are set by the advantage computer.
     """
 
@@ -39,8 +40,8 @@ class Node:
     versions: list[int]  # policy version (-1 on prompt)
 
     # Tree structure
-    node_id: int = 0  # unique sequence ID (assigned by store)
-    parent_node_id: int | None = None  # parent sequence ID (None for root)
+    node_id: str = ""  # globally unique interaction ID (UUID from inference engine)
+    parent_node_id: str | None = None  # parent interaction ID (None for root)
     episode_id: str = ""  # groups turns into a trajectory path
     turn_idx: int = 0  # 1-based turn position within episode
     query_id: str = ""  # dataset query identifier
