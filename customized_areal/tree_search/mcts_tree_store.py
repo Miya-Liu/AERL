@@ -109,7 +109,7 @@ def _optional_tensor_field(
 
 
 def _node_to_tensor_dict(
-    node: Node, query_id: str, node_id: int, num_turns_in_episode: int = 1
+    node: Node, query_id: str, node_id: str, num_turns_in_episode: int = 1
 ) -> dict[str, Any]:
     """Convert a single Node to a tensor dict with shape [1, seq_len]."""
     seq_len = len(node.input_ids)
