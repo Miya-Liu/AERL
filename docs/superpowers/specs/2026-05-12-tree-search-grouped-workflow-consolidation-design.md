@@ -187,7 +187,17 @@ class CacheAwarePPOTrainer(PPOTrainer):
         return super()._create_train_engine(actor_config, alloc)
 
     def train(self, **kwargs):
-        # No monkey-patching. Just call super().
+        # Apply distill loss patch if needed, no workflow patches
+        if self.tree_backup_config.loss_mode != LossMode.GRPO:
+            from customized_areal.tree_search.training.actor import (
+                patch_ppo_actor_class_to_use_distill_loss,
+                unpatch_ppo_actor_distill_loss,
+            )
+            patch_ppo_actor_class_to_use_distill_loss()
+            try:
+                return super().train(**kwargs)
+            finally:
+                unpatch_ppo_actor_distill_loss()
         return super().train(**kwargs)
 ```
 
@@ -200,7 +210,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 - `tree_store`, `tree_advantage_computer`, `tree_checkpoint_manager`, `_batch_builder`, `_patches` attributes
 - `_save_recover_checkpoint` override
 - `prepare_batch` monkey-patching in `train()`
-- `TreeSearchPatches` import and usage
+- `TreeSearchPatches` import and usage (distill loss patch is called directly via `patch_ppo_actor_class_to_use_distill_loss` / `unpatch_ppo_actor_distill_loss` when `loss_mode != GRPO`)
 
 ### 6. Files deleted
 
@@ -209,7 +219,7 @@ class CacheAwarePPOTrainer(PPOTrainer):
 | `customized_areal/tree_search/proxy_workflow.py` | `QueryIDProxyWorkflow` absorbed into `TreeSearchGroupedRolloutWorkflow` |
 | `customized_areal/tree_search/grouped_workflow.py` | Old `TreeSearchGroupedRolloutWorkflow` replaced |
 | `customized_areal/tree_search/workflow_executor.py` | `TreeSearchWorkflowExecutor` no longer needed — base `WorkflowExecutor` handles tensor dicts |
-| `customized_areal/tree_search/patches.py` | `TreeSearchPatches` no longer needed — `.env` flag replaces all patches |
+| `customized_areal/tree_search/patches.py` | `TreeSearchPatches` deleted. The distill loss patch (`patch_ppo_actor_class_to_use_distill_loss` / `unpatch_ppo_actor_distill_loss`) stays in `customized_areal/tree_search/training/actor.py` and is called directly from the trainer. |
 
 ### 7. Files created
 
