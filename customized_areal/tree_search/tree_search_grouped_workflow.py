@@ -158,3 +158,175 @@ def _nodes_to_batched_tensor_dict(nodes: list[Node]) -> dict[str, Any] | None:
         for node in nodes
     ]
     return concat_padded_tensors(tensor_dicts)
+
+
+class TreeSearchGroupedRolloutWorkflow(RolloutWorkflow):
+    """GroupedRolloutWorkflow with tree-search cache reuse, tree ops, and checkpoint.
+
+    Wraps the base OpenAIProxyWorkflow and overrides arun_episode to:
+    1. Check cache: how many untrained episodes exist for this query?
+    2. Generate only the needed fresh episodes (group_size - cached_count)
+    3. Convert fresh results to Nodes, load cached Nodes
+    4. Combine cached + fresh Nodes (total = group_size)
+    5. Insert fresh Nodes into tree_store
+    6. Compute tree advantages (if advantage_mode == TREE)
+    7. Mark all nodes as trained
+    8. Save tree checkpoint (if cache_mode == CROSS_TRAINING)
+    9. Return batched tensor dict
+    """
+
+    def __init__(
+        self,
+        workflow: RolloutWorkflow,
+        group_size: int,
+        checkpoint_dir: str,
+        advantage_mode: AdvantageMode,
+        loss_mode: LossMode,
+        cache_mode: CacheMode,
+        rl_loss_weight: float = 1.0,
+        distill_loss_weight: float = 0.005,
+    ) -> None:
+        from customized_areal.tree_search.advantage import TreeAdvantageComputer
+        from customized_areal.tree_search.checkpoint import TreeCheckpointManager
+        from customized_areal.tree_search.mcts_tree_store import MCTSTreeStore
+
+        if group_size < 1:
+            raise ValueError(f"group_size must be >= 1, got {group_size}")
+        self.workflow = workflow
+        self.group_size = group_size
+        self.advantage_mode = advantage_mode
+        self.loss_mode = loss_mode
+        self.cache_mode = cache_mode
+        self.rl_loss_weight = rl_loss_weight
+        self.distill_loss_weight = distill_loss_weight
+
+        self.tree_store = MCTSTreeStore()
+        self.tree_advantage_computer = TreeAdvantageComputer(self.tree_store)
+        self.tree_checkpoint_manager = TreeCheckpointManager(checkpoint_dir)
+
+        # Load existing tree checkpoint if present (CROSS_TRAINING mode)
+        if self.cache_mode == CacheMode.CROSS_TRAINING:
+            if self.tree_checkpoint_manager.exists():
+                self.tree_store = self.tree_checkpoint_manager.load()
+                logger.info("Loaded MCTS tree checkpoint with cached rollouts")
+
+        # Reset trained flags for a fresh training run
+        self.tree_store.reset_trained_flags()
+
+    def _result_to_nodes(self, result: Any, query_id: str, group_idx: int) -> list[Node] | None:
+        """Convert a single arun_episode result to list[Node]."""
+        from areal.experimental.openai.types import InteractionWithTokenLogpReward
+
+        if isinstance(result, dict) and all(
+            isinstance(v, InteractionWithTokenLogpReward) for v in result.values()
+        ):
+            nodes = interactions_dict_to_nodes(result)
+        elif (
+            isinstance(result, list)
+            and result
+            and isinstance(result[0], InteractionWithTokenLogpReward)
+        ):
+            converted = {str(i): v for i, v in enumerate(result)}
+            nodes = interactions_dict_to_nodes(converted)
+        else:
+            return None
+
+        episode_id = (
+            f"{query_id}_{group_idx}_{uuid.uuid4().hex[:8]}"
+            if query_id
+            else f"{group_idx}_{uuid.uuid4().hex[:8]}"
+        )
+        for turn_idx, node in enumerate(nodes, start=1):
+            node.episode_id = episode_id
+            node.query_id = query_id
+            if not node.turn_idx:
+                node.turn_idx = turn_idx
+        return nodes
+
+    async def arun_episode(
+        self, engine, data: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        query_id = data.get("query_id") or ""
+
+        # 1. Check cache
+        cached_count = (
+            self.tree_store.get_untrained_count(query_id) if query_id else 0
+        )
+        need_gen = max(0, self.group_size - cached_count)
+
+        logger.info(
+            "TreeSearchGroupedWorkflow: query_id=%s, group_size=%d, "
+            "cached=%d, need_gen=%d",
+            query_id,
+            self.group_size,
+            cached_count,
+            need_gen,
+        )
+
+        # 2. Generate fresh episodes if needed
+        fresh_nodes: list[Node] = []
+        if need_gen > 0:
+            import asyncio
+
+            results = await asyncio.gather(
+                *[
+                    self.workflow.arun_episode(engine, data)
+                    for _ in range(need_gen)
+                ],
+                return_exceptions=True,
+            )
+
+            for group_idx, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "Episode %d failed: %s", group_idx, result
+                    )
+                    continue
+                if result is None:
+                    continue
+                nodes = self._result_to_nodes(result, query_id, group_idx)
+                if nodes:
+                    fresh_nodes.extend(nodes)
+
+        # 3. Load cached nodes
+        cached_nodes: list[Node] = []
+        if cached_count > 0 and query_id:
+            cached_nodes = self.tree_store.load_trajectories(
+                query_id, cached_count
+            )
+
+        # 4. Combine
+        all_nodes = fresh_nodes + cached_nodes
+
+        if not all_nodes:
+            return None
+
+        # 5. Insert fresh nodes into tree
+        if fresh_nodes:
+            self.tree_store.insert_batch(fresh_nodes)
+
+        # 6. Compute tree advantages
+        if self.advantage_mode == AdvantageMode.TREE:
+            self.tree_advantage_computer.compute(all_nodes)
+
+        # 7. Mark all nodes as trained
+        for node in all_nodes:
+            if node.node_id:
+                self.tree_store.set_trained(node.node_id, True)
+
+        # 8. Save tree checkpoint
+        if self.cache_mode == CacheMode.CROSS_TRAINING:
+            self.tree_checkpoint_manager.save(self.tree_store)
+
+        # 9. Convert to batched tensor dict
+        result_dict = _nodes_to_batched_tensor_dict(all_nodes)
+
+        # 10. Inject distill loss weights
+        if result_dict is not None and self.loss_mode != LossMode.GRPO:
+            if self.loss_mode == LossMode.DISTILL:
+                result_dict["rl_loss_weight"] = 0.0
+            else:
+                result_dict["rl_loss_weight"] = self.rl_loss_weight
+            result_dict["distill_loss_weight"] = self.distill_loss_weight
+
+        return result_dict
