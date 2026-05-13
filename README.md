@@ -20,3 +20,7 @@ Optional upstream check for `GET /ready` when `AERL_READY_CHECK_UPSTREAM=true`: 
 ## Jobs hook
 
 `POST /aerl/v1/jobs` accepts a JSON object (max size `AERL_MAX_JOB_BYTES`, default 1 MiB). Validation errors return AERL `{ "error": ... }` JSON (4xx). Successful acceptance returns **HTTP 200** with `{ "job_id", "status": "accepted|forwarded|failed" }` — including `failed` when the optional `AERL_JOB_WEBHOOK_URL` webhook returns non-2xx or hits a transport error. Optional `AERL_JOB_WEBHOOK_AUTH` sets the outbound `Authorization` header for the webhook.
+
+## OpenAI-compatible proxy
+
+`GET/POST/... /v1/*` forwards to `{UPSTREAM_OPENAI_BASE_URL}/<path>` (same host as readiness probe), logs JSONL under `AERL_DATA_DIR/traces.jsonl`, and adds `X-AERL-Request-Id` to responses. Upstream HTTP status and body are passed through unchanged.
