@@ -58,6 +58,7 @@ class Settings:
     job_webhook_timeout: float
     upstream_timeout: float
     ready_auth: str | None
+    max_job_bytes: int
 
 
 def load_settings() -> Settings:
@@ -94,4 +95,5 @@ def load_settings() -> Settings:
         job_webhook_timeout=_float("AERL_JOB_WEBHOOK_TIMEOUT", 30.0),
         upstream_timeout=_float("AERL_UPSTREAM_TIMEOUT", 120.0),
         ready_auth=ready_auth,
+        max_job_bytes=_int("AERL_MAX_JOB_BYTES", 1024 * 1024),
     )

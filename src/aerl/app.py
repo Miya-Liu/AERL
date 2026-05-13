@@ -6,6 +6,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from aerl import __version__
+from aerl.jobs import post_job
 from aerl.middleware import RequestIdMiddleware
 from aerl.settings import load_settings
 from aerl.upstream_probe import probe_upstream
@@ -34,6 +35,7 @@ def create_app() -> Starlette:
         routes=[
             Route("/health", health, methods=["GET"]),
             Route("/ready", ready, methods=["GET"]),
+            Route("/aerl/v1/jobs", post_job, methods=["POST"]),
         ],
         middleware=[Middleware(RequestIdMiddleware)],
     )
