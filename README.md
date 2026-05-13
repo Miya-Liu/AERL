@@ -7,8 +7,8 @@ See [docs/specs/2026-05-13-aerl-minimal-core-design.md](docs/specs/2026-05-13-ae
 ## Development
 
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
-pytest -q
+uv sync --extra dev
+uv run pytest -q
 ```
+
+(Or `python -m venv .venv && pip install -e '.[dev]'` then `pytest`.)
