@@ -57,6 +57,7 @@ class Settings:
     ready_probe_path: str
     job_webhook_timeout: float
     upstream_timeout: float
+    ready_auth: str | None
 
 
 def load_settings() -> Settings:
@@ -74,6 +75,9 @@ def load_settings() -> Settings:
     auth = os.environ.get("AERL_JOB_WEBHOOK_AUTH")
     webhook_auth = auth.strip() if auth and auth.strip() else None
 
+    ready_a = os.environ.get("AERL_READY_AUTH")
+    ready_auth = ready_a.strip() if ready_a and ready_a.strip() else None
+
     return Settings(
         upstream_openai_base_url=normalize_upstream_base(upstream),
         data_dir=data_dir.strip(),
@@ -89,4 +93,5 @@ def load_settings() -> Settings:
         ready_probe_path=os.environ.get("AERL_READY_PROBE_PATH", "models").strip(),
         job_webhook_timeout=_float("AERL_JOB_WEBHOOK_TIMEOUT", 30.0),
         upstream_timeout=_float("AERL_UPSTREAM_TIMEOUT", 120.0),
+        ready_auth=ready_auth,
     )
