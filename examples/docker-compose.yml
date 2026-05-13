@@ -1,0 +1,17 @@
+# Example: build and run AERL in Docker. Set UPSTREAM_OPENAI_BASE_URL to your API base
+# (must include `/v1` suffix per join rules). Override AERL_LISTEN_PORT if needed.
+services:
+  aerl:
+    build:
+      context: ..
+      dockerfile: examples/aerl.Dockerfile
+    ports:
+      - "8765:8765"
+    environment:
+      UPSTREAM_OPENAI_BASE_URL: ${UPSTREAM_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      AERL_DATA_DIR: /data
+    volumes:
+      - aerl_data:/data
+
+volumes:
+  aerl_data: {}

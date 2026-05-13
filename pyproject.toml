@@ -10,6 +10,9 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.scripts]
+aerl = "aerl.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
