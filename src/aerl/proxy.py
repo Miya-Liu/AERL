@@ -81,6 +81,58 @@ def _extract_model(request_body: bytes) -> str | None:
     return None
 
 
+class SSEAggregator:
+    """Parse OpenAI-style SSE lines and concatenate ``choices[0].delta.content``."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._parts: list[str] = []
+
+    def feed(self, data: bytes) -> None:
+        self._buf += data.decode("utf-8", errors="replace")
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            line = line.rstrip("\r")
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:].strip()
+            if payload == "[DONE]":
+                continue
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            choices = obj.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            c0 = choices[0]
+            if not isinstance(c0, dict):
+                continue
+            delta = c0.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            piece = delta.get("content")
+            if isinstance(piece, str):
+                self._parts.append(piece)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
+def _truncate_str_utf8(text: str, max_bytes: int) -> tuple[str, bool]:
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text, False
+    cut = raw[:max_bytes].decode("utf-8", errors="ignore")
+    return cut + "…[truncated]", True
+
+
+def _is_sse_response(resp: httpx.Response) -> bool:
+    ct = resp.headers.get("content-type") or ""
+    return "text/event-stream" in ct.lower()
+
+
 async def _proxy_large(
     request: Request,
     upstream_url: str,
@@ -124,6 +176,9 @@ async def _proxy_large(
         "request_body_omitted": True,
         "response_body_omitted": True,
     }
+    record["request_headers"] = redact_headers(
+        {k: v for k, v in request.headers.items()}
+    )
     store.append(record)
     r = Response(content=body, status_code=status, headers=dict(out_headers))
     r.headers["X-AERL-Request-Id"] = rid
@@ -176,7 +231,6 @@ async def proxy_v1(request: Request) -> Response:
     res_bytes = resp.content
 
     req_log, req_trunc = _truncate_bytes(body, settings.max_body_bytes)
-    res_log, res_trunc = _truncate_bytes(res_bytes, settings.max_body_bytes)
 
     record: dict[str, Any] = {
         "request_id": rid,
@@ -187,15 +241,28 @@ async def proxy_v1(request: Request) -> Response:
         "path": request.url.path,
         "upstream_status": resp.status_code,
         "request_body_truncated": req_trunc,
-        "response_body_truncated": res_trunc,
     }
     model = _extract_model(body)
     if model is not None:
         record["model"] = model
     if req_log is not None:
         record["request_body"] = req_log
-    if res_log is not None:
-        record["response_body"] = res_log
+
+    sse = resp.status_code == 200 and _is_sse_response(resp)
+    if sse:
+        agg = SSEAggregator()
+        agg.feed(res_bytes)
+        agg_text, agg_trunc = _truncate_str_utf8(agg.text, settings.max_body_bytes)
+        record["stream"] = True
+        record["aggregated_text"] = agg_text
+        record["aggregated_text_truncated"] = agg_trunc
+        record["response_body_omitted"] = True
+        record["response_body_truncated"] = False
+    else:
+        res_log, res_trunc = _truncate_bytes(res_bytes, settings.max_body_bytes)
+        record["response_body_truncated"] = res_trunc
+        if res_log is not None:
+            record["response_body"] = res_log
 
     record["request_headers"] = redact_headers(
         {k: v for k, v in request.headers.items()}
