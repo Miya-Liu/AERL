@@ -1,5 +1,7 @@
 # AERL minimal core (v1) implementation plan
 
+> **Ship status:** Minimal core v1 is implemented on `main` (see git history through 2026-05-13). Step checkboxes below are marked complete for archival traceability; use git for the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use @superpowers/subagent-driven-development (recommended) or @superpowers/executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a single-process ASGI service that proxies OpenAI-compatible `/v1/*` to an upstream while appending structured JSONL traces, exposes `/health` and `/ready`, and accepts `POST /aerl/v1/jobs` with optional webhook forwarding.
@@ -55,7 +57,7 @@
 - Create: `src/aerl/__init__.py`
 - Create: `tests/conftest.py`
 
-- [ ] **Step 1: Write failing test** — `tests/test_health_ready.py` imports app (will fail).
+- [x] **Step 1: Write failing test** — `tests/test_health_ready.py` imports app (will fail).
 
 ```python
 import pytest
@@ -74,13 +76,13 @@ async def test_health_returns_version():
     assert "version" in r.json()
 ```
 
-- [ ] **Step 2: Run test — expect failure**
+- [x] **Step 2: Run test — expect failure**
 
 Run: `cd /home/liumy26/AERL && uv run pytest tests/test_health_ready.py::test_health_returns_version -v`  
 (if `uv` unavailable: `python -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]' && pytest ...`)  
 Expected: `ImportError` or `ModuleNotFoundError` for `aerl.app`.
 
-- [ ] **Step 3: Minimal `pyproject.toml` + package + stub `create_app`**
+- [x] **Step 3: Minimal `pyproject.toml` + package + stub `create_app`**
 
 After first edit, run `cd /home/liumy26/AERL && uv sync` (or `pip install -e '.[dev]'`) and fix Hatchling `src` layout (`[tool.hatch.build.targets.wheel] packages = ["src/aerl"]` may need adjustment per [Hatchling packages](https://hatch.pypa.io/latest/config/build/#packages)) until imports work.
 
@@ -130,12 +132,12 @@ def create_app():
 
 `src/aerl/__init__.py`: `__version__ = "0.1.0"`
 
-- [ ] **Step 4: Run test — expect pass**
+- [x] **Step 4: Run test — expect pass**
 
 Run: `uv run pytest tests/test_health_ready.py::test_health_returns_version -v`  
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /home/liumy26/AERL && git add pyproject.toml src/aerl tests && git commit -m "chore: scaffold aerl package and health route"
@@ -151,21 +153,21 @@ cd /home/liumy26/AERL && git add pyproject.toml src/aerl tests && git commit -m 
 
 Decisions locked here: `AERL_MAX_BODY_BYTES` default **4194304** (4 MiB). **`AERL_MAX_BUFFERED_REQUEST_BYTES` default `33554432` (32 MiB)** — max request body size AERL will buffer for logging+forward before switching to stream-only logging. `AERL_LISTEN_HOST` default **0.0.0.0**, `AERL_LISTEN_PORT` default **8765**. **`AERL_READY_PROBE_PATH` default `models`** — joined to `UPSTREAM_OPENAI_BASE_URL` after normalization as `{normalized_upstream}/{probe_path}` (so a base `https://api.openai.com/v1` becomes `https://api.openai.com/v1/models`). `AERL_JOB_WEBHOOK_TIMEOUT` default **30.0** seconds. **`AERL_UPSTREAM_TIMEOUT` default `120.0`** seconds for proxied `/v1/*` calls (prevents indefinite hang; document in README).
 
-- [ ] **Step 1: Failing tests** — `tests/test_settings.py`: (a) missing `UPSTREAM_OPENAI_BASE_URL` raises clear error; (b) missing `AERL_DATA_DIR` raises clear error (spec §4 both required); (c) given `UPSTREAM_OPENAI_BASE_URL=https://x/v1/` and `AERL_DATA_DIR` set, `load_settings()` returns a normalized base suitable for joining `v1/chat/completions` without `//` artifacts (exact assertion defined in test).
+- [x] **Step 1: Failing tests** — `tests/test_settings.py`: (a) missing `UPSTREAM_OPENAI_BASE_URL` raises clear error; (b) missing `AERL_DATA_DIR` raises clear error (spec §4 both required); (c) given `UPSTREAM_OPENAI_BASE_URL=https://x/v1/` and `AERL_DATA_DIR` set, `load_settings()` returns a normalized base suitable for joining `v1/chat/completions` without `//` artifacts (exact assertion defined in test).
 
-- [ ] **Step 2: Run pytest — FAIL**
+- [x] **Step 2: Run pytest — FAIL**
 
-- [ ] **Step 3: Implement** `load_settings()` returning a frozen `dataclass` or `pydantic_settings.BaseSettings` with all §4 fields **plus** optional `job_webhook_auth` sourced from `AERL_JOB_WEBHOOK_AUTH`. Normalize `UPSTREAM_OPENAI_BASE_URL` (strip trailing slash except root; document join rules with `/v1/...` paths).
+- [x] **Step 3: Implement** `load_settings()` returning a frozen `dataclass` or `pydantic_settings.BaseSettings` with all §4 fields **plus** optional `job_webhook_auth` sourced from `AERL_JOB_WEBHOOK_AUTH`. Normalize `UPSTREAM_OPENAI_BASE_URL` (strip trailing slash except root; document join rules with `/v1/...` paths).
 
-- [ ] **Step 4: Update `tests/conftest.py`** — `autouse=True` pytest fixture (or `pytest_configure`) sets `UPSTREAM_OPENAI_BASE_URL` to a dummy `https://upstream.test/v1` and `AERL_DATA_DIR` to a session-scoped temporary directory so **all** tests run in clean CI once `create_app()` loads settings (Tasks 5+).
+- [x] **Step 4: Update `tests/conftest.py`** — `autouse=True` pytest fixture (or `pytest_configure`) sets `UPSTREAM_OPENAI_BASE_URL` to a dummy `https://upstream.test/v1` and `AERL_DATA_DIR` to a session-scoped temporary directory so **all** tests run in clean CI once `create_app()` loads settings (Tasks 5+).
 
-- [ ] **Step 5: PASS**
+- [x] **Step 5: PASS**
 
-- [ ] **Step 6: Wire `load_settings()` into `create_app()`** — `create_app()` calls `load_settings()` once and stores on `app.state.settings` (or closure); update the Task 1 stub `create_app()` accordingly.
+- [x] **Step 6: Wire `load_settings()` into `create_app()`** — `create_app()` calls `load_settings()` once and stores on `app.state.settings` (or closure); update the Task 1 stub `create_app()` accordingly.
 
-- [ ] **Step 7: PASS** full settings + health tests.
+- [x] **Step 7: PASS** full settings + health tests.
 
-- [ ] **Step 8: Commit** `feat: add settings loader and test env defaults`
+- [x] **Step 8: Commit** `feat: add settings loader and test env defaults`
 
 ---
 
@@ -176,17 +178,17 @@ Decisions locked here: `AERL_MAX_BODY_BYTES` default **4194304** (4 MiB). **`AER
 - Create: `src/aerl/trace_store.py`
 - Create: `tests/test_trace_store.py`
 
-- [ ] **Step 1: Test** — given a dict with `Authorization: "Bearer sk-verysecret"`, redacted value must not contain `verysecret` in full; allow `Bearer ****cret` or hash-only per spec §7.
+- [x] **Step 1: Test** — given a dict with `Authorization: "Bearer sk-verysecret"`, redacted value must not contain `verysecret` in full; allow `Bearer ****cret` or hash-only per spec §7.
 
-- [ ] **Step 2: FAIL**
+- [x] **Step 2: FAIL**
 
-- [ ] **Step 3: Implement** `redact_headers(headers: dict) -> dict` and `TraceStore.append(record: dict)` writing one JSON line to `{AERL_DATA_DIR}/traces.jsonl` under `threading.Lock`. **`TraceStore` must `mkdir(parents=True, exist_ok=True)` for `AERL_DATA_DIR` on init** before opening the file.
+- [x] **Step 3: Implement** `redact_headers(headers: dict) -> dict` and `TraceStore.append(record: dict)` writing one JSON line to `{AERL_DATA_DIR}/traces.jsonl` under `threading.Lock`. **`TraceStore` must `mkdir(parents=True, exist_ok=True)` for `AERL_DATA_DIR` on init** before opening the file.
 
-- [ ] **Step 4: Test** — append two records, read lines back, assert valid JSON.
+- [x] **Step 4: Test** — append two records, read lines back, assert valid JSON.
 
-- [ ] **Step 5: Test (log contract baseline)** — append a minimal **proxy** record dict and assert required keys exist per spec §5: `request_id`, `ts_request_received`, `ts_upstream_sent`, `ts_response_complete` (ISO8601 strings), `method`, `path`, `upstream_status` (or `status_code`), optional `model`, `request_body_truncated` / `response_body_truncated` booleans when applicable. (Implementers define exact key names once in `trace_store` or `proxy` module docstring and keep tests aligned.)
+- [x] **Step 5: Test (log contract baseline)** — append a minimal **proxy** record dict and assert required keys exist per spec §5: `request_id`, `ts_request_received`, `ts_upstream_sent`, `ts_response_complete` (ISO8601 strings), `method`, `path`, `upstream_status` (or `status_code`), optional `model`, `request_body_truncated` / `response_body_truncated` booleans when applicable. (Implementers define exact key names once in `trace_store` or `proxy` module docstring and keep tests aligned.)
 
-- [ ] **Step 6: Commit** `feat: add JSONL trace store and header redaction`
+- [x] **Step 6: Commit** `feat: add JSONL trace store and header redaction`
 
 ---
 
@@ -198,15 +200,15 @@ Decisions locked here: `AERL_MAX_BODY_BYTES` default **4194304** (4 MiB). **`AER
 - Modify: `src/aerl/app.py`
 - Create: `tests/test_errors.py`
 
-- [ ] **Step 1: Test** — `aerl_error_response(request, code, message)` returns JSONResponse with nested `error.code`, `error.message`, and `error.request_id` equal to `request.state.request_id`.
+- [x] **Step 1: Test** — `aerl_error_response(request, code, message)` returns JSONResponse with nested `error.code`, `error.message`, and `error.request_id` equal to `request.state.request_id`.
 
-- [ ] **Step 2: Test** — `GET /health` returns header `X-AERL-Request-Id` matching UUID format.
+- [x] **Step 2: Test** — `GET /health` returns header `X-AERL-Request-Id` matching UUID format.
 
-- [ ] **Step 3: Implement** `RequestIdMiddleware` + `aerl_error_response` helper; wire middleware first in `create_app`.
+- [x] **Step 3: Implement** `RequestIdMiddleware` + `aerl_error_response` helper; wire middleware first in `create_app`.
 
-- [ ] **Step 4: PASS** full `tests/test_errors.py` and health header test (extend `test_health_ready.py` or `test_errors.py`).
+- [x] **Step 4: PASS** full `tests/test_errors.py` and health header test (extend `test_health_ready.py` or `test_errors.py`).
 
-- [ ] **Step 5: Commit** `feat: add request id middleware and AERL error JSON helper`
+- [x] **Step 5: Commit** `feat: add request id middleware and AERL error JSON helper`
 
 ---
 
@@ -219,17 +221,17 @@ Decisions locked here: `AERL_MAX_BODY_BYTES` default **4194304** (4 MiB). **`AER
 
 Behavior: if `AERL_READY_CHECK_UPSTREAM` is false/unset, `/ready` mirrors `/health` (200). If true, **`GET`** the URL `join_upstream(settings.upstream_openai_base_url, settings.ready_probe_path)` using the **same path-join helper** as the `/v1` proxy (no duplicate `/v1` segments). Use `Authorization` from env `AERL_READY_AUTH` if set, else no auth — document: for OpenAI-style upstream set `AERL_READY_AUTH` to `Bearer sk-...` for probe only. 503 if probe not 2xx. When probe runs and returns 2xx, add **`"upstream_ok": true`** to the JSON body (spec §3 optional field); on 503 omit or set `upstream_ok: false` per README contract.
 
-- [ ] **Step 1: Tests** with `respx` — mock upstream reachable at `settings`-compatible URL.
+- [x] **Step 1: Tests** with `respx` — mock upstream reachable at `settings`-compatible URL.
 
-- [ ] **Step 2: Implement** — probe disabled: `/ready` JSON equals `/health` fields for `status`/`version`.
+- [x] **Step 2: Implement** — probe disabled: `/ready` JSON equals `/health` fields for `status`/`version`.
 
-- [ ] **Step 3: Implement** — probe enabled + 2xx: `upstream_ok: true`.
+- [x] **Step 3: Implement** — probe enabled + 2xx: `upstream_ok: true`.
 
-- [ ] **Step 4: Implement** — probe enabled + non-2xx: HTTP 503, JSON includes **`"upstream_ok": false`** (required on 503), plus `status`/`version` like `/health`.
+- [x] **Step 4: Implement** — probe enabled + non-2xx: HTTP 503, JSON includes **`"upstream_ok": false`** (required on 503), plus `status`/`version` like `/health`.
 
-- [ ] **Step 5: Implement** — when `AERL_READY_AUTH` set, assert mock received `Authorization` header.
+- [x] **Step 5: Implement** — when `AERL_READY_AUTH` set, assert mock received `Authorization` header.
 
-- [ ] **Step 6: PASS** + **Step 7: Commit** `feat: add /ready with optional upstream probe`
+- [x] **Step 6: PASS** + **Step 7: Commit** `feat: add /ready with optional upstream probe`
 
 ---
 
@@ -264,9 +266,9 @@ Map webhook 2xx → `forwarded`, else `failed`. No webhook URL configured → `a
 
 **`job_id` selection:** If client JSON contains string `job_id` that is **non-empty after strip** and **length ≤ 128**, echo it; otherwise generate **UUIDv4**.
 
-- [ ] **Step 1: Tests** — (a) no `job_id` in body → response `job_id` is UUID format; (b) valid echo `job_id` in body → same returned; **(b2)** overlong / invalid `job_id` string → server generates UUID; (c) webhook off → `accepted`; (d) webhook 200 → `forwarded`; (e) webhook 500 → `failed`; (f) invalid JSON → AERL error JSON, `request_id` matches `X-AERL-Request-Id`; (g) webhook transport failure → HTTP **200**, `status: failed`, trace has `webhook_error`; (h) body larger than `AERL_MAX_JOB_BYTES` → **413** AERL-native error, no webhook call.
+- [x] **Step 1: Tests** — (a) no `job_id` in body → response `job_id` is UUID format; (b) valid echo `job_id` in body → same returned; **(b2)** overlong / invalid `job_id` string → server generates UUID; (c) webhook off → `accepted`; (d) webhook 200 → `forwarded`; (e) webhook 500 → `failed`; (f) invalid JSON → AERL error JSON, `request_id` matches `X-AERL-Request-Id`; (g) webhook transport failure → HTTP **200**, `status: failed`, trace has `webhook_error`; (h) body larger than `AERL_MAX_JOB_BYTES` → **413** AERL-native error, no webhook call.
 
-- [ ] **Step 2–5: TDD cycle + commit** `feat: add /aerl/v1/jobs with optional webhook`
+- [x] **Step 2–5: TDD cycle + commit** `feat: add /aerl/v1/jobs with optional webhook`
 
 ---
 
@@ -288,15 +290,15 @@ Implementation sketch:
 6. Log record with redacted headers, truncated bodies per `AERL_MAX_BODY_BYTES`, upstream status.
 7. Return `Response(content=resp.content, status_code=resp.status_code, headers=filtered_response_headers)` — filter hop-by-hop headers; add `X-AERL-Request-Id`.
 
-- [ ] **Step 1: Test** with `respx` — mock `POST https://upstream.example/v1/chat/completions` returns 200 JSON; client hits AERL; assert response body matches upstream; assert one JSONL line with `request_id` and model field parsed.
+- [x] **Step 1: Test** with `respx` — mock `POST https://upstream.example/v1/chat/completions` returns 200 JSON; client hits AERL; assert response body matches upstream; assert one JSONL line with `request_id` and model field parsed.
 
-- [ ] **Step 2: Test** upstream returns 401 — assert client receives 401 identical body (passthrough).
+- [x] **Step 2: Test** upstream returns 401 — assert client receives 401 identical body (passthrough).
 
-- [ ] **Step 3: Test (proxy log contract)** — on successful non-stream completion, parsed JSONL record MUST include the §5 timestamp trio, method `POST`, path containing `chat/completions`, upstream status `200`, and `X-AERL-Request-Id` header on HTTP response matching record `request_id`.
+- [x] **Step 3: Test (proxy log contract)** — on successful non-stream completion, parsed JSONL record MUST include the §5 timestamp trio, method `POST`, path containing `chat/completions`, upstream status `200`, and `X-AERL-Request-Id` header on HTTP response matching record `request_id`.
 
-- [ ] **Step 4: Test (upstream unreachable)** — when upstream raises `httpx.ConnectError` or times out (use `respx`/`MockTransport` to force), client receives **AERL-native** JSON error (spec §3) with appropriate HTTP status (e.g. **502**), `request_id` present, and **no** partial upstream body.
+- [x] **Step 4: Test (upstream unreachable)** — when upstream raises `httpx.ConnectError` or times out (use `respx`/`MockTransport` to force), client receives **AERL-native** JSON error (spec §3) with appropriate HTTP status (e.g. **502**), `request_id` present, and **no** partial upstream body.
 
-- [ ] **Step 5–7: Implement + commits** (split `test_proxy.py` implementation commit if large).
+- [x] **Step 5–7: Implement + commits** (split `test_proxy.py` implementation commit if large).
 
 ---
 
@@ -308,13 +310,13 @@ Implementation sketch:
 
 Decision (spec §5): **aggregate** assistant text from `data: {json}` lines where `choices[0].delta.content` exists; single final log record with `stream: true`, `aggregated_text`, `truncated` flag if over cap. Passthrough: `StreamingResponse` iterator wrapping upstream bytes.
 
-- [ ] **Step 1: Test** — mock upstream returns chunked SSE fixture (minimal two chunks + `data: [DONE]`).
+- [x] **Step 1: Test** — mock upstream returns chunked SSE fixture (minimal two chunks + `data: [DONE]`).
 
-- [ ] **Step 2: Test (stream log contract)** — JSONL record has `stream: true`, same timestamp trio and `request_id` as response header, and non-empty `aggregated_text` (or documented field name) matching concatenated deltas.
+- [x] **Step 2: Test (stream log contract)** — JSONL record has `stream: true`, same timestamp trio and `request_id` as response header, and non-empty `aggregated_text` (or documented field name) matching concatenated deltas.
 
-- [ ] **Step 3–5: Implement + PASS**
+- [x] **Step 3–5: Implement + PASS**
 
-- [ ] **Step 6: Commit** `feat: support SSE streaming with aggregated trace`
+- [x] **Step 6: Commit** `feat: support SSE streaming with aggregated trace`
 
 ---
 
@@ -324,9 +326,9 @@ Decision (spec §5): **aggregate** assistant text from `data: {json}` lines wher
 - Modify: `src/aerl/trace_store.py` if needed
 - Modify: `tests/test_truncation.py`
 
-- [ ] **Step 1: Test** — send JSON body > `AERL_MAX_BODY_BYTES` with `Content-Length` small enough to buffer; log must include `"request_body_truncated": true`.
+- [x] **Step 1: Test** — send JSON body > `AERL_MAX_BODY_BYTES` with `Content-Length` small enough to buffer; log must include `"request_body_truncated": true`.
 
-- [ ] **Step 2–5: Implement + commit** `test: cover log truncation flags`
+- [x] **Step 2–5: Implement + commit** `test: cover log truncation flags`
 
 ---
 
@@ -347,11 +349,11 @@ if __name__ == "__main__":
 - Modify: `README.md`
 - Create: `examples/docker-compose.yml` (optional: `examples/mock_upstream.py` minimal Starlette returning fixed completion)
 
-- [ ] **Step 1: Manual smoke** — `UPSTREAM_OPENAI_BASE_URL=http://localhost:9999/v1 AERL_DATA_DIR=/tmp/aerl-data uv run aerl` (after mock starts).
+- [x] **Step 1: Manual smoke** — `UPSTREAM_OPENAI_BASE_URL=http://localhost:9999/v1 AERL_DATA_DIR=/tmp/aerl-data uv run aerl` (after mock starts).
 
-- [ ] **Step 2: Document** env vars in README table mirroring spec §4 + new `AERL_READY_AUTH`, `AERL_MAX_JOB_BYTES`, `AERL_READY_PROBE_PATH`, `AERL_JOB_WEBHOOK_TIMEOUT`, `AERL_MAX_BUFFERED_REQUEST_BYTES`, `AERL_JOB_WEBHOOK_AUTH`; add **Integration** subsection linking [self-coaching](https://github.com/Miya-Liu/self-coaching) (`service.url`, `OPENAI_BASE_URL`) per spec §6.
+- [x] **Step 2: Document** env vars in README table mirroring spec §4 + new `AERL_READY_AUTH`, `AERL_MAX_JOB_BYTES`, `AERL_READY_PROBE_PATH`, `AERL_JOB_WEBHOOK_TIMEOUT`, `AERL_MAX_BUFFERED_REQUEST_BYTES`, `AERL_JOB_WEBHOOK_AUTH`; add **Integration** subsection linking [self-coaching](https://github.com/Miya-Liu/self-coaching) (`service.url`, `OPENAI_BASE_URL`) per spec §6.
 
-- [ ] **Step 3: Commit** `docs: add README and run entrypoint`
+- [x] **Step 3: Commit** `docs: add README and run entrypoint`
 
 ---
 

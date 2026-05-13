@@ -67,6 +67,8 @@ uv run pytest -q
 
 (Or `python -m venv .venv && pip install -e '.[dev]'` then `pytest`.)
 
+**CI:** GitHub Actions runs the same test command on Python 3.11 and 3.12 for pushes and pull requests to `main` (see `.github/workflows/ci.yml`).
+
 ## Integration
 
 For self-coaching or similar stacks that expect an OpenAI-compatible base URL, point clients at AERL (e.g. `http://localhost:8765/v1`) and configure the upstream with `UPSTREAM_OPENAI_BASE_URL`. See [self-coaching](https://github.com/Miya-Liu/self-coaching) for how your runner may set `service.url` / `OPENAI_BASE_URL`.
