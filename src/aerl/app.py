@@ -7,7 +7,7 @@ from starlette.routing import Route
 from aerl import __version__
 
 
-async def health(request):
+async def health(_request):
     return JSONResponse({"status": "ok", "version": __version__})
 
 

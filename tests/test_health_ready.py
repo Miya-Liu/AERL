@@ -1,5 +1,8 @@
+# /ready tests are added in Task 5 (see implementation plan).
+
 from starlette.testclient import TestClient
 
+from aerl import __version__
 from aerl.app import create_app
 
 
@@ -8,5 +11,6 @@ def test_health_returns_version():
     client = TestClient(app)
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
-    assert "version" in r.json()
+    data = r.json()
+    assert data["status"] == "ok"
+    assert data["version"] == __version__
