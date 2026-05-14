@@ -13,9 +13,12 @@ PROXY_TRACE_REQUIRED_KEYS: frozenset[str] = frozenset(
         "ts_request_received",
         "ts_upstream_sent",
         "ts_response_complete",
+        "latency_ms_total",
+        "latency_ms_upstream",
         "method",
         "path",
         "upstream_status",
+        "stream",
     }
 )
 

@@ -4,6 +4,9 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+from aerl.llm_trace import PricingTable
+from aerl.pricing_config import load_pricing_table
+
 
 def _truthy(val: str | None) -> bool:
     if val is None:
@@ -59,6 +62,7 @@ class Settings:
     upstream_timeout: float
     ready_auth: str | None
     max_job_bytes: int
+    pricing: PricingTable | None
 
 
 def load_settings() -> Settings:
@@ -79,6 +83,8 @@ def load_settings() -> Settings:
     ready_a = os.environ.get("AERL_READY_AUTH")
     ready_auth = ready_a.strip() if ready_a and ready_a.strip() else None
 
+    pricing = load_pricing_table(os.environ.get("AERL_PRICING_JSON"))
+
     return Settings(
         upstream_openai_base_url=normalize_upstream_base(upstream),
         data_dir=data_dir.strip(),
@@ -96,4 +102,5 @@ def load_settings() -> Settings:
         upstream_timeout=_float("AERL_UPSTREAM_TIMEOUT", 120.0),
         ready_auth=ready_auth,
         max_job_bytes=_int("AERL_MAX_JOB_BYTES", 1024 * 1024),
+        pricing=pricing,
     )

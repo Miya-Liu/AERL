@@ -46,6 +46,7 @@ Set `UPSTREAM_OPENAI_BASE_URL` in your shell or a `.env` file next to the compos
 | `AERL_JOB_WEBHOOK_AUTH` | no | — | Optional `Authorization` header for the job webhook. |
 | `AERL_JOB_WEBHOOK_TIMEOUT` | no | `30.0` | Seconds for the job webhook HTTP client. |
 | `AERL_MAX_JOB_BYTES` | no | `1048576` (1 MiB) | Max JSON body size for `POST /aerl/v1/jobs`. |
+| `AERL_PRICING_JSON` | no | — | Path to a JSON file for **estimated** USD cost (see below). If unset, traces omit `cost_usd_estimated`. |
 
 ## Endpoints
 
@@ -57,6 +58,29 @@ Set `UPSTREAM_OPENAI_BASE_URL` in your shell or a `.env` file next to the compos
 ### Proxy logging (v1)
 
 JSONL records include redacted request headers (see spec §7). Non-stream responses log truncated bodies when over the byte cap. **SSE** (`Content-Type: text/event-stream`): the same SSE bytes are returned to the client; traces store **`stream: true`**, **`aggregated_text`** (concatenated `choices[0].delta.content` from `data:` JSON lines), and **`aggregated_text_truncated`** when over the cap — raw SSE lines are not persisted in full.
+
+**Service metrics (every proxied `/v1/*` record):**
+
+- **`latency_ms_total`** — wall timing from handler entry until the full upstream response is available (milliseconds, `perf_counter`).
+- **`latency_ms_upstream`** — time spent on the upstream HTTP call only (send through response complete).
+- **`stream`** — `true` for SSE (`text/event-stream` on HTTP 200), otherwise `false`.
+- **`openai_user`** — when the JSON request body includes OpenAI’s optional `user` string, it is copied for tenancy / stable-id analytics.
+- **`caller_label`** — first non-empty of `X-AERL-User`, `X-User-Id`, or `X-Request-User` (orchestrator identity; not the bearer token).
+- **`usage`** — when the upstream JSON (non-stream) or SSE `data:` lines include a `usage` object with token counts, AERL logs normalized `prompt_tokens`, `completion_tokens`, `total_tokens` plus the raw **`upstream`** usage dict.
+- **`cost_usd_estimated`** — only when `AERL_PRICING_JSON` is set **and** both prompt and completion token counts are present: `(prompt_tokens / 1e6) * input_per_million_usd + (completion_tokens / 1e6) * output_per_million_usd` using rates from the pricing file. This is an **estimate** (your provider invoice is authoritative).
+
+**`AERL_PRICING_JSON` format** (see `examples/aerl-pricing.example.json`):
+
+```json
+{
+  "default": { "input_per_million_usd": 5.0, "output_per_million_usd": 15.0 },
+  "per_model": {
+    "gpt-4o-mini": { "input_per_million_usd": 0.15, "output_per_million_usd": 0.60 }
+  }
+}
+```
+
+Per-model rates override `default`; if neither matches the request `model`, `default` is used when present.
 
 ## Development
 

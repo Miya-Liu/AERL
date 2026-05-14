@@ -50,6 +50,8 @@ def test_sse_passthrough_and_aggregated_trace(data_dir):
     assert rec["response_body_omitted"] is True
     assert rec["response_body_truncated"] is False
     assert rec["upstream_status"] == 200
+    assert isinstance(rec["latency_ms_total"], (int, float))
+    assert isinstance(rec["latency_ms_upstream"], (int, float))
 
 
 @respx.mock

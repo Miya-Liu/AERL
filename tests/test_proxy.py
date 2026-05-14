@@ -68,9 +68,12 @@ def test_proxy_log_record_contract(proxy_client):
         "ts_request_received",
         "ts_upstream_sent",
         "ts_response_complete",
+        "latency_ms_total",
+        "latency_ms_upstream",
         "method",
         "path",
         "upstream_status",
+        "stream",
     ):
         assert key in rec
     assert rec["request_id"] == rid_hdr
@@ -78,6 +81,10 @@ def test_proxy_log_record_contract(proxy_client):
     assert "chat/completions" in rec["path"]
     assert rec["upstream_status"] == 200
     assert rec["model"] == "gpt-test"
+    assert rec["stream"] is False
+    assert isinstance(rec["latency_ms_total"], (int, float))
+    assert isinstance(rec["latency_ms_upstream"], (int, float))
+    assert rec["latency_ms_total"] >= rec["latency_ms_upstream"]
     auth = rec["request_headers"].get("Authorization") or rec["request_headers"].get(
         "authorization"
     )

@@ -1,0 +1,6 @@
+{
+  "default": { "input_per_million_usd": 5.0, "output_per_million_usd": 15.0 },
+  "per_model": {
+    "gpt-test": { "input_per_million_usd": 1.0, "output_per_million_usd": 2.0 }
+  }
+}
