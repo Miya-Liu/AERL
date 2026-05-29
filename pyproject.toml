@@ -5,15 +5,15 @@ build-backend = "uv_build"
 [project]
 name = "aerl"
 version = "1.0.4"
-description = "AReaL: A Large-Scale Asynchronous Reinforcement Learning System"
+description = "AERL: Agent Self-Evaluation via Reinforcement Learning (proxy, training service, and RL infrastructure)"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.12,<3.13"
 authors = [
-    {name = "AReaL Team"},
+    {name = "River Team"},
 ]
 maintainers = [
-    {name = "AReaL Team"},
+    {name = "River Team"},
 ]
 keywords = [
     "distributed-systems",
@@ -196,12 +196,14 @@ sandbox = [
 
 [project.scripts]
 aerl = "aerl.main:main"
+aerl-service = "aerl.service_main:main"
 
 [project.urls]
-"Homepage" = "https://github.com/inclusionAI/AReaL"
-"Repository" = "https://github.com/inclusionAI/AReaL"
-"Documentation" = "https://inclusionai.github.io/AReaL/en/intro.html"
-"Bug Tracker" = "https://github.com/inclusionAI/AReaL/issues"
+"Homepage" = "https://github.com/Miya-Liu/AERL"
+"Repository" = "https://github.com/Miya-Liu/AERL"
+"Documentation" = "https://github.com/Miya-Liu/AERL/blob/main/docs/specs/2026-05-29-aerl-implementation-plan.md"
+"Bug Tracker" = "https://github.com/Miya-Liu/AERL/issues"
+"Infrastructure (upstream)" = "https://github.com/inclusionAI/AReaL"
 
 [dependency-groups]
 dev = [
@@ -228,7 +230,7 @@ dev = [
 # =============================================================================
 
 [tool.uv.build-backend]
-# Root packages (areal) plus src/aerl for the minimal HTTP proxy.
+# Root package areal/ plus src/aerl (proxy, service, pipelines).
 module-root = ""
 source-include = ["src/aerl/**/*.py"]
 

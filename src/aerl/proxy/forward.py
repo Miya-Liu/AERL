@@ -10,8 +10,8 @@ import httpx
 from starlette.requests import Request
 from starlette.responses import Response
 
-from aerl.errors import aerl_error_response
-from aerl.llm_trace import (
+from aerl.proxy.errors import aerl_error_response
+from aerl.proxy.llm_trace import (
     SSEAggregator,
     estimate_cost_usd,
     extract_caller_label,
@@ -19,9 +19,9 @@ from aerl.llm_trace import (
     extract_usage_from_response_json,
     extract_usage_from_sse_bytes,
 )
-from aerl.redact import redact_headers
-from aerl.settings import Settings, join_upstream_subpath
-from aerl.trace_store import TraceStore
+from aerl.proxy.redact import redact_headers
+from aerl.proxy.settings import Settings, join_upstream_subpath
+from aerl.proxy.trace_store import TraceStore
 
 _HOP_BY_HOP = frozenset(
     {

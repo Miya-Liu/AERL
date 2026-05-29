@@ -1,0 +1,6 @@
+id: mock_grpo
+description: Fake GRPO run for training-service integration tests (no GPU).
+runner: aerl.pipelines.mock_grpo:run_mock
+requires_gpu: false
+requires_inference: false
+timeout_seconds: 120

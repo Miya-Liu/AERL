@@ -1,0 +1,7 @@
+id: gsm8k_grpo
+description: GSM8K GRPO via AERL infrastructure (PPOTrainer + RLVRWorkflow).
+entrypoint: examples/math/gsm8k_rl.py
+default_config: examples/math/gsm8k_grpo.yaml
+requires_gpu: true
+requires_inference: true
+timeout_seconds: 86400
