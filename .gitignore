@@ -211,7 +211,6 @@ sympy/
 *.whl
 tmp/*
 
-customized_areal/tpfc/data/tree_cache/mcts_trees/*
-customized_areal/tpfc/.shared_auth_token.json
 *.json
-customized_areal/.env
+# Internal GitLab extensions — not published on the public remote
+customized_areal/
