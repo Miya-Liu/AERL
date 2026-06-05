@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+from aerl.paths import resolve_data_dir
 from aerl.proxy.llm_trace import PricingTable
 from aerl.proxy.pricing_config import load_pricing_table
 
@@ -70,9 +71,7 @@ def load_settings() -> Settings:
     if not upstream or not upstream.strip():
         raise ValueError("UPSTREAM_OPENAI_BASE_URL is required")
 
-    data_dir = os.environ.get("AERL_DATA_DIR")
-    if not data_dir or not data_dir.strip():
-        raise ValueError("AERL_DATA_DIR is required")
+    data_dir = resolve_data_dir()
 
     webhook = os.environ.get("AERL_JOB_WEBHOOK_URL")
     webhook_url = webhook.strip() if webhook and webhook.strip() else None

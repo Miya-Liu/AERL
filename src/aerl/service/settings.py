@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from aerl.paths import find_repo_root, resolve_data_dir
+
 
 def _int(name: str, default: int) -> int:
     raw = os.environ.get(name)
@@ -21,23 +23,13 @@ class ServiceSettings:
 
 
 def load_service_settings() -> ServiceSettings:
-    data_dir = os.environ.get("AERL_DATA_DIR")
-    if not data_dir or not data_dir.strip():
-        raise ValueError("AERL_DATA_DIR is required")
+    repo_root = str(find_repo_root())
 
     token = os.environ.get("AERL_SERVICE_TOKEN")
     service_token = token.strip() if token and token.strip() else None
 
-    repo = os.environ.get("AERL_REPO_ROOT")
-    if repo and repo.strip():
-        repo_root = repo.strip()
-    else:
-        from pathlib import Path
-
-        repo_root = str(Path(__file__).resolve().parents[3])
-
     return ServiceSettings(
-        data_dir=data_dir.strip(),
+        data_dir=resolve_data_dir(),
         listen_host=os.environ.get("AERL_SERVICE_HOST", "0.0.0.0").strip(),
         listen_port=_int("AERL_SERVICE_PORT", 8766),
         service_token=service_token,
